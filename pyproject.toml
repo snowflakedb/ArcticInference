@@ -1,0 +1,28 @@
+[build-system]
+requires = [
+    "setuptools>=61.0",
+    "wheel",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "arctic_inference"
+version = "0.0.1"
+description = "Snowflake LLM inference library"
+
+[project.entry-points."vllm.general_plugins"]
+arctic_inference = "arctic_inference.vllm.plugins:arctic_inference_plugin"
+
+[tool.setuptools]
+packages = [
+    "arctic_inference",
+    "arctic_inference.common",
+    "arctic_inference.common.swiftkv",
+    "arctic_inference.vllm",
+    "arctic_inference.vllm.swiftkv",
+]
+
+[project.optional-dependencies]
+vllm = [
+    'vllm==0.8.1',
+]
