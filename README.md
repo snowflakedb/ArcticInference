@@ -1,5 +1,9 @@
 # ArcticInference
 
+ArcticInference contains optimizations developed and used at Snowflake that
+improve the performance of serving LLMs. ArcticInference can be installed as a
+vLLM plugin and run with existing vLLM v1 installations.
+
 ## Installation
 
 ```console
