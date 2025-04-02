@@ -1,11 +1,8 @@
-[![License Apache 2.0](https://badgen.net/badge/license/apache2.0/blue)](https://github.com/snowflakedb/ArcticTraining/blob/main/LICENSE)
-[![PyPI version](https://badge.fury.io/py/arctic-inference.svg)](https://pypi.org/project/arctic-inference/)
-
 # ArcticInference
 
-ArcticInference contains optimizations developed and used at Snowflake that
-improve the performance of serving LLMs. ArcticInference can be installed as a
-vLLM plugin and run with existing vLLM v1 installations.
+ArcticInference is a new library from Snowflake AI Research that contains current and future LLM inference optimizations developed at Snowflake. It is integrated with vLLM v0.8.1 using vLLM’s custom plugin feature, allowing us to develop and integrate inference optimizations quickly into vLLM and make them available to the community. 
+
+Once installed, ArcticInference automatically patches vLLM to use Arctic Ulysses and other optimizations implemented in ArcticInference, and users can continue to use their familiar vLLM APIs and CLI. It’s easy to get started!
 
 ## Installation
 
@@ -14,27 +11,8 @@ $ git clone https://github.com/snowflakedb/ArcticInference.git
 $ cd ArcticInference && pip install .[vllm]
 ```
 
-## SwiftKV on vLLM
+## Projects 
+TODO: add details about projects
 
-SwiftKV is a technique developed by Snowflake AI Research that reduces computational overhead during prompt processing by combining model rewiring and knowledge-preserving self-distillation.
-
-For more details, see:
-
-- [Blog post](https://www.snowflake.com/engineering-blog/swiftkv-llm-compute-reduction)
-- [Paper](https://arxiv.org/abs/2410.03960)
-- [Huggingface](https://huggingface.co/collections/Snowflake/swiftkv-models-674f7d7474eb789e185d31cb)
-
-### Running SwiftKV
-
-Run an example conversation using [Snowflake/Llama-3.1-SwiftKV-8B-Instruct](https://huggingface.co/Snowflake/Llama-3.1-SwiftKV-8B-Instruct):
-```console
-$ python examples/offline_inference_swiftkv.py
-
-...
-
-The Importance of Higher Education
-
-Higher education is a vital component of an individual's life, providing numerous benefits that extend beyond the acquisition of knowledge and skills. It plays a significant role in shaping an individual's future, career prospects, and overall well-being. In this essay, we will explore the importance of higher education and its far-reaching implications on individuals, society, and the economy.
-
-...
-```
+* [SwiftKV](projects/swiftkv)
+* [Arctic Ulysses](projects/ulysess)
