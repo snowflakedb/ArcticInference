@@ -1,3 +1,6 @@
+[![License Apache 2.0](https://badgen.net/badge/license/apache2.0/blue)](https://github.com/snowflakedb/ArcticTraining/blob/main/LICENSE)
+[![PyPI version](https://badge.fury.io/py/arctic-inference.svg)](https://pypi.org/project/arctic-inference/)
+
 # ArcticInference
 
 ArcticInference contains optimizations developed and used at Snowflake that
