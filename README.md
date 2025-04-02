@@ -15,4 +15,4 @@ $ cd ArcticInference && pip install .[vllm]
 TODO: add details about projects
 
 * [SwiftKV](projects/swiftkv)
-* [Arctic Ulysses](projects/ulysess)
+* [Arctic Ulysses](projects/ulysses)
