@@ -12,7 +12,7 @@ $ cd ArcticInference && pip install .[vllm]
 ```
 
 ## Projects 
-TODO: add details about projects
+To better understand what features ArcticInference supports please refer to the following list of projects we have released under this framework:
 
 * [SwiftKV](projects/swiftkv)
 * [Arctic Ulysses](projects/ulysses)
