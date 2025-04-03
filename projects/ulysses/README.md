@@ -14,8 +14,6 @@ To confirm the correctness of the Ulysses algorithm, we ran vLLM quality tests w
 
 ### Running Arctic Ulysses
 
-TODO: please update this as you see fit on how to use this example
-
 Run an example conversation using TP=2, SP=2:
 ```console
 $ python offline_inference_ulysses.py
