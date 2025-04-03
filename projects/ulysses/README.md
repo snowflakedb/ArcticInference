@@ -4,7 +4,7 @@ Ulysses is a form of sequence parallelism (SP) that takes advantage of the laten
 
 We compare time-to-first-token and combined throughput of Llama-3.1-70B FP8, running on a DGX box with 8xH100-80GB GPUs. We measured time-to-first-token in a low traffic regime where each request is arriving one at a time, and use a latency-optimized TP baseline using TP=8.  We measured combined-throughput in a high traffic regime, where the arrival rate is high enough to saturate the throughput of the system. We use 4 replicas of TP=2 results using vLLM V1 as our baseline which is capable of achieving high throughput of up to 612 TFlops/GPU, indicating that our baseline is strong. For Arctic Ulysses, we use TP=2, SP=4 for both time-to-first token and combined throughput measurements. For Llama3.3-70B, Arctic Ulysses on a single node (TP=2, SP=4) provides up to 3.71x shorter time-to-first-token (TTFT) than the TP=2 during low traffic baseline and 40.9% higher throughput than the TP=8 baseline during high traffic.
 
-![Llama 70B latency and throughput.](Llama-70B-throughput.png)
+![Llama 70B latency and throughput.](Llama-70B-performance.png)
 
 Read more about the details of Ulysses [here].
 
