@@ -1,5 +1,7 @@
 ## Arctic Ulysses on vLLM
 
+Ulysses is a form of sequence parallelism (SP) that takes advantage of the latency of tensor parallelism (TP) and throughput of data parallelism (DP) in transformer architecture. We extended vLLM with SP so that the user can select the degrees of TP and SP for low-latency, high-throughput inference.
+
 TODO: Introduce what Arctic Ulysses is here, no more than 1 or 2 paragraphs along with at least two plots (1) performance, (2) correctness. Add a small amount of text describing the figures as well. Finally, add a placeholder link in the text refering to the blog (we will update the links once the blog is live).
 
 ### Running Arctic Ulysses
