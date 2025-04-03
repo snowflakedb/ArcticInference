@@ -467,8 +467,8 @@ def arctic_inference_plugin():
             model_output, output, group=device_group)
         return model_output
     
-    from vllm.model_executor.models.llama import Qwen2ForCausalLM
-    @replace_func(LlamaForCausalLM, "forward")
+    from vllm.model_executor.models.qwen2 import Qwen2ForCausalLM
+    @replace_func(Qwen2ForCausalLM, "forward")
     def forward(
         orig,
         self,
