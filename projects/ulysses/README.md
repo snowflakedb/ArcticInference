@@ -6,11 +6,13 @@ We compare time-to-first-token and combined throughput of Llama-3.1-70B FP8, run
 
 <img src="Llama-70B-performance.png" alt="Llama 70B latency and throughput." width="900">
 
-Read more about the details of Ulysses [here].
+Read more about the details of Ulysses in our [blog](https://www.snowflake.com/en/engineering-blog/ulysses-low-latency-llm-inference/).
 
 To confirm the correctness of the Ulysses algorithm, we ran vLLM quality tests with various degrees of TP and SP parallelisms. Since Ulysses does not modify the model architecture but its parallelism, we do obtain similar quality per model basis.
 
 <img src="Llama-quality.png" alt="Quality scores of Llama's 8B, 70B, and 305B models in FP8." width="450">
+
+Currently, Arctic Ulysses works only with certain model architectures, namely Llama and Qwen. We are working on enabling Ulysses more broadly across any model architecture, which will be part of a later release of ArcticInference.
 
 ### Running Arctic Ulysses
 
