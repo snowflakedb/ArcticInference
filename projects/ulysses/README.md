@@ -28,7 +28,3 @@ Higher education is a vital component of an individual's life, providing numerou
 
 ...
 ```
-
-
-### Roadmap
-- We currently support Llama and Qwen causal language models. We are in the process of removing dependencies on the model file for supporting a wide range of models.
