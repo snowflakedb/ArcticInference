@@ -22,6 +22,8 @@ class ArcticGPUModelRunner(GPUModelRunner):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # ----------------spec dec changes----------------
+        
 
     def _prepare_inputs(self, *args, **kwargs):
         attn_metadata, logits_indices, *rest = (
