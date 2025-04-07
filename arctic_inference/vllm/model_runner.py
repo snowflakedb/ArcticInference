@@ -61,7 +61,7 @@ class ArcticGPUModelRunner(GPUModelRunner):
                                                      group=device_group)
             return model_output
 
-        self.model.forward = custom_forward
+        self.model.forward = ulysses_forward
 
     def load_model(self, *args, **kwargs):
         super().load_model(*args, **kwargs)
