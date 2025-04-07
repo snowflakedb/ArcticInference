@@ -32,13 +32,14 @@ class ArcticGPUModelRunner(GPUModelRunner):
         return attn_metadata, logits_indices, *rest
 
     def monkeypatch_forward(self):
+        import torch
         from vllm.distributed.parallel_state import _SP
         SP_size = _SP.world_size
         SP_rank = _SP.rank_in_group
         device_group = _SP.device_group
         model_forward = self.model.forward
 
-        def custom_forward(*args, **kwargs):
+        def ulysses_forward(*args, **kwargs):
             # update inputs
             input_ids = kwargs['input_ids']
             positions = kwargs['positions']
