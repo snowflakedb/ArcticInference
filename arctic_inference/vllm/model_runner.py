@@ -63,7 +63,7 @@ class ArcticGPUModelRunner(GPUModelRunner):
         self.model.forward = custom_forward
 
     def load_model(self, *args, **kwargs):
-        super().load_model(args, kwargs)
+        super().load_model(*args, **kwargs)
         self.monkeypatch_forward()
     
     from vllm.sequence import IntermediateTensors
