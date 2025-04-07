@@ -65,7 +65,8 @@ class ArcticGPUModelRunner(GPUModelRunner):
 
     def load_model(self, *args, **kwargs):
         super().load_model(*args, **kwargs)
-        self.monkeypatch_forward()
+        if self.parallel_config.sequence_parallel_size > 1:
+            self.monkeypatch_forward()
     
     from vllm.sequence import IntermediateTensors
     from vllm.v1.outputs import ModelRunnerOutput
