@@ -32,7 +32,7 @@ class ArcticGPUModelRunner(GPUModelRunner):
         return attn_metadata, logits_indices, *rest
 
     def monkeypatch_forward(self):
-        SP_ =  vllm.distributed.parallel_state._SP
+        from vllm.distributed.parallel_state import _SP
         SP = SP_.world_size
         SP_rank = SP_.rank_in_group
         device_group = SP_.device_group
