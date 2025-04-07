@@ -32,8 +32,9 @@ class ArcticGPUModelRunner(GPUModelRunner):
         return attn_metadata, logits_indices, *rest
 
     def monkeypatch_forward(self):
+        import vllm
         from vllm.distributed.parallel_state import _SP
-        SP = SP_.world_size
+        SP_size = SP_.world_size
         SP_rank = SP_.rank_in_group
         device_group = SP_.device_group
         model_forward = self.model.forward
@@ -44,7 +45,7 @@ class ArcticGPUModelRunner(GPUModelRunner):
             positions = kwargs['positions']
             # Ulysses parameters
             N = input_ids.shape[0]
-            N_ulysses = N // SP
+            N_ulysses = N // SP_size
             N_offset = N_ulysses * SP_rank
             # narrow the input
             kwargs['input_ids'] = input_ids[N_offset:N_offset + N_ulysses]
