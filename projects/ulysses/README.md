@@ -12,7 +12,7 @@ To confirm the correctness of the Ulysses algorithm, we ran vLLM quality tests w
 
 <img src="Llama-quality.png" alt="Quality scores of Llama's 8B, 70B, and 305B models in FP8." width="450">
 
-Currently, Arctic Ulysses works with any model that vLLM supports, but has only been thoroughly tested with Llama and Qwen so far.
+Currently, Ulysses works with any model that vLLM supports, but has only been thoroughly tested with Llama and Qwen so far.
 
 ### Running Arctic Ulysses
 
