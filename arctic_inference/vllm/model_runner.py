@@ -23,7 +23,13 @@ class ArcticGPUModelRunner(GPUModelRunner):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # ----------------spec dec changes----------------
-        
+        if self.speculative_config:
+            self.use_spec_decode = True
+            from arctic_inference.vllm.arctic_spec.arctic_proposer import ArcticProposer
+            from vllm.distributed.parallel_state import get_pp_group
+            if get_pp_group().is_last_rank:
+                self.drafter = ArcticProposer()
+
 
     def _prepare_inputs(self, *args, **kwargs):
         attn_metadata, logits_indices, *rest = (
