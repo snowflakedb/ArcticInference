@@ -31,17 +31,6 @@ class ArcticParallelConfig(ParallelConfig):
         arctic_args = get_current_arctic_args()
         self.sequence_parallel_size = arctic_args.sequence_parallel_size
 
-
-class ParallelConfigPatch(ArcticPatch[ParallelConfig]):
-
-    def __new__(cls, *args, **kwargs):
-        # Override __new__ to return an ArcticParallelConfig instead of a
-        # ParallelConfig when creating a new instance of the class.
-        if cls is ParallelConfig:
-            return ArcticParallelConfig.__new__(ArcticParallelConfig,
-                                                *args, **kwargs)
-        return super(ParallelConfig, cls).__new__(cls)
-
     @property
     def world_size(self) -> int:
         return (self.pipeline_parallel_size *
@@ -55,6 +44,17 @@ class ParallelConfigPatch(ArcticPatch[ParallelConfig]):
         # a property with a no-op setter to ignore the value later assigned by
         # ParallelConfig.__post_init__.
         pass
+
+
+class ParallelConfigPatch(ArcticPatch[ParallelConfig]):
+
+    def __new__(cls, *args, **kwargs):
+        # Override __new__ to return an ArcticParallelConfig instead of a
+        # ParallelConfig when creating a new instance of the class.
+        if cls is ParallelConfig:
+            return ArcticParallelConfig.__new__(ArcticParallelConfig,
+                                                *args, **kwargs)
+        return super(ParallelConfig, cls).__new__(cls)
 
 
 class VllmConfigPatch(ArcticPatch[VllmConfig]):

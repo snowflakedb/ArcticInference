@@ -75,6 +75,11 @@ class EngineArgsPatch(ArcticPatch[EngineArgs]):
 
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace):
+        if cls is EngineArgs:
+            return EngineArgsPatch._orig_from_cli_args(ArcticEngineArgs, args)
+        if cls is AsyncEngineArgs:
+            return EngineArgsPatch._orig_from_cli_args(ArcticAsyncEngineArgs,
+                                                       args)
         return EngineArgsPatch._orig_from_cli_args(cls, args)
 
     def create_engine_config(self, *args, **kwargs):
@@ -98,7 +103,3 @@ class AsyncEngineArgsPatch(ArcticPatch[AsyncEngineArgs]):
             return ArcticAsyncEngineArgs.__new__(ArcticAsyncEngineArgs,
                                                  *args, **kwargs)
         return super(AsyncEngineArgs, cls).__new__(cls)
-
-    @classmethod
-    def from_cli_args(cls, args: argparse.Namespace):
-        return EngineArgsPatch._orig_from_cli_args(cls, args)
