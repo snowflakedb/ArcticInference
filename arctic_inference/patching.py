@@ -71,5 +71,5 @@ class ArcticPatch(Generic[T]):
             # Patch the target with the new attribute
             replace = hasattr(target, name)
             setattr(target, name, attr)
-            action = "replaced by" if replace else "added by"
-            logger.info(f"{target.__name__}.{name} {action} {cls.__name__}")
+            action = "replaced" if replace else "added"
+            logger.info(f"{cls.__name__} {action} {target.__name__}.{name}")
