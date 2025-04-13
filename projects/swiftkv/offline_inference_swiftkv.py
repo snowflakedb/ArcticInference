@@ -13,7 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import vllm
 from vllm import LLM, SamplingParams
+
+vllm.plugins.load_general_plugins()
 
 llm = LLM(model="Snowflake/Llama-3.1-SwiftKV-8B-Instruct")
 
