@@ -31,8 +31,7 @@ class EngineCoreProcPatch(ArcticPatch[EngineCoreProc]):
     def run_engine_core(*args, **kwargs):
         # When starting the API server, it will spawn a new process to run the
         # EngineCore. We need to load the plugins in the new process before it
-        # initializes the Executor. This function also has to be pickleable so
-        # we define it at the top level.
+        # initializes the Executor.
         vllm.plugins.load_general_plugins()
         return EngineCoreProcPatch._orig_run_engine_core(*args, **kwargs)
 
