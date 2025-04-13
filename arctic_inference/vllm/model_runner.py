@@ -13,26 +13,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List
+import time
+from typing import Union, Optional
 
-from vllm.v1.worker.gpu_model_runner import GPUModelRunner
+import torch
+import vllm
+from vllm.sequence import IntermediateTensors
+from vllm.v1.outputs import EMPTY_MODEL_RUNNER_OUTPUT, ModelRunnerOutput
+from vllm.v1.worker.gpu_model_runner import GPUModelRunner, logger
+
+from arctic_inference.patching import ArcticPatch
 
 
-class ArcticGPUModelRunner(GPUModelRunner):
+class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    _orig_prepare_inputs = GPUModelRunner._prepare_inputs
+    _orig_load_model = GPUModelRunner.load_model
 
     def _prepare_inputs(self, *args, **kwargs):
         attn_metadata, logits_indices, *rest = (
-            super()._prepare_inputs(*args, **kwargs))
+            self._orig_prepare_inputs(*args, **kwargs))
         # SwiftKV requires knowing the logits indices from inside the model
         # definition in order to early-stop the prefill tokens.
         attn_metadata.swiftkv_logits_indices = logits_indices
         return attn_metadata, logits_indices, *rest
 
     def monkeypatch_forward(self):
-        import torch
         from vllm.distributed.parallel_state import _SP
         SP_size = _SP.world_size
         SP_rank = _SP.rank_in_group
@@ -64,15 +70,10 @@ class ArcticGPUModelRunner(GPUModelRunner):
         self.model.forward = ulysses_forward
 
     def load_model(self, *args, **kwargs):
-        super().load_model(*args, **kwargs)
+        self._orig_load_model(*args, **kwargs)
         if self.parallel_config.sequence_parallel_size > 1:
             self.monkeypatch_forward()
     
-    from vllm.sequence import IntermediateTensors
-    from vllm.v1.outputs import ModelRunnerOutput
-    from typing import Union, Optional
-    from vllm.v1.outputs import EMPTY_MODEL_RUNNER_OUTPUT
-    import torch
     @torch.inference_mode()
     def execute_model(
         self,
@@ -251,9 +252,6 @@ class ArcticGPUModelRunner(GPUModelRunner):
         )
     
     def capture_model(self) -> None:
-        import vllm
-        import time
-        import torch
         if not self.use_cuda_graph:
             vllm.v1.worker.gpu_model_runner.logger.warning(
                 "Skipping CUDA graph capture. Please add "
@@ -278,6 +276,5 @@ class ArcticGPUModelRunner(GPUModelRunner):
         elapsed_time = end_time - start_time
         cuda_graph_size = start_free_gpu_memory - end_free_gpu_memory
         # This usually takes 5~20 seconds.
-        logger = vllm.v1.worker.gpu_model_runner.logger
         logger.info("Graph capturing finished in %.0f secs, took %.2f GiB",
                     elapsed_time, cuda_graph_size / (1 << 30))
