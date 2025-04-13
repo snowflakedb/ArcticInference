@@ -14,37 +14,101 @@
 # limitations under the License.
 
 import logging
-from types import MethodType
-from typing import Type, TypeVar, Generic
+from types import MethodType, ModuleType
+from typing import Type, Union
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar('T')
+Patchable = Union[Type, ModuleType]
 
 
-class ArcticPatch(Generic[T]):
+class ArcticPatch:
+    """
+    ArcticPatch provides a mechanism for cleanly patching (extending or
+    modifying) existing classes or modules.
+
+    This class uses a subscription syntax to specify the target class or
+    module to be patched. Subclasses of ArcticPatch should define new or
+    replacement attributes and methods that will be applied in-place to the
+    target when `apply_patch()` is called.
+
+    Example 1: Patching a class
+
+    ```python
+    # Define a class patch with new methods
+    class ExamplePatch(ArcticPatch[SomeClass]):
+
+        new_field = "This field will be added to SomeClass"
+
+        def new_method(self):
+            return "This method will be added to SomeClass"
+
+        @classmethod
+        def new_classmethod(cls):
+            return "This classmethod will be added to SomeClass"
+
+    # Apply the patch to the target class
+    ExamplePatch.apply_patch()
+
+    # Now these methods are available on the original class
+    instance = SomeClass()
+    instance.new_method()  # Works!
+    SomeClass.new_class_method()  # Works!
+    ```
+
+    Example 2: Patching a module
+
+    ```python
+    # Define a module patch
+    class ModulePatch(ArcticPatch[some_module]):
+        NEW_CONSTANT = "This will be added to some_module"
+
+        @staticmethod
+        def new_function():
+            return "This function will be added to some_module"
+
+    ModulePatch.apply_patch()
+
+    # The constant and function are now available in the module
+    some_module.NEW_CONSTANT  # Works!
+    some_module.new_function()  # Works!
+    ```
+    """
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         # Ensure that subclasses are created using the subscript syntax.
         if not hasattr(cls, '_arctic_patch_target'):
-            raise TypeError("Sub-classes of ArcticPatch must be defined as "
-                            "ArcticPatch[Target] to specify a patch target.")
+            raise TypeError("Subclasses of ArcticPatch must be defined as "
+                            "ArcticPatch[Target] to specify a patch target")
 
     @classmethod
-    def __class_getitem__(cls, target: Type[T]) -> Type:
+    def __class_getitem__(cls, target: Patchable) -> Type:
         # The dynamic type created here will carry the target class as
         # _arctic_patch_target.
+        if not isinstance(target, Patchable):
+            raise TypeError(f"ArcticPatch can only target a class or module, "
+                            f"not {type(target)}")
         return type(f"{cls.__name__}[{target.__name__}]", (cls,),
                     {'_arctic_patch_target': target})
 
     @classmethod
     def apply_patch(cls):
         """
-        Patches the target class (stored in _arctic_patch_target) by replacing its attributes with those
-        defined on the current class (self). It iterates over the class __dict__ and copies all attributes
-        except for special names and the '_arctic_patch_target' itself.
+        Patches the target class or module by replacing its attributes with
+        those defined on the ArcticPatch subclass. Attributes are directly
+        assigned to the target, and classmethods are re-bound to the target
+        class before assignment.
+
+        Raises:
+            TypeError: If the ArcticPatch subclass is not defined with a target
+                class or module.
+            ValueError: If an attribute is already patched on the target.
         """
+        if cls is ArcticPatch or not issubclass(cls, ArcticPatch):
+            raise TypeError("apply_patch() must be called on a subclass of "
+                            "ArcticPatch")
+
         target = cls._arctic_patch_target
 
         if "_arctic_patches" not in target.__dict__:
@@ -61,7 +125,7 @@ class ArcticPatch(Generic[T]):
             if name in target._arctic_patches:
                 patch = target._arctic_patches[name]
                 raise ValueError(f"{target.__name__}.{name} is already "
-                                 f"patched by {patch.__name__}!")
+                                 f"patched by {patch.__name__}")
             target._arctic_patches[name] = cls
 
             # If classmethod, re-bind it to the target
