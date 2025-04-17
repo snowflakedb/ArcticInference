@@ -14,13 +14,17 @@
 # limitations under the License.
 
 import vllm
+from vllm.logger import init_logger
 from vllm.v1.engine.core import EngineCoreProc
 from vllm.v1.worker.worker_base import WorkerBase
 
 from arctic_inference.patching import ArcticPatch
+from arctic_inference.utils import get_compatible_vllm_version
 from arctic_inference.vllm.args import EngineArgsPatch, AsyncEngineArgsPatch
 from arctic_inference.vllm.config import ParallelConfigPatch, VllmConfigPatch
 from arctic_inference.vllm.ulysses import apply_ulysses_patches
+
+logger = init_logger(__name__)
 
 
 class EngineCoreProcPatch(ArcticPatch[EngineCoreProc]):
@@ -53,6 +57,17 @@ class WorkerBasePatch(ArcticPatch[WorkerBase]):
 
 
 def arctic_inference_plugin():
+
+    if get_compatible_vllm_version() != vllm.__version__:
+        logger.warning(
+            f"ArcticInference requires vllm=={get_compatible_vllm_version()} "
+            f"but found vllm=={vllm.__version__}. Ignoring plugin!")
+        return
+
+    if not vllm.platforms.current_platform.is_cuda():
+        logger.warning(
+            f"ArcticInference requires the cuda platform. Ignoring plugin!")
+        return
 
     from transformers import AutoConfig
     from arctic_inference.common.swiftkv import LlamaSwiftKVConfig
