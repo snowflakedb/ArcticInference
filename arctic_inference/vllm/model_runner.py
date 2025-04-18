@@ -102,12 +102,13 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
     def load_model(self, *args, **kwargs):
         self._orig_load_model(*args, **kwargs)
-        if self.parallel_config.sequence_parallel_size > 1:
-            self.monkeypatch_forward()
         if self.speculative_config:
             self.draft_model = self._load_spec_model(vllm_config=self.vllm_config,
                                                      speculative_config=self.speculative_config)
             self.mlp_drafter.link_model(self.draft_model)
+        if self.parallel_config.sequence_parallel_size > 1:
+            self.monkeypatch_forward()
+
     
     @torch.inference_mode()
     def execute_model(

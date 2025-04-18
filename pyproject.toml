@@ -20,6 +20,7 @@ packages = [
     "arctic_inference.common.swiftkv",
     "arctic_inference.vllm",
     "arctic_inference.vllm.swiftkv",
+    "arctic_inference.vllm.spec_dec",
 ]
 
 [project.optional-dependencies]

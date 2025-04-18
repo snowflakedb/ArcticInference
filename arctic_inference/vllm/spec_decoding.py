@@ -49,10 +49,11 @@ class SpeculativeConfigPatch(ArcticPatch[SpeculativeConfig]):
 
     _orig_maybe_create_spec_config = SpeculativeConfig.maybe_create_spec_config
 
-    def maybe_create_spec_config(self, *args, **kwargs):
+    @staticmethod
+    def maybe_create_spec_config(*args, **kwargs):
         ngram_prompt_lookup_max = kwargs.get("ngram_prompt_lookup_max")
         ngram_prompt_lookup_min = kwargs.get("ngram_prompt_lookup_min")
-        spec_config = self._orig_maybe_create_spec_config(*args, **kwargs)
+        spec_config = SpeculativeConfigPatch._orig_maybe_create_spec_config(*args, **kwargs)
         spec_config.ngram_prompt_lookup_max = ngram_prompt_lookup_max
         spec_config.ngram_prompt_lookup_min = ngram_prompt_lookup_min
         return spec_config
