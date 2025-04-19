@@ -23,7 +23,7 @@ vllm.plugins.load_general_plugins()
 
 llm = LLM(
     model="neuralmagic/Meta-Llama-3.1-70B-Instruct-FP8",
-    tensor_parallel_size=1,
+    tensor_parallel_size=2,
     sequence_parallel_size=1,
     speculative_model="/code/users/yewang/llama3170_speculator/Dec-20",
     num_speculative_tokens=3,

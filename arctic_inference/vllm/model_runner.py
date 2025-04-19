@@ -86,29 +86,38 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         vllm_config: VllmConfig,
         speculative_config: SpeculativeConfig,
     ) -> nn.Module:
-        import copy
         from vllm.config import VllmConfig
-        draft_worker_config = copy.deepcopy(vllm_config)
-        draft_worker_config.model_config = speculative_config.draft_model_config
-        draft_worker_config.quant_config = VllmConfig._get_quantization_config(
-            draft_worker_config.model_config,
+
+        draft_config_model_config = speculative_config.draft_model_config
+        draft_config_quant_config = VllmConfig._get_quantization_config(
+            vllm_config.model_config,
             vllm_config.load_config,
         )
         speculative_config.draft_parallel_config.worker_cls =\
-            draft_worker_config.parallel_config.sd_worker_cls
-        draft_worker_config.parallel_config = speculative_config.draft_parallel_config
+            vllm_config.parallel_config.sd_worker_cls
+        draft_config_parallel_config = speculative_config.draft_parallel_config
+
+        # We cannot use deepcopy here because Ulysses introduces
+        # torch._C._distributed_c10d.ProcessGroup objects that are not
+        # designed to be pickled.
+        draft_worker_config = VllmConfig(
+            model_config=draft_config_model_config,
+            quant_config=draft_config_quant_config,
+            parallel_config=draft_config_parallel_config,
+            load_config=vllm_config.load_config,
+            device_config=vllm_config.device_config,
+        )
 
         return get_model(vllm_config=draft_worker_config)
 
     def load_model(self, *args, **kwargs):
         self._orig_load_model(*args, **kwargs)
+        if self.parallel_config.sequence_parallel_size > 1:
+            self.monkeypatch_forward()
         if self.speculative_config:
             self.draft_model = self._load_spec_model(vllm_config=self.vllm_config,
                                                      speculative_config=self.speculative_config)
             self.mlp_drafter.link_model(self.draft_model)
-        if self.parallel_config.sequence_parallel_size > 1:
-            self.monkeypatch_forward()
-
     
     @torch.inference_mode()
     def execute_model(
