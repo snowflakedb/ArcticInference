@@ -58,7 +58,8 @@ class WorkerBasePatch(ArcticPatch[WorkerBase]):
 
 def arctic_inference_plugin():
 
-    if get_compatible_vllm_version() != vllm.__version__:
+    if (vllm.__version__ != get_compatible_vllm_version() and not
+            vllm.__version__.startswith("0.1.dev")):  # Make it work with dev
         logger.warning(
             f"ArcticInference requires vllm=={get_compatible_vllm_version()} "
             f"but found vllm=={vllm.__version__}. Ignoring plugin!")
