@@ -14,7 +14,7 @@
 # limitations under the License.
 
 import time
-from typing import Union, Optional
+from typing import List, Union, Optional
 
 import numpy as np
 import torch
@@ -28,7 +28,7 @@ from vllm.v1.outputs import EMPTY_MODEL_RUNNER_OUTPUT, ModelRunnerOutput
 from vllm.v1.worker.gpu_model_runner import GPUModelRunner, logger
 
 from arctic_inference.patching import ArcticPatch
-
+from arctic_inference.utils import print0
 
 class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
@@ -41,6 +41,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         from arctic_inference.vllm.spec_dec.arctic_proposer import ArcticProposer
         self.mlp_drafter = ArcticProposer()
+
+        from arctic_inference.common.suffix_cache.suffix_cache import SuffixCache
+        self._suffix_cache = SuffixCache(64)
 
     def _prepare_inputs(self, *args, **kwargs):
         attn_metadata, logits_indices, *rest = (
@@ -297,8 +300,25 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         if not self.use_spec_decode or disable_spec_decode:
             spec_token_ids = None
         else:
-            spec_token_ids = self.generate_draft_token_ids_arctic(
+            spec_token_ids_arctic = self.generate_draft_token_ids_arctic(
                 valid_sampled_token_ids, previous_hidden_states)
+            spec_token_ids_suffix = self.generate_draft_token_ids_suffix(
+                valid_sampled_token_ids)
+            
+            #print0(f"Arctic spec_token_ids: {spec_token_ids_arctic}")
+            #print0(f"Suffix spec_token_ids: {spec_token_ids_suffix}")
+
+            # Naive approach of just using the longer of the two
+            # Other options:
+            # 1. Use the one with the higher logprob
+            # 2. Use the one that has better history acceptance rate
+            # 3. Use the one that has better acceptance rate (requires tree batching)
+            spec_token_ids : List[List[int]] = []
+            for i in range(len(spec_token_ids_arctic)):
+                if len(spec_token_ids_arctic[i]) > len(spec_token_ids_suffix[i]):
+                    spec_token_ids.append(spec_token_ids_arctic[i])
+                else:
+                    spec_token_ids.append(spec_token_ids_suffix[i])
 
         from vllm.v1.outputs import ModelRunnerOutput
         return ModelRunnerOutput(
@@ -332,6 +352,52 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         )
 
         draft_token_ids = drafter_output.tolist()
+
+        return draft_token_ids
+
+    def generate_draft_token_ids_suffix(
+        self,
+        sampled_token_ids: list[list[int]],
+    ) -> list[list[int]]:
+        draft_token_ids: List[List[int]] = []
+        seen_req_ids = set()
+        for i, sampled_ids in enumerate(sampled_token_ids):
+            num_sampled_ids = len(sampled_ids)
+            if not num_sampled_ids:
+                # Skip speculative decoding.
+                draft_token_ids.append([])
+                continue
+
+            req_id = self.input_batch.req_ids[i]
+            index = self.input_batch.req_id_to_index[req_id]
+            if not self._suffix_cache.has_cached_prompt(req_id):
+                num_prompt_tokens = self.input_batch.num_prompt_tokens[index]
+                prompt_token_ids = self.input_batch.token_ids_cpu[index, :num_prompt_tokens]
+                self._suffix_cache.cache_prompt(req_id, prompt_token_ids)
+
+            seen_req_ids.add(req_id)
+            self._suffix_cache.update_response(req_id, sampled_ids)
+
+            # Add sampled_token_ids to token_ids_cpu.
+            start_idx = self.input_batch.num_tokens_no_spec[i]
+            end_idx = start_idx + num_sampled_ids
+            self.input_batch.token_ids_cpu[i, start_idx:end_idx] = sampled_ids
+
+            size = min(end_idx, self.speculative_config.ngram_prompt_lookup_max)
+            pattern = self.input_batch.token_ids_cpu[i, end_idx-size:end_idx]
+            result = self._suffix_cache.speculate(
+                req_id,
+                pattern.tolist(),
+                max_spec_tokens=self.speculative_config.num_speculative_tokens,
+                max_spec_factor=2.0,
+                min_token_prob=0.1)
+
+            draft_token_ids.append(result.token_ids)
+
+        # Evict prompts that are not seen
+        for req_id in self._suffix_cache.cached_prompt_ids():
+            if req_id not in seen_req_ids:
+                self._suffix_cache.evict_prompt(req_id)
 
         return draft_token_ids
     

@@ -23,3 +23,10 @@ def get_compatible_vllm_version():
         match = re.match("vllm==(\d+\.\d+\.\d+);", req)
         if match is not None:
             return match.groups()[0]
+        
+
+# For debugging
+def print0(*args, **kwargs):
+    from vllm.distributed.parallel_state import get_tp_group
+    if get_tp_group().is_first_rank:
+        print(*args, **kwargs)

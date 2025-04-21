@@ -18,6 +18,7 @@ packages = [
     "arctic_inference",
     "arctic_inference.common",
     "arctic_inference.common.swiftkv",
+    "arctic_inference.common.suffix_cache",
     "arctic_inference.vllm",
     "arctic_inference.vllm.swiftkv",
     "arctic_inference.vllm.spec_dec",
