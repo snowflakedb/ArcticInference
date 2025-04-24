@@ -21,7 +21,6 @@ packages = [
     "arctic_inference.common",
     "arctic_inference.common.suffix_cache",
     "arctic_inference.common.swiftkv",
-    "arctic_inference.common.suffix_cache",
     "arctic_inference.vllm",
     "arctic_inference.vllm.swiftkv",
     "arctic_inference.vllm.spec_dec",
@@ -29,5 +28,5 @@ packages = [
 
 [project.optional-dependencies]
 vllm = [
-    'vllm==0.8.1',
+    'vllm==0.8.4',
 ]

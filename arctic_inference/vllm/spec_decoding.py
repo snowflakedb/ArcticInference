@@ -22,7 +22,7 @@ from arctic_inference.patching import ArcticPatch
 def apply_spec_decoding_patches():
     EngineArgsPatch.apply_patch()
     Fp8ConfigPatch.apply_patch()
-    SpeculativeConfigPatch.apply_patch()
+    #SpeculativeConfigPatch.apply_patch()
 
 
 class EngineArgsPatch(ArcticPatch[EngineArgs]):
@@ -30,12 +30,38 @@ class EngineArgsPatch(ArcticPatch[EngineArgs]):
     _orig_is_v1_supported_oracle = EngineArgs._is_v1_supported_oracle
 
     def _is_v1_supported_oracle(self, *args, **kwargs):
-        # Hack for 0.8.1, [ngram] is used to activate suffix decoding
-        spec_model = self.speculative_model
-        self.speculative_model = "[ngram]"
-        bool_val = self._orig_is_v1_supported_oracle(*args, **kwargs)
-        self.speculative_model = spec_model
-        return bool_val
+        
+        is_ngram_enabled = False
+        is_eagle_enabled = False
+        is_arctic_enabled = False
+        if self.speculative_config is not None:
+            # This is supported but experimental (handled below).
+            speculative_method = self.speculative_config.get("method")
+            if speculative_method:
+                if speculative_method in ("ngram", "[ngram]"):
+                    is_ngram_enabled = True
+                elif speculative_method == "eagle":
+                    is_eagle_enabled = True
+                elif speculative_method == "arctic":
+                    is_arctic_enabled = True
+            else:
+                speculative_model = self.speculative_config.get("model")
+                if speculative_model in ("ngram", "[ngram]"):
+                    is_ngram_enabled = True
+            if not (is_ngram_enabled or is_eagle_enabled or is_arctic_enabled):
+                # Other speculative decoding methods are not supported yet.
+                from vllm.engine.arg_utils import _raise_or_fallback
+                _raise_or_fallback(feature_name="Speculative Decoding",
+                                   recommend_to_remove=False)
+                return False
+
+        speculative_config_archive = self.speculative_config
+
+        self.speculative_config = None
+        res = self._orig_is_v1_supported_oracle(*args, **kwargs)
+        self.speculative_config = speculative_config_archive
+
+        return res
 
 
 class Fp8ConfigPatch(ArcticPatch[Fp8Config]):
@@ -45,20 +71,20 @@ class Fp8ConfigPatch(ArcticPatch[Fp8Config]):
         return get_quant_method_patch(*args, **kwargs)
 
 
-class SpeculativeConfigPatch(ArcticPatch[SpeculativeConfig]):
+# class SpeculativeConfigPatch(ArcticPatch[SpeculativeConfig]):
 
-    _orig_maybe_create_spec_config = SpeculativeConfig.maybe_create_spec_config
+#     _orig_maybe_create_spec_config = SpeculativeConfig.maybe_create_spec_config
 
-    @staticmethod
-    def maybe_create_spec_config(*args, **kwargs):
-        ngram_prompt_lookup_max = kwargs.get("ngram_prompt_lookup_max")
-        ngram_prompt_lookup_min = kwargs.get("ngram_prompt_lookup_min")
-        spec_config = SpeculativeConfigPatch._orig_maybe_create_spec_config(*args, **kwargs)
+#     @staticmethod
+#     def maybe_create_spec_config(*args, **kwargs):
+#         ngram_prompt_lookup_max = kwargs.get("ngram_prompt_lookup_max")
+#         ngram_prompt_lookup_min = kwargs.get("ngram_prompt_lookup_min")
+#         spec_config = SpeculativeConfigPatch._orig_maybe_create_spec_config(*args, **kwargs)
 
-        if spec_config is None:
-            return None
+#         if spec_config is None:
+#             return None
         
-        spec_config.ngram_prompt_lookup_max = ngram_prompt_lookup_max
-        spec_config.ngram_prompt_lookup_min = ngram_prompt_lookup_min
-        return spec_config
+#         spec_config.ngram_prompt_lookup_max = ngram_prompt_lookup_max
+#         spec_config.ngram_prompt_lookup_min = ngram_prompt_lookup_min
+#         return spec_config
 

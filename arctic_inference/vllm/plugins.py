@@ -90,7 +90,7 @@ def arctic_inference_plugin():
     ModelRegistry.register_model("ArcticMLPSpeculatorPreTrainedModel",
                                  ArcticMLPSpeculator)
     ModelRegistry.register_model("ArcticLSTMSpeculatorPreTrainedModel",
-                                ArcticLSTMSpeculator)
+                                 ArcticLSTMSpeculator)
 
     # Patches that make later patches work properly.
     EngineCoreProcPatch.apply_patch()

@@ -26,8 +26,11 @@ from vllm.model_executor.model_loader import get_model
 from vllm.sequence import IntermediateTensors
 from vllm.v1.outputs import EMPTY_MODEL_RUNNER_OUTPUT, ModelRunnerOutput
 from vllm.v1.worker.gpu_model_runner import GPUModelRunner, logger
+from vllm.v1.spec_decode.ngram_proposer import NgramProposer
+from vllm.v1.spec_decode.eagle import EagleProposer
 
 from arctic_inference.patching import ArcticPatch
+from arctic_inference.vllm.spec_dec.arctic_proposer import ArcticProposer
 from arctic_inference.utils import print0
 
 class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
@@ -36,14 +39,41 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     _orig_load_model = GPUModelRunner.load_model
     _orig_init = GPUModelRunner.__init__
 
-    def __init__(self, *args, **kwargs):
-        self._orig_init(*args, **kwargs)
+    def __init__(self, vllm_config: VllmConfig, *args, **kwargs):
+        
+        speculative_config = vllm_config.speculative_config
+        
+        vllm_config.speculative_config = None
+        self._orig_init(vllm_config, *args, **kwargs)
 
-        from arctic_inference.vllm.spec_dec.arctic_proposer import ArcticProposer
-        self.mlp_drafter = ArcticProposer()
-
+        # TODO: Conditionally enable the suffix cache
         from arctic_inference.common.suffix_cache.suffix_cache import SuffixCache
         self._suffix_cache = SuffixCache(64)
+
+        # Set up speculative decoding.
+        if speculative_config:
+            self.use_spec_decode = True
+            self.speculative_config = speculative_config
+
+            from vllm.distributed.parallel_state import get_pp_group
+            if get_pp_group().is_last_rank:
+                if self.speculative_config.method == "ngram":
+                    self.drafter = NgramProposer(self.vllm_config)
+                elif self.speculative_config.method == "eagle":
+                    self.drafter = EagleProposer(self.vllm_config,
+                                                 self.device)  # type: ignore
+                elif (self.speculative_config.method == "arctic" or
+                      self.speculative_config.method == "mlp_speculator"):
+                    self.drafter = ArcticProposer(self.vllm_config,
+                                                  self.speculative_config)
+                else:
+                    raise ValueError("Unknown speculative decoding method: "
+                                     f"{self.speculative_config.method}")
+                
+                from vllm.v1.sample.rejection_sampler import RejectionSampler
+                self.rejection_sampler = RejectionSampler()
+
+        vllm_config.speculative_config = speculative_config
 
     def _prepare_inputs(self, *args, **kwargs):
         attn_metadata, logits_indices, *rest = (
@@ -84,43 +114,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         self.model.forward = ulysses_forward
 
-    def _load_spec_model(
-        self,
-        vllm_config: VllmConfig,
-        speculative_config: SpeculativeConfig,
-    ) -> nn.Module:
-        from vllm.config import VllmConfig
-
-        draft_config_model_config = speculative_config.draft_model_config
-        draft_config_quant_config = VllmConfig._get_quantization_config(
-            vllm_config.model_config,
-            vllm_config.load_config,
-        )
-        speculative_config.draft_parallel_config.worker_cls =\
-            vllm_config.parallel_config.sd_worker_cls
-        draft_config_parallel_config = speculative_config.draft_parallel_config
-
-        # We cannot use deepcopy here because Ulysses introduces
-        # torch._C._distributed_c10d.ProcessGroup objects that are not
-        # designed to be pickled.
-        draft_worker_config = VllmConfig(
-            model_config=draft_config_model_config,
-            quant_config=draft_config_quant_config,
-            parallel_config=draft_config_parallel_config,
-            load_config=vllm_config.load_config,
-            device_config=vllm_config.device_config,
-        )
-
-        return get_model(vllm_config=draft_worker_config)
-
     def load_model(self, *args, **kwargs):
         self._orig_load_model(*args, **kwargs)
         if self.parallel_config.sequence_parallel_size > 1:
             self.monkeypatch_forward()
-        if self.speculative_config:
-            self.draft_model = self._load_spec_model(vllm_config=self.vllm_config,
-                                                     speculative_config=self.speculative_config)
-            self.mlp_drafter.link_model(self.draft_model)
     
     @torch.inference_mode()
     def execute_model(
@@ -135,10 +132,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         if self.is_multimodal_model:
             # Run the multimodal encoder if any.
-            self._execute_encoder(scheduler_output)
-            encoder_outputs = self._gather_encoder_outputs(scheduler_output)
+            self._execute_mm_encoder(scheduler_output)
+            mm_embeds = self._gather_mm_embeddings(scheduler_output)
         else:
-            encoder_outputs = []
+            mm_embeds = []
 
         # Prepare the decoder inputs.
         attn_metadata, logits_indices, spec_decode_metadata = (
@@ -163,9 +160,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             # embeddings), we always use embeddings (rather than token ids)
             # as input to the multimodal model, even when the input is text.
             input_ids = self.input_ids[:num_scheduled_tokens]
-            if encoder_outputs:
+            if mm_embeds:
                 inputs_embeds = self.model.get_input_embeddings(
-                    input_ids, encoder_outputs)
+                    input_ids, mm_embeds)
             else:
                 inputs_embeds = self.model.get_input_embeddings(input_ids)
             # TODO(woosuk): Avoid the copy. Optimize.
@@ -228,7 +225,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 sampling_metadata=sampling_metadata,
             )
         else:
-            # TODO(woosuk): Optimize the memory usage.
+            # When indexing with a tensor (bonus_logits_indices), PyTorch
+            # creates a new tensor with separate storage from the original
+            # logits tensor. This means any in-place operations on bonus_logits
+            # won't affect the original logits tensor.
             bonus_logits = logits[spec_decode_metadata.bonus_logits_indices]
             sampler_output = self.model.sample(
                 logits=bonus_logits,
@@ -236,7 +236,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             )
             bonus_token_ids = sampler_output.sampled_token_ids
 
-            # TODO(woosuk): Optimize the memory usage.
+            # Just like `bonus_logits`, `target_logits` is a new tensor with
+            # separate storage from the original `logits` tensor. Therefore,
+            # it is safe to update `target_logits` in place.
             target_logits = logits[spec_decode_metadata.target_logits_indices]
             output_token_ids = self.rejection_sampler(
                 spec_decode_metadata,
@@ -249,8 +251,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         # TODO(woosuk): The following loop can be slow since it iterates over
         # the requests one by one. Optimize.
-        for i, generator in self.input_batch.generators.items():
-            req_id = self.input_batch.req_ids[i]
+        discard_sampled_tokens_req_indices = []
+        for i, req_id in enumerate(self.input_batch.req_ids):
             req_state = self.requests[req_id]
             seq_len = (req_state.num_computed_tokens +
                        scheduler_output.num_scheduled_tokens[req_id])
@@ -258,7 +260,12 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 # Ignore the sampled token for partial prefills.
                 # Rewind the generator state as if the token was not sampled.
                 # This relies on cuda-specific torch-internal impl details
-                generator.set_offset(generator.get_offset() - 4)
+                generator = self.input_batch.generators.get(i)
+                if generator is not None:
+                    generator.set_offset(generator.get_offset() - 4)
+                # Record the index of the request that should not be sampled,
+                # so that we could clear the sampled tokens before returning.
+                discard_sampled_tokens_req_indices.append(i)
 
         # NOTE: GPU -> CPU Sync happens here.
         # Move as many CPU operations as possible before this sync point.
@@ -273,52 +280,113 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         )
 
         # Get the valid generated tokens.
-        previous_hidden_states = None
         sampled_token_ids = sampler_output.sampled_token_ids
         max_gen_len = sampled_token_ids.shape[-1]
         if max_gen_len == 1:
             # No spec decode tokens.
             valid_sampled_token_ids = sampled_token_ids.tolist()
-            previous_hidden_states = sample_hidden_states
         else:
-            valid_mask = sampled_token_ids != -1
-            gen_lens = valid_mask.sum(dim=1)
-            num_sampled_tokens = np.array(spec_decode_metadata.num_draft_tokens)
-            num_sampled_tokens = torch.tensor(num_sampled_tokens, device=gen_lens.device) + 1
-            hidden_states_idx = (gen_lens - 1) + torch.cumsum(num_sampled_tokens, 0) - num_sampled_tokens
-            previous_hidden_states = sample_hidden_states[hidden_states_idx]
-
+            # Includes spec decode tokens.
             valid_sampled_token_ids = self.rejection_sampler.parse_output(
-                sampled_token_ids, self.input_batch.vocab_size)
+                sampled_token_ids,
+                self.input_batch.vocab_size,
+            )
+        # Mask out the sampled tokens that should not be sampled.
+        for i in discard_sampled_tokens_req_indices:
+            valid_sampled_token_ids[i].clear()
 
         disable_spec_decode = (
             self.speculative_config and 
-            self.speculative_config.speculative_disable_by_batch_size and
-            len(self.input_batch.req_ids) > self.speculative_config.speculative_disable_by_batch_size
+            self.speculative_config.disable_by_batch_size and
+            len(self.input_batch.req_ids) > self.speculative_config.disable_by_batch_size
         )   
 
+        spec_token_ids = None
         if not self.use_spec_decode or disable_spec_decode:
-            spec_token_ids = None
-        else:
-            spec_token_ids_arctic = self.generate_draft_token_ids_arctic(
-                valid_sampled_token_ids, previous_hidden_states)
-            spec_token_ids_suffix = self.generate_draft_token_ids_suffix(
-                valid_sampled_token_ids)
-            
-            #print0(f"Arctic spec_token_ids: {spec_token_ids_arctic}")
-            #print0(f"Suffix spec_token_ids: {spec_token_ids_suffix}")
-
-            # Naive approach of just using the longer of the two
-            # Other options:
-            # 1. Use the one with the higher logprob
-            # 2. Use the one that has better history acceptance rate
-            # 3. Use the one that has better acceptance rate (requires tree batching)
-            spec_token_ids : List[List[int]] = []
-            for i in range(len(spec_token_ids_arctic)):
-                if len(spec_token_ids_arctic[i]) > len(spec_token_ids_suffix[i]):
-                    spec_token_ids.append(spec_token_ids_arctic[i])
+            # Speculative decoding is not enabled.
+            pass
+        elif self.speculative_config.method == "ngram":
+            assert isinstance(self.drafter, NgramProposer)
+            spec_token_ids = self.generate_draft_token_ids(
+                valid_sampled_token_ids, sampling_metadata)
+        elif (self.speculative_config.method == "arctic" or 
+              self.speculative_config.method == "mlp_speculator"):
+            assert isinstance(self.drafter, ArcticProposer)
+            previous_hidden_states = self.drafter.prepare_hidden_states(
+                sample_hidden_states=sample_hidden_states,
+                sampled_token_ids=sampled_token_ids,
+                spec_decode_metadata=spec_decode_metadata,
+            )
+            spec_token_ids = self.generate_draft_token_ids_arctic(
+                valid_sampled_token_ids, 
+                previous_hidden_states=previous_hidden_states)
+            #print0(f"spec_token_ids: {spec_token_ids}")
+        elif self.speculative_config.method == "eagle":
+            assert isinstance(self.drafter, EagleProposer)
+            # TODO(woosuk): Refactor the loop.
+            next_token_ids: list[int] = []
+            for i, token_ids in enumerate(valid_sampled_token_ids):
+                if token_ids:
+                    # Common case.
+                    next_token_id = token_ids[-1]
                 else:
-                    spec_token_ids.append(spec_token_ids_suffix[i])
+                    # Partial prefill (rare case).
+                    # Get the next token id from the request state.
+                    req_id = self.input_batch.req_ids[i]
+                    req_state = self.requests[req_id]
+                    seq_len = (req_state.num_computed_tokens +
+                               scheduler_output.num_scheduled_tokens[req_id])
+                    next_token_id = req_state.get_token_id(seq_len)
+                next_token_ids.append(next_token_id)
+            next_token_ids = torch.tensor(next_token_ids,
+                                          dtype=torch.int32,
+                                          device=self.device)
+
+            if spec_decode_metadata is None:
+                # input_ids can be None for multimodal models.
+                # We need to slice token_ids, positions, and hidden_states
+                # because the eagle head does not use cuda graph and should
+                # not include padding.
+                target_token_ids = self.input_ids[:num_scheduled_tokens]
+                target_positions = positions[:num_scheduled_tokens]
+                target_hidden_states = hidden_states[:num_scheduled_tokens]
+                target_slot_mapping = attn_metadata.slot_mapping
+                cu_num_tokens = attn_metadata.query_start_loc
+            else:
+                # TODO(woosuk): Refactor this.
+                num_draft_tokens = spec_decode_metadata.num_draft_tokens
+                num_rejected_tokens = [
+                    n + 1 - len(valid_sampled_token_ids[i]) if n > 0 else 0
+                    for i, n in enumerate(num_draft_tokens)
+                ]
+                num_rejected_tokens = torch.tensor(
+                    num_rejected_tokens,
+                    dtype=torch.int32,
+                    device=self.device,
+                )
+                cu_num_tokens, token_indices = self.drafter.prepare_inputs(
+                    attn_metadata.query_start_loc,
+                    num_rejected_tokens,
+                )
+                target_token_ids = self.input_ids[token_indices]
+                target_positions = positions[token_indices]
+                target_hidden_states = hidden_states[token_indices]
+                target_slot_mapping = attn_metadata.slot_mapping[token_indices]
+
+            draft_token_ids, draft_probs = self.drafter.propose(
+                target_token_ids=target_token_ids,
+                target_positions=target_positions,
+                target_hidden_states=target_hidden_states,
+                target_slot_mapping=target_slot_mapping,
+                next_token_ids=next_token_ids,
+                cu_num_tokens=cu_num_tokens,
+                block_table=attn_metadata.block_table,
+                sampling_metadata=sampling_metadata,
+            )
+            spec_token_ids = draft_token_ids.tolist()
+            # TODO(woosuk): Cache draft_probs and use it for rejection sampling
+            # in the next step.
+            del draft_probs
 
         from vllm.v1.outputs import ModelRunnerOutput
         return ModelRunnerOutput(
@@ -346,7 +414,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             self.input_batch.token_ids_cpu[i, start_idx:end_idx] = sampled_ids
             last_tokens.append(self.input_batch.token_ids_cpu[i, end_idx - 1])
 
-        drafter_output = self.mlp_drafter.propose(
+        drafter_output = self.drafter.propose(
             last_tokens,
             previous_hidden_states=previous_hidden_states,
         )
