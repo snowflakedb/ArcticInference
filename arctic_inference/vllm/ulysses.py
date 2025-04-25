@@ -127,36 +127,29 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
             get_world_group().device_group)
 
         data_parallel_size = 1
-        has_external_dp = False
         from vllm.config import get_current_vllm_config
         config = get_current_vllm_config()
+        if config is not None:
+            data_parallel_size = config.parallel_config.data_parallel_size
+
         sequence_parallel_size = \
             config.parallel_config.sequence_parallel_size
-        if config is not None:
-            if config.parallel_config.world_size != world_size:
-                # detect external data parallelism.
-                # dp in vllm means all dp instances need to run together.
-                # if the world size does not match, it means this dp is external,
-                # and the dp instances can run independently, e.g. in rlhf workflow
-                # from https://github.com/volcengine/verl .
-                # in that case, we treat the rest dimensions as if they are
-                # data parallel, and create a dummy dp group that is not used.
-                data_parallel_size = world_size // (pipeline_model_parallel_size *
-                                                    sequence_parallel_size *
-                                                    tensor_model_parallel_size)
-                has_external_dp = True
-            else:
-                data_parallel_size = config.parallel_config.data_parallel_size
 
-        # the layout order is: DP x PP x SP x TP
+        # the layout order is: ExternalDP x DP x PP x SP x TP
+        # ExternalDP is the data parallel group that is not part of the model,
+        # every dp rank can generate independently (in verl integration).
+        # DP is the data parallel group that is part of the model,
+        # all the ranks in the same DP group should generate simultaneously,
+        # i.e. the `generate` call in the same DP group should be called together,
+        # otherwise it will cause deadlock.
         # to get group_ranks for each dimension, transpose that dimension to the
         # last dimension, then reshape to 2D, then unbind the last dimension
         all_ranks = torch.arange(world_size).reshape(
-            data_parallel_size, pipeline_model_parallel_size,
+            -1, data_parallel_size, pipeline_model_parallel_size,
             sequence_parallel_size, tensor_model_parallel_size)  # noqa
 
-        from vllm.distributed.parallel_state import _TP, _PP, _SP, _DP
         # Build the tensor model-parallel groups.
+        from vllm.distributed.parallel_state import _TP
         assert _TP is None, ("tensor model parallel group is already initialized")
         group_ranks = []
         for i in range(world_size // tensor_model_parallel_size):
@@ -164,15 +157,18 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                 range(i * tensor_model_parallel_size,
                     (i + 1) * tensor_model_parallel_size))
             group_ranks.append(ranks)
+        # message queue broadcaster is only used in tensor model parallel group
         _TP = init_model_parallel_group(group_ranks,
                                         get_world_group().local_rank,
                                         backend,
+                                        use_message_queue_broadcaster=True,
                                         group_name="tp")
 
         # Build the pipeline model-parallel groups.
+        from vllm.distributed.parallel_state import _PP
         assert _PP is None, (
             "pipeline model parallel group is already initialized")
-        group_ranks = all_ranks.transpose(1, 2).reshape(
+        group_ranks = all_ranks.transpose(2, 4).reshape(
             -1, pipeline_model_parallel_size).unbind(0)
         group_ranks = [x.tolist() for x in group_ranks]
         _PP = init_model_parallel_group(group_ranks,
@@ -198,17 +194,12 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                                         backend,
                                         group_name="sp")
 
+        from vllm.distributed.parallel_state import _DP
         assert _DP is None, ("data parallel group is already initialized")
-        group_ranks = all_ranks.transpose(0,
-                                        2).reshape(-1,
-                                                    data_parallel_size).unbind(0)
+        group_ranks = all_ranks.transpose(1,
+                                          4).reshape(-1,
+                                                     data_parallel_size).unbind(0)
         group_ranks = [x.tolist() for x in group_ranks]
-        if has_external_dp:
-            # create a dummy dp group that is not used actually,
-            # since this dp is external.
-            # a dummy dp group means every rank is a group itself.
-            # this way, no communication is needed, no memory is wasted.
-            group_ranks = [[x] for x in range(world_size)]
         _DP = init_model_parallel_group(group_ranks,
                                         get_world_group().local_rank,
                                         backend,
@@ -219,7 +210,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
             "DP rank %s, PP rank %s, SP rank %s, TP rank %s", rank,
             world_size, _DP.rank_in_group, _PP.rank_in_group, _SP.rank_in_group,
             _TP.rank_in_group)
-        
+
         parallel_state._TP = _TP
         parallel_state._PP = _PP
         parallel_state._SP = _SP
@@ -289,14 +280,18 @@ class UlyssesMultiprocExecutorPatch(ArcticPatch[MultiprocExecutor]):
 class UlyssesAttentionPatch(ArcticPatch[Attention]):
 
     _orig_init = Attention.__init__
+    _orig_forward = Attention.forward
 
     def __init__(self, num_heads, *args, **kwargs) -> None:
-        self.SP = parallel_state._SP.world_size
-        num_heads //= self.SP
-        kwargs["num_kv_heads"] //= self.SP
+        self.sp_size = parallel_state._SP.world_size
+        num_heads //= self.sp_size
+        kwargs["num_kv_heads"] //= self.sp_size
         return self._orig_init(num_heads, *args, **kwargs)
 
     def forward(self, query, key, value, **kwargs):
+        if self.sp_size == 1:
+            return self._orig_forward(query, key, value, **kwargs)
+
         from vllm.forward_context import get_forward_context
         if self.calculate_kv_scales:
             attn_metadata = get_forward_context().attn_metadata
@@ -315,15 +310,20 @@ class UlyssesFlashAttentionImplPatch(ArcticPatch[FlashAttentionImpl]):
     _orig_forward = FlashAttentionImpl.forward
 
     def __init__(self, *args, **kwargs):
-        self.SP = vllm.distributed.parallel_state._SP.world_size
+        self._orig_init(*args, **kwargs)
+
+        self.sp_size = vllm.distributed.parallel_state._SP.world_size
         self.device_group = vllm.distributed.parallel_state._SP.device_group
-        return self._orig_init(*args, **kwargs)
 
     def forward(self, layer, query, key, value, kv_cache, attn_metadata, output):
+        if self.sp_size == 1:
+            return self._orig_forward(layer, query, key, value, kv_cache,
+                                      attn_metadata, output)
+
         qkv = torch.cat(
-            (query.view(-1, self.SP, self.num_heads * self.head_size),
-             key.view(-1, self.SP, self.num_kv_heads * self.head_size),
-             value.view(-1, self.SP, self.num_kv_heads * self.head_size)),
+            (query.view(-1, self.sp_size, self.num_heads * self.head_size),
+             key.view(-1, self.sp_size, self.num_kv_heads * self.head_size),
+             value.view(-1, self.sp_size, self.num_kv_heads * self.head_size)),
             dim=-1).transpose(0, 1).reshape(
                 -1, (self.num_heads + 2 * self.num_kv_heads) * self.head_size)
         # all-to-all
@@ -346,6 +346,6 @@ class UlyssesFlashAttentionImplPatch(ArcticPatch[FlashAttentionImpl]):
         torch.distributed.all_to_all_single(c, c_, group=self.device_group)
         output.copy_(
             torch.transpose(
-                c.view(self.SP, -1, self.num_heads * self.head_size), 0,
-                1).reshape(-1, self.num_heads * self.SP * self.head_size))
+                c.view(self.sp_size, -1, self.num_heads * self.head_size), 0,
+                1).reshape(-1, self.num_heads * self.sp_size * self.head_size))
         return output

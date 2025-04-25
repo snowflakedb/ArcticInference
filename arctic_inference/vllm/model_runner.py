@@ -14,20 +14,24 @@
 # limitations under the License.
 
 import time
-from typing import List, Union, Optional
+from typing import List, Union, Optional, TYPE_CHECKING
 
 import numpy as np
 import torch
 import torch.nn as nn
-
-import vllm
+from vllm.config import CompilationLevel
+from vllm.distributed.parallel_state import get_pp_group, graph_capture
+from vllm.forward_context import set_forward_context
 from vllm.config import VllmConfig, SpeculativeConfig
 from vllm.model_executor.model_loader import get_model
 from vllm.sequence import IntermediateTensors
 from vllm.v1.outputs import EMPTY_MODEL_RUNNER_OUTPUT, ModelRunnerOutput
-from vllm.v1.worker.gpu_model_runner import GPUModelRunner, logger
-from vllm.v1.spec_decode.ngram_proposer import NgramProposer
 from vllm.v1.spec_decode.eagle import EagleProposer
+from vllm.v1.spec_decode.ngram_proposer import NgramProposer
+from vllm.v1.worker.gpu_model_runner import GPUModelRunner, logger
+
+if TYPE_CHECKING:
+    from vllm.v1.core.sched.output import SchedulerOutput
 
 from arctic_inference.patching import ArcticPatch
 from arctic_inference.vllm.spec_dec.arctic_proposer import ArcticProposer
@@ -127,7 +131,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     ) -> Union[ModelRunnerOutput, torch.Tensor]:
         self._update_states(scheduler_output)
         if not scheduler_output.total_num_scheduled_tokens:
-            # Return empty ModelRunnerOuptut if there's no work to do.
+            # Return empty ModelRunnerOutput if there's no work to do.
             return EMPTY_MODEL_RUNNER_OUTPUT
 
         if self.is_multimodal_model:
@@ -181,7 +185,6 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         else:
             positions = self.positions[:num_input_tokens]
 
-        from vllm.distributed.parallel_state import get_pp_group
         if get_pp_group().is_first_rank:
             intermediate_tensors = None
         else:
@@ -197,7 +200,6 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         # Run the decoder.
         # Use persistent buffers for CUDA graphs.
-        from vllm.forward_context import set_forward_context
         with set_forward_context(attn_metadata, self.vllm_config):
             hidden_states = self.model(
                 input_ids=input_ids,
@@ -387,8 +389,73 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             # TODO(woosuk): Cache draft_probs and use it for rejection sampling
             # in the next step.
             del draft_probs
+        elif self.speculative_config.method == "eagle":
+            assert isinstance(self.drafter, EagleProposer)
+            # TODO(woosuk): Refactor the loop.
+            next_token_ids: list[int] = []
+            for i, token_ids in enumerate(valid_sampled_token_ids):
+                if token_ids:
+                    # Common case.
+                    next_token_id = token_ids[-1]
+                else:
+                    # Partial prefill (rare case).
+                    # Get the next token id from the request state.
+                    req_id = self.input_batch.req_ids[i]
+                    req_state = self.requests[req_id]
+                    seq_len = (req_state.num_computed_tokens +
+                               scheduler_output.num_scheduled_tokens[req_id])
+                    next_token_id = req_state.get_token_id(seq_len)
+                next_token_ids.append(next_token_id)
+            next_token_ids = torch.tensor(next_token_ids,
+                                          dtype=torch.int32,
+                                          device=self.device)
 
-        from vllm.v1.outputs import ModelRunnerOutput
+            if spec_decode_metadata is None:
+                # input_ids can be None for multimodal models.
+                # We need to slice token_ids, positions, and hidden_states
+                # because the eagle head does not use cuda graph and should
+                # not include padding.
+                target_token_ids = self.input_ids[:num_scheduled_tokens]
+                target_positions = positions[:num_scheduled_tokens]
+                target_hidden_states = hidden_states[:num_scheduled_tokens]
+                target_slot_mapping = attn_metadata.slot_mapping
+                cu_num_tokens = attn_metadata.query_start_loc
+            else:
+                # TODO(woosuk): Refactor this.
+                num_draft_tokens = spec_decode_metadata.num_draft_tokens
+                num_rejected_tokens = [
+                    n + 1 - len(valid_sampled_token_ids[i]) if n > 0 else 0
+                    for i, n in enumerate(num_draft_tokens)
+                ]
+                num_rejected_tokens = torch.tensor(
+                    num_rejected_tokens,
+                    dtype=torch.int32,
+                    device=self.device,
+                )
+                cu_num_tokens, token_indices = self.drafter.prepare_inputs(
+                    attn_metadata.query_start_loc,
+                    num_rejected_tokens,
+                )
+                target_token_ids = self.input_ids[token_indices]
+                target_positions = positions[token_indices]
+                target_hidden_states = hidden_states[token_indices]
+                target_slot_mapping = attn_metadata.slot_mapping[token_indices]
+
+            draft_token_ids, draft_probs = self.drafter.propose(
+                target_token_ids=target_token_ids,
+                target_positions=target_positions,
+                target_hidden_states=target_hidden_states,
+                target_slot_mapping=target_slot_mapping,
+                next_token_ids=next_token_ids,
+                cu_num_tokens=cu_num_tokens,
+                block_table=attn_metadata.block_table,
+                sampling_metadata=sampling_metadata,
+            )
+            spec_token_ids = draft_token_ids.tolist()
+            # TODO(woosuk): Cache draft_probs and use it for rejection sampling
+            # in the next step.
+            del draft_probs
+
         return ModelRunnerOutput(
             req_ids=self.input_batch.req_ids,
             req_id_to_index=self.input_batch.req_id_to_index,
@@ -471,23 +538,24 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     
     def capture_model(self) -> None:
         if not self.use_cuda_graph:
-            vllm.v1.worker.gpu_model_runner.logger.warning(
+            logger.warning(
                 "Skipping CUDA graph capture. Please add "
                 "-O %s to use CUDA graphs.", CompilationLevel.PIECEWISE)
             return
+
         start_time = time.perf_counter()
         start_free_gpu_memory = torch.cuda.mem_get_info()[0]
+
         # Trigger CUDA graph capture for specific shapes.
         # Capture the large shapes first so that the smaller shapes
         # can reuse the memory pool allocated for the large shapes.
-        SP = self.parallel_config.sequence_parallel_size
-        from vllm.distributed.parallel_state import graph_capture
+        sp_size = self.parallel_config.sequence_parallel_size
         with graph_capture(device=self.device):
             for num_tokens in reversed(self.cudagraph_batch_sizes):
                 for _ in range(self.vllm_config.compilation_config.
                                cudagraph_num_of_warmups):
-                    self._dummy_run(num_tokens * SP)
-                self._dummy_run(num_tokens * SP)
+                    self._dummy_run(num_tokens * sp_size)
+                self._dummy_run(num_tokens * sp_size)
 
         end_time = time.perf_counter()
         end_free_gpu_memory = torch.cuda.mem_get_info()[0]
