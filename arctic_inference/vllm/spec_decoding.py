@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from vllm.config import SpeculativeConfig
 from vllm.engine.arg_utils import EngineArgs
 from vllm.model_executor.layers.quantization.fp8 import Fp8Config
 
@@ -22,7 +21,6 @@ from arctic_inference.patching import ArcticPatch
 def apply_spec_decoding_patches():
     EngineArgsPatch.apply_patch()
     Fp8ConfigPatch.apply_patch()
-    #SpeculativeConfigPatch.apply_patch()
 
 
 class EngineArgsPatch(ArcticPatch[EngineArgs]):
@@ -34,6 +32,7 @@ class EngineArgsPatch(ArcticPatch[EngineArgs]):
         is_ngram_enabled = False
         is_eagle_enabled = False
         is_arctic_enabled = False
+        is_suffix_enabled = False
         if self.speculative_config is not None:
             # This is supported but experimental (handled below).
             speculative_method = self.speculative_config.get("method")
@@ -44,11 +43,14 @@ class EngineArgsPatch(ArcticPatch[EngineArgs]):
                     is_eagle_enabled = True
                 elif speculative_method == "arctic":
                     is_arctic_enabled = True
+                elif speculative_method == "suffix":
+                    is_suffix_enabled = True
             else:
                 speculative_model = self.speculative_config.get("model")
                 if speculative_model in ("ngram", "[ngram]"):
                     is_ngram_enabled = True
-            if not (is_ngram_enabled or is_eagle_enabled or is_arctic_enabled):
+            if not (is_ngram_enabled or is_eagle_enabled or is_arctic_enabled
+                    or is_suffix_enabled):
                 # Other speculative decoding methods are not supported yet.
                 from vllm.engine.arg_utils import _raise_or_fallback
                 _raise_or_fallback(feature_name="Speculative Decoding",
@@ -69,22 +71,3 @@ class Fp8ConfigPatch(ArcticPatch[Fp8Config]):
     def get_quant_method(self, *args, **kwargs):
         from arctic_inference.vllm.spec_dec.fp8 import get_quant_method_patch
         return get_quant_method_patch(*args, **kwargs)
-
-
-# class SpeculativeConfigPatch(ArcticPatch[SpeculativeConfig]):
-
-#     _orig_maybe_create_spec_config = SpeculativeConfig.maybe_create_spec_config
-
-#     @staticmethod
-#     def maybe_create_spec_config(*args, **kwargs):
-#         ngram_prompt_lookup_max = kwargs.get("ngram_prompt_lookup_max")
-#         ngram_prompt_lookup_min = kwargs.get("ngram_prompt_lookup_min")
-#         spec_config = SpeculativeConfigPatch._orig_maybe_create_spec_config(*args, **kwargs)
-
-#         if spec_config is None:
-#             return None
-        
-#         spec_config.ngram_prompt_lookup_max = ngram_prompt_lookup_max
-#         spec_config.ngram_prompt_lookup_min = ngram_prompt_lookup_min
-#         return spec_config
-

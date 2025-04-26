@@ -21,7 +21,9 @@ from vllm.v1.worker.worker_base import WorkerBase
 from arctic_inference.patching import ArcticPatch
 from arctic_inference.utils import get_compatible_vllm_version
 from arctic_inference.vllm.args import EngineArgsPatch, AsyncEngineArgsPatch
-from arctic_inference.vllm.config import ParallelConfigPatch, VllmConfigPatch
+from arctic_inference.vllm.config import (ParallelConfigPatch,
+                                          SpeculativeConfigPatch,
+                                          VllmConfigPatch)
 from arctic_inference.vllm.ulysses import apply_ulysses_patches
 from arctic_inference.vllm.spec_decoding import apply_spec_decoding_patches
 
@@ -100,6 +102,7 @@ def arctic_inference_plugin():
     EngineArgsPatch.apply_patch()
     AsyncEngineArgsPatch.apply_patch()
     ParallelConfigPatch.apply_patch()
+    SpeculativeConfigPatch.apply_patch()
     VllmConfigPatch.apply_patch()
 
     # Main optimization patches.

@@ -25,9 +25,15 @@ llm = LLM(
     model="neuralmagic/Meta-Llama-3.1-70B-Instruct-FP8",
     tensor_parallel_size=2,
     sequence_parallel_size=1, 
-    speculative_config={"method":"arctic", "model":"/code/users/yewang/llama3170_speculator/Dec-20", "num_speculative_tokens": 3},
-    # ngram_prompt_lookup_max=5,
-    # ngram_prompt_lookup_min=3,
+    # speculative_config={
+    #     "method": "suffix",
+    # },
+    speculative_config={
+        "method": "arctic",
+        "model":"/code/users/yewang/llama3170_speculator/Dec-20",
+        "num_speculative_tokens": 3,
+        "enable_suffix_cache": True,
+    },
 )
 
 print("=" * 80)

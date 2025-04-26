@@ -15,7 +15,7 @@
 
 from dataclasses import dataclass
 
-from vllm.config import ParallelConfig, VllmConfig
+from vllm.config import ParallelConfig, SpeculativeConfig, VllmConfig
 
 from arctic_inference.patching import ArcticPatch
 from arctic_inference.vllm.args import get_current_arctic_args
@@ -46,6 +46,15 @@ class ArcticParallelConfig(ParallelConfig):
         pass
 
 
+@dataclass
+class ArcticSpeculativeConfig(SpeculativeConfig):
+
+    enable_suffix_cache: bool = False
+    suffix_cache_max_depth: int = 64
+    suffix_cache_max_spec_factor: float = 1.0
+    suffix_cache_min_token_prob: float = 0.1
+
+
 class ParallelConfigPatch(ArcticPatch[ParallelConfig]):
 
     def __new__(cls, *args, **kwargs):
@@ -55,6 +64,36 @@ class ParallelConfigPatch(ArcticPatch[ParallelConfig]):
             return ArcticParallelConfig.__new__(ArcticParallelConfig,
                                                 *args, **kwargs)
         return super(ParallelConfig, cls).__new__(cls)
+
+
+class SpeculativeConfigPatch(ArcticPatch[SpeculativeConfig]):
+
+    _orig_from_dict = SpeculativeConfig.__dict__["from_dict"].__wrapped__
+    _orig_post_init = SpeculativeConfig.__post_init__
+
+    def __new__(cls, *args, **kwargs):
+        # Override __new__ to return an ArcticSpeculativeConfig instead of a
+        # SpeculativeConfig when creating a new instance of the class.
+        if cls is SpeculativeConfig:
+            return ArcticSpeculativeConfig.__new__(
+                ArcticSpeculativeConfig, *args, **kwargs)
+        return super(SpeculativeConfig, cls).__new__(cls)
+
+    def __post_init__(self):
+        if self.method == "suffix":
+            self.enable_suffix_cache = True
+            self.num_speculative_tokens = self.suffix_cache_max_depth
+            self._verify_args()
+        else:
+            self._orig_post_init()
+
+    @classmethod
+    def from_dict(cls, dict_value: dict) -> SpeculativeConfig:
+        """Parse the CLI value for the speculative config."""
+        if cls is SpeculativeConfig:
+            return SpeculativeConfigPatch._orig_from_dict(
+                ArcticSpeculativeConfig, dict_value)
+        return SpeculativeConfigPatch._orig_from_dict(cls, dict_value)
 
 
 class VllmConfigPatch(ArcticPatch[VllmConfig]):
