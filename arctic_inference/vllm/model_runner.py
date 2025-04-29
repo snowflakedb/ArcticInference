@@ -419,7 +419,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         last_tokens : list[int] = []
         for i, sampled_ids in enumerate(sampled_token_ids):
             num_sampled_ids = len(sampled_ids)
-            assert num_sampled_ids >= 1
+            
+            if (num_sampled_ids == 0):
+                # uncommmon case
+                return None
 
             # Add sampled_token_ids to token_ids_cpu.
             start_idx = self.input_batch.num_tokens_no_spec[i]
