@@ -24,19 +24,21 @@ class Fp8LinearMethodEmbedding(Fp8LinearMethod):
         return F.embedding(input_, layer.weight)
 
 
-def get_quant_method_patch(self, layer: torch.nn.Module,
-                           prefix: str) -> Optional["QuantizeMethodBase"]:
-    from vllm.attention.layer import Attention  # Avoid circular import
-    from vllm.model_executor.layers.vocab_parallel_embedding import VocabParallelEmbedding
+class Fp8ConfigWithEmbedding(Fp8Config):
 
-    if isinstance(layer, LinearBase):
-        if is_layer_skipped(prefix, self.ignored_layers):
-            return UnquantizedLinearMethod()
-        return Fp8LinearMethod(self)
-    elif isinstance(layer, FusedMoE):
-        return Fp8MoEMethod(self)
-    elif isinstance(layer, Attention):
-        return Fp8KVCacheMethod(self)
-    elif isinstance(layer, VocabParallelEmbedding):
-        return Fp8LinearMethodEmbedding(self)
-    return None
+    def get_quant_method_patch(self, layer: torch.nn.Module,
+                               prefix: str) -> Optional["QuantizeMethodBase"]:
+        from vllm.attention.layer import Attention  # Avoid circular import
+        from vllm.model_executor.layers.vocab_parallel_embedding import VocabParallelEmbedding
+    
+        if isinstance(layer, LinearBase):
+            if is_layer_skipped(prefix, self.ignored_layers):
+                return UnquantizedLinearMethod()
+            return Fp8LinearMethod(self)
+        elif isinstance(layer, FusedMoE):
+            return Fp8MoEMethod(self)
+        elif isinstance(layer, Attention):
+            return Fp8KVCacheMethod(self)
+        elif isinstance(layer, VocabParallelEmbedding):
+            return Fp8LinearMethodEmbedding(self)
+        return None

@@ -23,7 +23,8 @@ import torch.nn as nn
 from vllm.config import VllmConfig
 from arctic_inference.vllm.spec_dec.logits_processor_opt import LogitsProcessorOpt
 from vllm.model_executor.layers.sampler import SamplerOutput, get_sampler
-from vllm.model_executor.layers.quantization.fp8 import Fp8Config, Fp8LinearMethod
+from vllm.model_executor.layers.quantization.fp8 import Fp8LinearMethod
+from arctic_inference.vllm.spec_dec.fp8 import Fp8ConfigWithEmbedding
 from arctic_inference.vllm.spec_dec.vocab_parallel_embedding import (
     ParallelLMHead,
     VocabParallelEmbedding,
@@ -115,7 +116,7 @@ class ArcticMLPSpeculator(nn.Module):
 
         self.quantize_lm_head = True
 
-        quant_config = Fp8Config() if self.quantize_lm_head else None
+        quant_config = Fp8ConfigWithEmbedding() if self.quantize_lm_head else None
 
         self.qhead = None
         if self.tie_weights:
@@ -434,7 +435,7 @@ class ArcticLSTMSpeculator(nn.Module):
         self.scale_input = config.scale_input
         self.quantize_lm_head = True
 
-        quant_config = Fp8Config() if self.quantize_lm_head else None
+        quant_config = Fp8ConfigWithEmbedding() if self.quantize_lm_head else None
         self.method = getattr(config, "method", "sum_rnn")
 
         self.activation = nn.GELU()

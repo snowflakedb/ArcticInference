@@ -20,7 +20,6 @@ from arctic_inference.patching import ArcticPatch
 
 def apply_spec_decoding_patches():
     EngineArgsPatch.apply_patch()
-    Fp8ConfigPatch.apply_patch()
 
 
 class EngineArgsPatch(ArcticPatch[EngineArgs]):
@@ -65,9 +64,3 @@ class EngineArgsPatch(ArcticPatch[EngineArgs]):
 
         return res
 
-
-class Fp8ConfigPatch(ArcticPatch[Fp8Config]):
-
-    def get_quant_method(self, *args, **kwargs):
-        from arctic_inference.vllm.spec_dec.fp8 import get_quant_method_patch
-        return get_quant_method_patch(*args, **kwargs)
