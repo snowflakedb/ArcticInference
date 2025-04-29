@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 from arctic_inference.common.suffix_cache import SuffixCache
 from arctic_inference.patching import ArcticPatch
 from arctic_inference.vllm.spec_dec.arctic_proposer import ArcticProposer
+from arctic_inference.common.suffix_cache import SuffixSpecResult
 
 
 class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
@@ -302,10 +303,35 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             valid_sampled_token_ids[i].clear()
 
         disable_spec_decode = (
-            self.speculative_config and 
+            self.speculative_config and
             self.speculative_config.disable_by_batch_size and
             len(self.input_batch.req_ids) > self.speculative_config.disable_by_batch_size
-        )   
+        )
+
+        suffix_spec_token_ids = None
+        orig_sampled_token_ids = valid_sampled_token_ids.copy()
+        if self._suffix_cache is not None:
+            self._update_suffix_cache(valid_sampled_token_ids)
+            if not disable_spec_decode:
+                results = self.generate_draft_token_ids_suffix(
+                    valid_sampled_token_ids)
+                suffix_spec_token_ids = []
+                # The score is an estimate of the acceptance length. Thus, the
+                # heuristic is to use the suffix decoded tokens if the score is
+                # greater than the # of tokens we would speculate otherwise.
+                min_score = (self.speculative_config.num_speculative_tokens
+                             if self.speculative_config.method != "suffix"
+                             else 0)
+                min_score = (0 if self.speculative_config.method == "suffix"
+                             else self.speculative_config.num_speculative_tokens)
+                for i, result in enumerate(results):
+                    if result.score >= min_score:
+                        # Use suffix decoded tokens, disable other speculation
+                        # methods for this request.
+                        valid_sampled_token_ids[i] = []
+                        suffix_spec_token_ids.append(result.token_ids)
+                    else:
+                        suffix_spec_token_ids.append([])
 
         spec_token_ids = None
         if not self.use_spec_decode or disable_spec_decode:
@@ -394,13 +420,15 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             # in the next step.
             del draft_probs
 
-        #print("Sampled:", valid_sampled_token_ids[0])
-        if self._suffix_cache is not None:
-            self._update_suffix_cache(valid_sampled_token_ids)
-            if not disable_spec_decode:
-                spec_token_ids = self.generate_draft_token_ids_suffix(
-                    valid_sampled_token_ids, spec_token_ids)
-                #print("Speculated:", [len(ids) for ids in spec_token_ids])
+        if spec_token_ids is None:
+            spec_token_ids = suffix_spec_token_ids
+        elif suffix_spec_token_ids is not None:
+            spec_token_ids = [
+                suffix_spec_token_ids[i] or spec_token_ids[i]
+                for i in range(len(suffix_spec_token_ids))
+            ]
+
+        valid_sampled_token_ids = orig_sampled_token_ids
 
         return ModelRunnerOutput(
             req_ids=self.input_batch.req_ids,
@@ -419,7 +447,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         last_tokens : list[int] = []
         for i, sampled_ids in enumerate(sampled_token_ids):
             num_sampled_ids = len(sampled_ids)
-            assert num_sampled_ids >= 1
+            #assert num_sampled_ids >= 1
 
             # Add sampled_token_ids to token_ids_cpu.
             start_idx = self.input_batch.num_tokens_no_spec[i]
@@ -433,6 +461,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         )
 
         draft_token_ids = drafter_output.tolist()
+
+        for i, sampled_ids in enumerate(sampled_token_ids):
+            if not sampled_ids:
+                draft_token_ids[i] = []
 
         return draft_token_ids
 
@@ -465,17 +497,16 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         spec_token_ids: Optional[list[list[int]]] = None,
     ) -> list[list[int]]:
         config = self.speculative_config
-        draft_token_ids: List[List[int]] = []
+        results = []
         for i, sampled_ids in enumerate(sampled_token_ids):
             spec_ids = spec_token_ids[i] if spec_token_ids is not None else []
             num_sampled_ids = len(sampled_ids)
             if not num_sampled_ids:
                 # Skip speculative decoding.
-                draft_token_ids.append([])
+                results.append(SuffixSpecResult())
                 continue
 
             req_id = self.input_batch.req_ids[i]
-            #self._suffix_cache.update_response(req_id, sampled_ids)
 
             # Add sampled_token_ids to token_ids_cpu.
             start_idx = self.input_batch.num_tokens_no_spec[i]
@@ -487,17 +518,34 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             pattern = pattern.tolist() + spec_ids
             if len(pattern) > config.suffix_cache_max_depth:
                 pattern = pattern[-config.suffix_cache_max_depth:]
+            max_spec_tokens = min(MAX_SPEC_LEN - len(spec_ids),
+                                  config.suffix_cache_max_depth)
+            # max_spec_offset is modified to mimic the behavior of the original
+            # max_spec_factor and max_spec_offset as if the speculative tokens
+            # were generated by suffix decoding. For example, if:
+            #   - max_spec_factor = 2
+            #   - max_spec_offset = -1
+            #   - we've already speculated 3 tokens
+            #   - and the suffix match length is 6
+            # Then:
+            #   - The match length before the already-speculated tokens is 3
+            #   - The original config allow up to 5 speculated tokens total
+            #   - Already speculated 3 tokens, so should allow 2 more tokens
+            # So the new config should map match length 6 to 2 max spec tokens.
+            max_spec_factor = config.suffix_cache_max_spec_factor
+            max_spec_offset = (config.suffix_cache_max_spec_offset -
+                              len(spec_ids) * (max_spec_factor + 1))
             result = self._suffix_cache.speculate(
                 req_id,
                 pattern,
-                max_spec_tokens=min(MAX_SPEC_LEN - len(spec_ids),
-                                    config.suffix_cache_max_depth),
-                max_spec_factor=config.suffix_cache_max_spec_factor,
+                max_spec_tokens=max_spec_tokens,
+                max_spec_factor=max_spec_factor,
+                max_spec_offset=max_spec_offset,
                 min_token_prob=config.suffix_cache_min_token_prob)
 
-            draft_token_ids.append(spec_ids + result.token_ids)
+            results.append(result)
 
-        return draft_token_ids
+        return results
 
     def capture_model(self) -> None:
         if not self.use_cuda_graph:

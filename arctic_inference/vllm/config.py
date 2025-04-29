@@ -52,6 +52,7 @@ class ArcticSpeculativeConfig(SpeculativeConfig):
     enable_suffix_cache: bool = False
     suffix_cache_max_depth: int = 64
     suffix_cache_max_spec_factor: float = 1.0
+    suffix_cache_max_spec_offset: float = 0.0
     suffix_cache_min_token_prob: float = 0.1
 
 
@@ -80,7 +81,9 @@ class SpeculativeConfigPatch(ArcticPatch[SpeculativeConfig]):
         return super(SpeculativeConfig, cls).__new__(cls)
 
     def __post_init__(self):
-        if self.method == "suffix":
+        if self.method == "suffix" or (self.method is None and
+                                       self.enable_suffix_cache):
+            self.method = "suffix"
             self.enable_suffix_cache = True
             self.num_speculative_tokens = self.suffix_cache_max_depth
             self._verify_args()

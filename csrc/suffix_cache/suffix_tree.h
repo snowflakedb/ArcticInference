@@ -77,8 +77,9 @@ public:
 
     Candidate speculate(const std::vector<int>& pattern,
                         int max_spec_tokens,
-                        float max_spec_factor = 1.0,
-                        float min_token_prob = 0.1,
+                        float max_spec_factor = 1.0f,
+                        float max_spec_offset = 0.0f,
+                        float min_token_prob = 0.1f,
                         bool use_tree_spec = false);
 
 private:

@@ -154,6 +154,7 @@ class SuffixCache:
         pattern: Sequence[int],
         max_spec_tokens: int = 0,
         max_spec_factor: float = 1.0,
+        max_spec_offset: float = 0.0,
         min_token_prob: float = 0.1,
         use_tree_spec: bool = False,
         use_cached_prompt: bool = True,
@@ -202,6 +203,7 @@ class SuffixCache:
                 pattern,
                 max_spec_tokens,
                 max_spec_factor,
+                max_spec_offset,
                 min_token_prob,
                 use_tree_spec)
             result = SuffixSpecResult.from_candidate(candidate)
@@ -212,6 +214,7 @@ class SuffixCache:
             pattern,
             max_spec_tokens,
             max_spec_factor,
+            max_spec_offset,
             min_token_prob,
             use_tree_spec)
         if candidate.score > result.score:

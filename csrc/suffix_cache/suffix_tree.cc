@@ -135,6 +135,7 @@ void SuffixTree::extend(int seq_id, const std::vector<int>& tokens) {
 Candidate SuffixTree::speculate(const std::vector<int>& pattern,
                                 int max_spec_tokens,
                                 float max_spec_factor,
+                                float max_spec_offset,
                                 float min_token_prob,
                                 bool use_tree_spec) {
     Candidate result;
@@ -144,9 +145,11 @@ Candidate SuffixTree::speculate(const std::vector<int>& pattern,
         if (node == nullptr) {
             continue;
         }
-        int max_tokens = std::min(
-            static_cast<int>((pattern.size() - start_idx) * max_spec_factor),
-            max_spec_tokens);
+        int match_len = static_cast<int>(pattern.size()) - start_idx;
+        int max_tokens = std::min(max_spec_tokens,
+                                  static_cast<int>(match_len * max_spec_factor
+                                                   + max_spec_offset + 1e-6));
+        max_tokens = std::max(max_tokens, 0);
         Candidate candidate;
         if (use_tree_spec) {
             candidate = _speculate_tree(node, idx, max_tokens, min_token_prob);
@@ -155,7 +158,7 @@ Candidate SuffixTree::speculate(const std::vector<int>& pattern,
         }
         if (candidate.score > result.score) {
             result = std::move(candidate);
-            result.match_len = pattern.size() - start_idx;
+            result.match_len = match_len;
         }
     }
     return result;
