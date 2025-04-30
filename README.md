@@ -22,3 +22,4 @@ To better understand what features ArcticInference supports please refer to the 
 
 * [SwiftKV](projects/swiftkv)
 * [Arctic Ulysses](projects/ulysses)
+* [Arctic Speculator](projects/spec_dec/)

@@ -22,15 +22,16 @@ os.environ["VLLM_USE_V1"] = "1"
 vllm.plugins.load_general_plugins()
 
 llm = LLM(
-    model="neuralmagic/Meta-Llama-3.1-70B-Instruct-FP8",
+    model="meta-llama/Llama-3.1-70B-Instruct",
+    quantization="fp8",
     tensor_parallel_size=2,
     sequence_parallel_size=1, 
-    # speculative_config={
-    #     "method": "suffix",
-    # },
+    speculative_config={
+        "method": "suffix",
+    },
     speculative_config={
         "method": "arctic",
-        "model":"/code/users/yewang/llama3170_speculator/Dec-20",
+        "model":"Arctic-LSTM-Speculator-Llama-3.1-70B",
         "num_speculative_tokens": 3,
         "enable_suffix_cache": True,
     },
