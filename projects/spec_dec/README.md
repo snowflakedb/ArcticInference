@@ -10,6 +10,6 @@ For more details, see:
 
 ### Running Arctic Speculator
 
-Run an example conversion using [meta-llama/Llama-3.1-70B-Instruct](https://huggingface.co/meta-llama/Llama-3.1-70B-Instruct) as base model and [Arctic-LSTM-Speculator-Llama-3.1-70B]() as draft model:
+Run an example conversion using [meta-llama/Llama-3.1-70B-Instruct](https://huggingface.co/meta-llama/Llama-3.1-70B-Instruct) as base model and [Snowflake/Arctic-LSTM-Speculator-Llama-3.1-70B-Instruct](https://huggingface.co/Snowflake/Arctic-LSTM-Speculator-Llama-3.1-70B-Instruct) as draft model:
 ```console
 $ python offline_inference_spec_dec.py
