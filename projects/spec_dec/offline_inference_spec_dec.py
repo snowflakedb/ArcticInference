@@ -25,15 +25,11 @@ llm = LLM(
     model="meta-llama/Llama-3.1-70B-Instruct",
     quantization="fp8",
     tensor_parallel_size=2,
-    sequence_parallel_size=1, 
-    speculative_config={
-        "method": "suffix",
-    },
     speculative_config={
         "method": "arctic",
-        "model":"Arctic-LSTM-Speculator-Llama-3.1-70B",
+        "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.1-70B-Instruct",
         "num_speculative_tokens": 3,
-        "enable_suffix_cache": True,
+        "enable_suffix_decoding": True,
     },
 )
 

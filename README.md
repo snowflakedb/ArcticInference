@@ -13,8 +13,7 @@ Once installed, ArcticInference automatically patches vLLM to use Arctic Ulysses
 ## Installation
 
 ```console
-$ git clone https://github.com/snowflakedb/ArcticInference.git
-$ cd ArcticInference && pip install .[vllm]
+$ pip install arctic-inference[vllm]
 ```
 
 ## Projects 

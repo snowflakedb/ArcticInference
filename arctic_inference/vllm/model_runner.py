@@ -78,7 +78,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 from vllm.v1.sample.rejection_sampler import RejectionSampler
                 self.rejection_sampler = RejectionSampler()
 
-            if speculative_config.enable_suffix_cache:
+            if speculative_config.enable_suffix_decoding:
                 self._suffix_cache = SuffixCache(
                     speculative_config.suffix_cache_max_depth)
 
@@ -535,8 +535,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             #   - The original config allow up to 5 speculated tokens total
             #   - Already speculated 3 tokens, so should allow 2 more tokens
             # So the new config should map match length 6 to 2 max spec tokens.
-            max_spec_factor = config.suffix_cache_max_spec_factor
-            max_spec_offset = (config.suffix_cache_max_spec_offset -
+            max_spec_factor = config.suffix_max_spec_factor
+            max_spec_offset = (config.suffix_max_spec_offset -
                               len(spec_ids) * (max_spec_factor + 1))
             result = self._suffix_cache.speculate(
                 req_id,
@@ -544,7 +544,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 max_spec_tokens=max_spec_tokens,
                 max_spec_factor=max_spec_factor,
                 max_spec_offset=max_spec_offset,
-                min_token_prob=config.suffix_cache_min_token_prob)
+                min_token_prob=config.suffix_min_token_prob)
 
             results.append(result)
 
