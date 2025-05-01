@@ -28,6 +28,10 @@ Then in the chat interface, ask a simple question:
 
 ## Quick Start (vLLM Client)
 
+> [!NOTE]
+> This is a work in progress.
+> Async part is not working yet, likely due to some vLLM version issue.
+
 ```bash
 cd arctic_inference/projects/dynasor/
 ```
