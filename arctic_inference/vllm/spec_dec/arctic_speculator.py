@@ -45,6 +45,14 @@ def padding_size(size: int) -> int:
         return size
     return (size + mult - 1) //  mult * mult
 
+# This is a workaround for the fact that the Marlin 
+# does not support FP8 quantization for the lm_head 
+# layer. Will address this in the future.
+def use_marlin() -> bool:
+    from vllm.platforms import current_platform
+    from vllm import envs
+    return (not current_platform.has_device_capability(89)
+            or envs.VLLM_TEST_FORCE_FP8_MARLIN)
 
 class MLPSpeculatorLayerNorm(nn.Module):
     """
@@ -114,7 +122,7 @@ class ArcticMLPSpeculator(nn.Module):
         self.tie_weights = config.tie_weights
         self.scale_input = config.scale_input
 
-        self.quantize_lm_head = True
+        self.quantize_lm_head = True if not use_marlin() else False
 
         quant_config = Fp8ConfigWithEmbedding() if self.quantize_lm_head else None
 
@@ -433,7 +441,7 @@ class ArcticLSTMSpeculator(nn.Module):
         self.tie_weights = config.tie_weights
         self.tie_lstm_embs = config.tie_lstm_embs
         self.scale_input = config.scale_input
-        self.quantize_lm_head = True
+        self.quantize_lm_head = True if not use_marlin() else False
 
         quant_config = Fp8ConfigWithEmbedding() if self.quantize_lm_head else None
         self.method = getattr(config, "method", "sum_rnn")
