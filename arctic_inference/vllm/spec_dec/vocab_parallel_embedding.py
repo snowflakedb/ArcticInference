@@ -28,6 +28,12 @@ class UnquantizedEmbeddingMethod(QuantizeMethodBase):
                        output_size: int, params_dtype: torch.dtype,
                        **extra_weight_attrs):
         """Create weights for embedding layer."""
+        output_size_per_partition = sum(output_partition_sizes)
+        layer.logical_widths = output_partition_sizes
+        layer.input_size_per_partition = input_size_per_partition
+        layer.output_size_per_partition = output_size_per_partition
+        layer.orig_dtype = params_dtype
+        
         weight = Parameter(torch.empty(sum(output_partition_sizes),
                                        input_size_per_partition,
                                        dtype=params_dtype),
