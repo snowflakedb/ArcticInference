@@ -32,9 +32,9 @@ from vllm.entrypoints.openai.serving_completion import OpenAIServingCompletion
 from vllm.version import __version__ as VLLM_VERSION
 
 
-from dynasor.cli.serving_chat import AdaptiveOpenAIServingChat
-from dynasor.cli.serving_completion import AdaptiveOpenAIServingCompletion
-from dynasor.core.entropy import (
+from serving_chat import AdaptiveOpenAIServingChat
+from serving_completion import AdaptiveOpenAIServingCompletion
+from entropy import (
     obtain_answer,
     should_early_exit,
     uncertain_words,
