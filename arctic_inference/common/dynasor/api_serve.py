@@ -5,8 +5,7 @@ Adopted from vLLM openai server
 import uvloop
 import asyncio
 import importlib
-from typing import Dict, Optional, Set, Tuple, Union, Annotated, Union
-
+from typing import Dict, Optional, Set, Tuple, Union, Annotated, Union, AsyncGenerator, Any
 from vllm.entrypoints.openai import api_server
 from vllm.entrypoints.openai.serving_completion import CompletionStreamResponse
 from fastapi import APIRouter, Depends, FastAPI, Form, HTTPException, Request
@@ -116,7 +115,10 @@ async def init_app_state_override(engine_client, model_config, state, args):
 
 api_server.init_app_state = init_app_state_override
 
-async def handle_adaptive_compute(request: CompletionRequest, raw_request: Request):
+done_struct = "data: [DONE]\n\n"
+
+
+async def _handle_adaptive_compute(request: CompletionRequest, raw_request: Request) -> AsyncGenerator[Tuple[CompletionStreamResponse, Dict[str, Any]], None]:
     """
     Handle adaptive compute for `/v1/completions` requests.
     """
@@ -188,9 +190,11 @@ async def handle_adaptive_compute(request: CompletionRequest, raw_request: Reque
 
         generator = await handler.create_completion(decoding_request, raw_request)
         if isinstance(generator, ErrorResponse):
-            error_response = generator.model_dump()
-            yield f"data: {error_response}\n\n"
-            yield "data: [DONE]\n\n"
+            # error_response = generator.model_dump()
+            # yield f"data: {error_response}\n\n"
+            yield generator, dict()
+            # yield "data: [DONE]\n\n"
+            yield done_struct, dict()
             return
 
         # TODO(GindaChen): inefficient string buffering
@@ -206,11 +210,12 @@ async def handle_adaptive_compute(request: CompletionRequest, raw_request: Reque
             remaining_tokens -= 1
             token_count += 1
 
-            response_json = output.model_dump_json(exclude_unset=False, exclude_none=True)
             if output_var_template is None:
                 output_var_template = output
-
-            yield f"data: {response_json}\n\n"
+            
+            # response_json = output.model_dump_json(exclude_unset=False, exclude_none=True)
+            # yield f"data: {response_json}\n\n"
+            yield output, dict(exclude_unset=False, exclude_none=True)
 
             if token_count % token_interval == 0:
                 # Launch probe task asynchronously
@@ -230,21 +235,74 @@ async def handle_adaptive_compute(request: CompletionRequest, raw_request: Reque
             response_obj.choices[0].finish_reason = "stop"
             response_obj.choices[0].stop_reason = "stop"
 
-            response_json = response_obj.model_dump_json(
-                exclude_unset=False, exclude_none=True
-            )
-            yield f"data: {response_json}\n\n"
-            yield "data: [DONE]\n\n"
+            # response_json = response_obj.model_dump_json(
+            #     exclude_unset=False, exclude_none=True
+            # )
+            # yield f"data: {response_json}\n\n"
+            yield response_obj, dict(exclude_unset=False, exclude_none=True)
+            # yield "data: [DONE]\n\n"
+            yield done_struct, dict()
             return
         
         if remaining_tokens <= 0:
             logger.debug(f"Early exit: Remaining tokens <= 0")
-            yield f"data: [DONE]\n\n"
+            # yield f"data: [DONE]\n\n"
+            yield done_struct, dict()
             break
 
-    yield "data: [DONE]\n\n"
+    # yield "data: [DONE]\n\n"
+    yield done_struct, dict()
 
 
+async def handle_adaptive_compute(request: CompletionRequest, raw_request: Request):
+    generator = _handle_adaptive_compute(request, raw_request)
+    async for response_obj, dump_config in generator:
+        print(response_obj, dump_config)
+        if response_obj == done_struct:
+            yield done_struct
+            continue
+        chunk = response_obj.model_dump_json(**dump_config)
+        print(chunk)
+        yield f"data: {chunk}\n\n"
+    return
+
+from vllm.entrypoints.openai.protocol import ChatCompletionStreamResponse, DeltaMessage, ChatCompletionResponseStreamChoice
+
+async def adapt_completion_to_chat(generator: AsyncGenerator[Tuple[CompletionStreamResponse, Dict[str, Any]], None]):
+    async for response_obj, dump_config in generator:
+        print("in completion adaptor:", response_obj, dump_config)
+        if response_obj == done_struct:
+            yield done_struct
+            continue
+        if isinstance(response_obj, ErrorResponse):
+            yield response_obj.model_dump_json(**dump_config)
+            continue
+        
+        assert isinstance(response_obj, CompletionStreamResponse)
+        
+        chat_response_obj = ChatCompletionStreamResponse(
+            id=response_obj.id,
+            created=response_obj.created,
+            model=response_obj.model,
+            choices=[
+                ChatCompletionResponseStreamChoice(
+                    index=0,
+                    delta=DeltaMessage(
+                        # TODO(GindaChen): assigned by `OpenAIServingChat.chat_completion_stream_generator.get_chat_request_role(request)`
+                        role="assistant",
+                        content=choice.text
+                    ),
+                    logprobs=choice.logprobs,
+                    finish_reason=choice.finish_reason,
+                    stop_reason=choice.stop_reason
+                )
+                for choice in response_obj.choices
+            ],
+            usage=response_obj.usage
+        )
+        chunk = chat_response_obj.model_dump_json(**dump_config)
+        print(chunk)
+        yield f"data: {chunk}\n\n"
 
 @with_cancellation
 async def adaptive_create_completion(request: CompletionRequest, raw_request: Request):
@@ -286,7 +344,8 @@ async def adaptive_create_chat_completion(request: ChatCompletionRequest, raw_re
     if adaptive_compute is not None:
         newprompt = await handler.get_completion_prompt(request, raw_request)
         request = CompletionRequest(prompt=newprompt,**json_obj)
-        generator = handle_adaptive_compute(request, raw_request)
+        generator = _handle_adaptive_compute(request, raw_request)
+        generator = adapt_completion_to_chat(generator)
         return StreamingResponse(content=generator, media_type="text/event-stream")
 
     generator = await handler.create_chat_completion(request, raw_request)

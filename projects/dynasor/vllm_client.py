@@ -93,7 +93,9 @@ def completions_example(client, model_name, prompt, temperature, max_tokens, top
     token_count = 0 
     start_time = time.time()
     for chunk in response:
+        # print(chunk)
         token = chunk.choices[0].text
+
         response_text += token
         print(token, end="", flush=True)
         token_count += 1
