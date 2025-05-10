@@ -11,7 +11,7 @@ Start the server:
 python api_serve.py \
 --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
 --port 8000 \
--tp 1 --enable-prefix-caching --enable-chunked-prefill
+-tp 1 --enable-prefix-caching --enable-chunked-prefill --enforce-eager
 ```
 
 Start the chat client, the UI we designed to interact with the server:
@@ -41,7 +41,7 @@ Start the server:
 python api_serve.py \
 --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
 --port 8000 \
--tp 1 --enable-prefix-caching --enable-chunked-prefill
+-tp 1 --enable-prefix-caching --enable-chunked-prefill --enforce-eager
 ```
 
 Start the vLLM client:
