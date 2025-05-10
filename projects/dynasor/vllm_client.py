@@ -115,7 +115,7 @@ def completions_example(client, model_name, prompt, temperature, max_tokens, top
     )
 
 
-def chat_example(client, model_name, prompt, disable_adaptive=False, token_interval=32, certainty_window=2):
+def chat_example(client, model_name, prompt, max_tokens, disable_adaptive=False, token_interval=32, certainty_window=2):
     console.print(Panel(f"[bold blue]Prompt:[/bold blue] {prompt}", title="Input", border_style="blue"))
 
     max_retries = 5
@@ -130,56 +130,53 @@ def chat_example(client, model_name, prompt, disable_adaptive=False, token_inter
     )
     
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-    ) as progress:        
-        for attempt in range(max_retries):
-            try:
-                if not disable_adaptive:
-                    extra_body = dict(
-                        adaptive_compute=adaptive_compute,
-                    )
-                else:
-                    extra_body = None
-                response = client.chat.completions.create(
-                    model=model_name,
-                    messages=[{"role": "user", "content": prompt}],
-                    stream=True,
-                    extra_body=extra_body,
+       
+    for attempt in range(max_retries):
+        try:
+            if not disable_adaptive:
+                extra_body = dict(
+                    adaptive_compute=adaptive_compute,
                 )
-                break
-            except openai.InternalServerError as e:
-                wait_time = backoff_factor ** attempt
-                console.print(f"[yellow]Attempt {attempt + 1} failed: {e}. Retrying in {wait_time} seconds...[/yellow]")
-                time.sleep(wait_time)
-        else:
-            console.print("[bold red]All retry attempts failed.[/bold red]")
-            return
-
-        console.print("\n[bold green]Response:[/bold green]")
-        response_text = ""
-        token_count = 0 
-        start_time = time.time()
-        for chunk in response:
-            # print(chunk)
-            if chunk.choices and hasattr(chunk.choices[0], 'delta'):
-                delta = chunk.choices[0].delta
-                if hasattr(delta, 'content') and delta.content:
-                    response_text += delta.content
-                    print(delta.content, end="")
-                    token_count += 1
-        end_time = time.time()
-        
-        console.print("\n")
-        console.print(
-            Panel(
-                f"Tokens: {token_count}\n"
-                f"Time: {end_time - start_time:.2f} seconds\n"
-                f"Throughput: {token_count / (end_time - start_time):.2f} tps"
+            else:
+                extra_body = None
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                stream=True,
+                extra_body=extra_body,
+                max_tokens=max_tokens,
             )
+            break
+        except openai.InternalServerError as e:
+            wait_time = backoff_factor ** attempt
+            console.print(f"[yellow]Attempt {attempt + 1} failed: {e}. Retrying in {wait_time} seconds...[/yellow]")
+            time.sleep(wait_time)
+    else:
+        console.print("[bold red]All retry attempts failed.[/bold red]")
+        return
+
+    console.print("\n[bold green]Response:[/bold green]")
+    response_text = ""
+    token_count = 0 
+    start_time = time.time()
+    for chunk in response:
+        # print(chunk)
+        if chunk.choices and hasattr(chunk.choices[0], 'delta'):
+            delta = chunk.choices[0].delta
+            if hasattr(delta, 'content') and delta.content:
+                response_text += delta.content
+                print(delta.content, flush=True, end="")
+                token_count += 1
+    end_time = time.time()
+    
+    console.print("\n")
+    console.print(
+        Panel(
+            f"Tokens: {token_count}\n"
+            f"Time: {end_time - start_time:.2f} seconds\n"
+            f"Throughput: {token_count / (end_time - start_time):.2f} tps"
         )
+    )
 
 
 def main():
@@ -220,6 +217,7 @@ def main():
             client=client,
             model_name=args.model,
             prompt=args.prompt,
+            max_tokens=args.max_tokens,
             disable_adaptive=args.disable_adaptive,
             token_interval=args.token_interval,
             certainty_window=args.certainty_window

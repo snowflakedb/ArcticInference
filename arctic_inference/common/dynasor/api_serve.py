@@ -176,6 +176,7 @@ async def _handle_adaptive_compute(request: CompletionRequest, raw_request: Requ
             if should_early_exit(answers, probe_output_text, uncertain_words, certainty_window, is_certains):
                 final_answer_box["answer"] = answer
                 certainty_event.set()
+                # logger.debug("\033[91mdetected early exit\033[0m")
         except Exception as e:
             logger.warning(f"Probe task failed: {e}")
         return
@@ -257,12 +258,12 @@ async def _handle_adaptive_compute(request: CompletionRequest, raw_request: Requ
 async def handle_adaptive_compute(request: CompletionRequest, raw_request: Request):
     generator = _handle_adaptive_compute(request, raw_request)
     async for response_obj, dump_config in generator:
-        print(response_obj, dump_config)
+        # logger.debug(response_obj, dump_config)
         if response_obj == done_struct:
             yield done_struct
             continue
         chunk = response_obj.model_dump_json(**dump_config)
-        print(chunk)
+        # logger.debug(chunk)
         yield f"data: {chunk}\n\n"
     return
 
@@ -270,7 +271,7 @@ from vllm.entrypoints.openai.protocol import ChatCompletionStreamResponse, Delta
 
 async def adapt_completion_to_chat(generator: AsyncGenerator[Tuple[CompletionStreamResponse, Dict[str, Any]], None]):
     async for response_obj, dump_config in generator:
-        print("in completion adaptor:", response_obj, dump_config)
+        # logger.debug("in completion adaptor:", response_obj, dump_config)
         if response_obj == done_struct:
             yield done_struct
             continue
@@ -301,7 +302,7 @@ async def adapt_completion_to_chat(generator: AsyncGenerator[Tuple[CompletionStr
             usage=response_obj.usage
         )
         chunk = chat_response_obj.model_dump_json(**dump_config)
-        print(chunk)
+        # logger.debug(chunk)
         yield f"data: {chunk}\n\n"
 
 @with_cancellation
@@ -320,7 +321,7 @@ async def adaptive_create_completion(request: CompletionRequest, raw_request: Re
         generator = handle_adaptive_compute(request, raw_request)
         return StreamingResponse(content=generator, media_type="text/event-stream")
 
-    print("Handling normal completion")
+    # logger.debug("Handling normal completion")
     generator = await handler.create_completion(request, raw_request)
     if isinstance(generator, ErrorResponse):
         return JSONResponse(content=generator.model_dump(), status_code=generator.code)
