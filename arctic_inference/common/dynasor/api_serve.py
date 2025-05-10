@@ -117,6 +117,9 @@ async def init_app_state_override(engine_client, model_config, state, args):
 api_server.init_app_state = init_app_state_override
 
 async def handle_adaptive_compute(request: CompletionRequest, raw_request: Request):
+    """
+    Handle adaptive compute for `/v1/completions` requests.
+    """
     handler = adaptive_compute_completion(raw_request)
     assert handler is not None
 
@@ -143,9 +146,14 @@ async def handle_adaptive_compute(request: CompletionRequest, raw_request: Reque
     final_answer_box = {"answer": None}
 
     #probing function
-    async def launch_probe(prompt_snapshot: str):
-        probe_prompt = prompt_snapshot + probe_text
+    async def launch_probe(prompt_snapshot: str) -> None:
+        """
+        Launch a probe task asynchronously.
+        """
         probe_request = original_request.model_copy()
+        # TODO(GindaChen): inefficient string manipulation
+        probe_prompt = prompt_snapshot + probe_text
+        # TODO(GindaChen): Make these configurable
         probe_request.prompt = probe_prompt
         probe_request.stream = True
         probe_request.max_tokens = 20
@@ -167,8 +175,10 @@ async def handle_adaptive_compute(request: CompletionRequest, raw_request: Reque
                 final_answer_box["answer"] = answer
                 certainty_event.set()
         except Exception as e:
-            logger.error(f"Probe task failed: {e}")
+            logger.warning(f"Probe task failed: {e}")
+        return
 
+    # Main decoding loop
     while remaining_tokens > 0:
         decoding_request = original_request.model_copy()
         decoding_request.prompt = sending_prompt
@@ -183,6 +193,7 @@ async def handle_adaptive_compute(request: CompletionRequest, raw_request: Reque
             yield "data: [DONE]\n\n"
             return
 
+        # TODO(GindaChen): inefficient string buffering
         token_buffer = ""
 
         # Send the actual query
@@ -201,7 +212,7 @@ async def handle_adaptive_compute(request: CompletionRequest, raw_request: Reque
 
             yield f"data: {response_json}\n\n"
 
-            if token_count%token_interval==0:
+            if token_count % token_interval == 0:
                 # Launch probe task asynchronously
                 asyncio.create_task(launch_probe(sending_prompt + token_buffer))
 
@@ -273,7 +284,7 @@ async def adaptive_create_chat_completion(request: ChatCompletionRequest, raw_re
     adaptive_compute = json_obj.get("adaptive_compute", None)
 
     if adaptive_compute is not None:
-        newprompt=await handler.get_completion_prompt(request, raw_request)
+        newprompt = await handler.get_completion_prompt(request, raw_request)
         request = CompletionRequest(prompt=newprompt,**json_obj)
         generator = handle_adaptive_compute(request, raw_request)
         return StreamingResponse(content=generator, media_type="text/event-stream")
@@ -289,7 +300,7 @@ async def adaptive_create_chat_completion(request: ChatCompletionRequest, raw_re
     return StreamingResponse(content=generator, media_type="text/event-stream")
 
 
-#overriding the api_server routers for adaptive decoding
+# Overriding the api_server routers for adaptive decoding
 for path in ("/v1/completions", "/v1/chat/completions"):
     api_server.router.routes[:] = [
         r for r in api_server.router.routes
