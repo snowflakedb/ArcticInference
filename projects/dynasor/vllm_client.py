@@ -33,9 +33,19 @@ def format_deepseek_prompt(user_message: str) -> str:
 
 
 def completions_example():
-    user_message = "Solve x^4 + x^3 = x^2 + x + 4"
+    # user_message = "Solve x^4 + x^3 = x^2 + x + 4"
+    user_message = "Solve x^2 + 1 = 0"
     print(f"Prompt: {user_message}")
     prompt = format_deepseek_prompt(user_message)
+    
+    # TODO: Properly form the names
+    adaptive_compute=dict(
+        mode="prompting",
+        probe_text=probe_text,
+        probe_text_end=probe_text_end,
+        certainty_window=2,
+        token_interval=32,
+    )
     print(f"-----")
     print(f"Streaming response:\n")
 
@@ -47,14 +57,7 @@ def completions_example():
         temperature=0.7,
         top_p=0.95,
         extra_body=dict(
-            # TODO: Properly form the names
-            adaptive_compute=dict(
-                mode="prompting",
-                probe_text=probe_text,
-                probe_text_end=probe_text_end,
-                certainty_window=2,
-                token_interval=32,
-            )
+            adaptive_compute=adaptive_compute,
         ),
     )
 

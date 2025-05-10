@@ -9,8 +9,8 @@ from rich.markdown import Markdown
 from rich.prompt import Prompt
 
 # TODO: Properly import with package prefix
-from cot import effort_level
-from cot import openai_chat_completion_stream
+from arctic_inference.common.dynasor.cot import effort_level
+from arctic_inference.common.dynasor.cot import openai_chat_completion_stream
 
 
 class OpenAIChatClient:
