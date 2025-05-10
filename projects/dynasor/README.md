@@ -1,44 +1,18 @@
-# Dyansor
+## Dyansor
 
-## Quick Start (Chat-based Interface)
+Dynasor is a tool that helps you speed up LLM reasoning model without training or finetuning. It uses a combination of techniques to improve the prompt, and dynamically execute the prompt, and stop when the LLM has enough information to make a decision. 
 
-```bash
-cd arctic_inference/projects/dynasor/
-```
+For more details, see:
+- [Blog post](https://hao-ai-lab.github.io/blogs/dynasor-cot/)
+- [Paper](https://arxiv.org/abs/2412.20993)
+- [Github (hao-ai-lab/Dynasor)](https://github.com/hao-ai-lab/Dynasor)
 
-Start the server:
-```bash
-python api_serve.py \
---model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
---port 8000 \
--tp 1 --enable-prefix-caching --enable-chunked-prefill --enforce-eager
-```
 
-Start the chat client, the UI we designed to interact with the server:
-```bash
-python chat.py \
---model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
---base-url http://localhost:8000/v1
-```
-
-Then in the chat interface, ask a simple question:
-```
-> 2+2=?
-```
-
-## Quick Start (vLLM Client)
-
-> [!NOTE]
-> This is a work in progress.
-> Async part is not working yet, likely due to some vLLM version issue.
-
-```bash
-cd arctic_inference/projects/dynasor/
-```
+### Quick Start
 
 Start the server:
 ```bash
-python api_serve.py \
+arctic-serve \
 --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
 --port 8000 \
 -tp 1 --enable-prefix-caching --enable-chunked-prefill --enforce-eager
@@ -46,5 +20,6 @@ python api_serve.py \
 
 Start the vLLM client:
 ```bash
-python examples/vllm_client.py
+cd arctic_inference/projects/dynasor/
+python vllm_client.py
 ```
