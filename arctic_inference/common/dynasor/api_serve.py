@@ -330,6 +330,7 @@ async def adaptive_create_completion(request: CompletionRequest, raw_request: Re
 
     json_obj = await raw_request.json()
     adaptive_compute = json_obj.get("adaptive_compute", None)
+    print(f"adaptive_compute: {adaptive_compute}")
 
     if adaptive_compute is not None:
         generator = handle_adaptive_compute(request, raw_request)
@@ -355,6 +356,7 @@ async def adaptive_create_chat_completion(request: ChatCompletionRequest, raw_re
 
     json_obj = await raw_request.json()
     adaptive_compute = json_obj.get("adaptive_compute", None)
+    print(f"adaptive_compute: {adaptive_compute}")
 
     if adaptive_compute is not None:
         newprompt = await handler.get_completion_prompt(request, raw_request)

@@ -83,13 +83,20 @@ def completions_example(client, model_name, prompt, temperature, max_tokens, top
     )
     formatted_prompt = format_deepseek_prompt(prompt)
     
-    adaptive_compute=dict(
+    adaptive_compute = dict(
         mode="prompting",
         probe_text=probe_text,
         probe_text_end=probe_text_end,
         certainty_window=certainty_window,
         token_interval=100000 if disable_adaptive else token_interval,
     )
+
+    if disable_adaptive:
+        extra_body = None
+    else:
+        extra_body = dict(
+            adaptive_compute=adaptive_compute,
+        )
 
     response = client.completions.create(
         model=model_name,
@@ -98,9 +105,7 @@ def completions_example(client, model_name, prompt, temperature, max_tokens, top
         max_tokens=max_tokens,
         temperature=temperature,
         top_p=top_p,
-        extra_body=dict(
-            adaptive_compute=adaptive_compute,
-        ),
+        extra_body=extra_body,
     )
 
     console.print("\n[bold green]Response:[/bold green]")
@@ -143,17 +148,17 @@ def chat_example(client, model_name, prompt, max_tokens, disable_adaptive=False,
         certainty_window=certainty_window,
         token_interval=100000 if disable_adaptive else token_interval,
     )
-    
+
+    if disable_adaptive:
+        extra_body = None
+    else:
+        extra_body = dict(
+            adaptive_compute=adaptive_compute,
+        )
 
        
     for attempt in range(max_retries):
         try:
-            if not disable_adaptive:
-                extra_body = dict(
-                    adaptive_compute=adaptive_compute,
-                )
-            else:
-                extra_body = None
             response = client.chat.completions.create(
                 model=model_name,
                 messages=[{"role": "user", "content": prompt}],
