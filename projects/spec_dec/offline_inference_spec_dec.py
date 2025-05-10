@@ -22,12 +22,11 @@ os.environ["VLLM_USE_V1"] = "1"
 vllm.plugins.load_general_plugins()
 
 llm = LLM(
-    model="meta-llama/Llama-3.1-70B-Instruct",
+    model="meta-llama/Llama-3.1-8B-Instruct",
     quantization="fp8",
-    tensor_parallel_size=2,
     speculative_config={
         "method": "arctic",
-        "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.1-70B-Instruct",
+        "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.1-8B-Instruct",
         "num_speculative_tokens": 3,
         "enable_suffix_decoding": True,
     },
@@ -50,7 +49,7 @@ conversation = [
     },
 ]
 
-sampling_params = SamplingParams(temperature=0, max_tokens=128)
+sampling_params = SamplingParams(temperature=0.1, max_tokens=512)
 
 outputs = llm.chat(conversation, sampling_params=sampling_params)
 

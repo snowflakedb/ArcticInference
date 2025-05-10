@@ -15,10 +15,16 @@
 
 import vllm
 from vllm import LLM, SamplingParams
+from vllm.config import CompilationConfig
 
 vllm.plugins.load_general_plugins()
 
-llm = LLM(model="Snowflake/Llama-3.1-SwiftKV-8B-Instruct")
+llm = LLM(
+    model="Snowflake/Llama-3.1-SwiftKV-8B-Instruct",
+    #compilation_config=CompilationConfig(
+    #    cache_dir="/code/users/aqiao/vllm_cache",
+    #),
+)
 
 print("=" * 80)
 
@@ -37,7 +43,7 @@ conversation = [
     },
 ]
 
-sampling_params = SamplingParams(temperature=0.1, max_tokens=800)
+sampling_params = SamplingParams(temperature=0.1, max_tokens=512)
 
 outputs = llm.chat(conversation, sampling_params=sampling_params)
 

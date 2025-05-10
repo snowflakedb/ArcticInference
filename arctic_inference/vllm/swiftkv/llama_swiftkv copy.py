@@ -48,6 +48,8 @@ from vllm.utils import direct_register_custom_op
 
 from arctic_inference.common.swiftkv.configs import LlamaSwiftKVConfig
 
+from torch.fx.experimental import _config
+
 
 class LlamaSwiftKVAttention(nn.Module):
 
@@ -149,6 +151,9 @@ class LlamaSwiftKVAttention(nn.Module):
         v: torch.Tensor,
     ) -> torch.Tensor:
         q, _ = self.q_proj_swiftkv(hidden_states)
+        #num_tokens = positions.shape[0]  ##
+        #q = q.view(num_tokens, -1, self.head_dim)  ##
+        #torch._check(positions.size(0) == q.size(0), lambda: f"size mismatch: {positions.size(0)} != {q.size(0)}")
         q, _ = self.rotary_emb(positions, q, torch.empty_like(k))
         attn_output = self.attn(q, k, v)
         output, _ = self.o_proj(attn_output)
@@ -238,12 +243,12 @@ def swiftkv_select(
     rest_layer_names: str,
     rest_keys: List[torch.Tensor],
     rest_values: List[torch.Tensor],
-) -> None:
+) -> torch.Tensor:
     rest_layer_names = rest_layer_names.split(",")
     forward_context: ForwardContext = get_forward_context()
     attn_metadata = forward_context.attn_metadata
     if attn_metadata is None:
-        return 
+        return torch.nonzero(torch.ones(rest_keys[0].shape[0]), as_tuple=True)[0]
     for idx, layer_name in enumerate(rest_layer_names):
         attn: Attention = forward_context.no_compile_layers[layer_name]
         kv_cache = attn.kv_cache[forward_context.virtual_engine]
@@ -266,14 +271,112 @@ def swiftkv_select(
     attn_metadata.query_start_loc = torch.searchsorted(
         logits_indices, attn_metadata.query_start_loc, out_int32=True)
     attn_metadata.slot_mapping = attn_metadata.slot_mapping[logits_indices]
+    return attn_metadata.swiftkv_logits_indices
 
 
 def swiftkv_select_fake(
     rest_layer_names: str,
     rest_keys: List[torch.Tensor],
     rest_values: List[torch.Tensor],
-) -> None:
-    return None
+) -> List[torch.Tensor]:
+    ctx = torch.library.get_ctx()
+    dyn = ctx.new_dynamic_size()
+    return rest_keys[0].new_empty((dyn,), dtype=torch.int)
+
+
+def swiftkv_select_old(
+    hidden_states: torch.Tensor,
+    residual: torch.Tensor,
+    positions: torch.Tensor,
+    rest_layer_names: str,
+    rest_keys: List[torch.Tensor],
+    rest_values: List[torch.Tensor],
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, List[torch.Tensor],
+           List[torch.Tensor]]:
+    rest_layer_names = rest_layer_names.split(",")
+    forward_context: ForwardContext = get_forward_context()
+    attn_metadata = forward_context.attn_metadata
+    if attn_metadata is None:
+        return (
+            hidden_states.contiguous(),
+            residual.contiguous(),
+            positions.contiguous(),
+            [key.contiguous() for key in rest_keys],
+            [value.contiguous() for value in rest_values],
+        )
+    for idx, layer_name in enumerate(rest_layer_names):
+        attn: Attention = forward_context.no_compile_layers[layer_name]
+        kv_cache = attn.kv_cache[forward_context.virtual_engine]
+        key = rest_keys[idx]
+        value = rest_values[idx]
+        if kv_cache.numel():
+            torch.ops._C_cache_ops.reshape_and_cache_flash(
+                key.view(-1, attn.num_kv_heads, attn.head_size),
+                value.view(-1, attn.num_kv_heads, attn.head_size),
+                kv_cache[0],
+                kv_cache[1],
+                attn_metadata.slot_mapping,
+                attn.kv_cache_dtype,
+                attn._k_scale,
+                attn._v_scale,
+            )
+    logits_indices = attn_metadata.swiftkv_logits_indices
+
+    attn_metadata.num_actual_tokens = logits_indices.numel()
+    attn_metadata.num_input_tokens = logits_indices.numel()
+    attn_metadata.query_start_loc = torch.searchsorted(
+        logits_indices, attn_metadata.query_start_loc, out_int32=True)
+    attn_metadata.slot_mapping = attn_metadata.slot_mapping[logits_indices]
+
+    hidden_states = hidden_states[logits_indices]
+    residual = residual[logits_indices]
+    positions = positions[logits_indices]
+    rest_keys = [key[logits_indices] for key in rest_keys]
+    rest_values = [value[logits_indices] for value in rest_values]
+    return (
+        hidden_states.contiguous(),
+        residual.contiguous(),
+        positions.contiguous(),
+        [key.contiguous() for key in rest_keys],
+        [value.contiguous() for value in rest_values],
+    )
+
+
+def swiftkv_select_old_fake(
+    hidden_states: torch.Tensor,
+    residual: torch.Tensor,
+    positions: torch.Tensor,
+    rest_layer_names: str,
+    rest_keys: List[torch.Tensor],
+    rest_values: List[torch.Tensor],
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, List[torch.Tensor],
+           List[torch.Tensor]]:
+    return (
+        torch.empty_like(hidden_states).contiguous(),
+        torch.empty_like(residual).contiguous(),
+        torch.empty_like(positions).contiguous(),
+        [torch.empty_like(key).contiguous() for key in rest_keys],
+        [torch.empty_like(value).contiguous() for value in rest_values],
+    )
+
+
+def swiftkv_expand(
+    orig_hidden_states: torch.Tensor,
+    hidden_states: torch.Tensor,
+) -> torch.Tensor:
+    forward_context: ForwardContext = get_forward_context()
+    attn_metadata = forward_context.attn_metadata
+    if attn_metadata is not None:
+        orig_hidden_states[attn_metadata.swiftkv_logits_indices] = (
+            hidden_states[:attn_metadata.swiftkv_logits_indices.numel()])
+    return orig_hidden_states
+
+
+def swiftkv_expand_fake(
+    orig_hidden_states: torch.Tensor,
+    hidden_states: torch.Tensor,
+) -> torch.Tensor:
+    return torch.empty_like(orig_hidden_states).contiguous()
 
 
 direct_register_custom_op(
@@ -281,6 +384,15 @@ direct_register_custom_op(
     op_func=swiftkv_select,
     mutates_args=[],
     fake_impl=swiftkv_select_fake,
+    dispatch_key=current_platform.dispatch_key,
+)
+
+
+direct_register_custom_op(
+    op_name="swiftkv_expand",
+    op_func=swiftkv_expand,
+    mutates_args=["orig_hidden_states"],
+    fake_impl=swiftkv_expand_fake,
     dispatch_key=current_platform.dispatch_key,
 )
 
@@ -329,7 +441,7 @@ class LlamaSwiftKVModel(nn.Module):
         self,
         input_ids: Optional[torch.Tensor],
         positions: torch.Tensor,
-        logits_indices: torch.Tensor,
+        #logits_mask: torch.Tensor,
     ) -> torch.Tensor:
         hidden_states = self.get_input_embeddings(input_ids)
         residual = None
@@ -354,18 +466,21 @@ class LlamaSwiftKVModel(nn.Module):
             rest_keys.append(k)
             rest_values.append(v)
 
-        torch.ops.vllm.swiftkv_select(
+        #rest_keys, rest_values = torch.ops.vllm.swiftkv_select(
+        logits_indices = torch.ops.vllm.swiftkv_select(
             ",".join(rest_layer_names),
             rest_keys,
             rest_values,
         )
 
         orig_hidden_states = hidden_states
+        #logits_indices = logits_mask.nonzero(as_tuple=True)[0]
         hidden_states = hidden_states[logits_indices]
         residual = residual[logits_indices]
         positions = positions[logits_indices]
         rest_keys = [key[logits_indices] for key in rest_keys]
         rest_values = [value[logits_indices] for value in rest_values]
+        #torch._check(positions.size(0) == q.size(0), lambda: f"size mismatch: {positions.size(0)} != {q.size(0)}")
 
         for idx, layer in enumerate(
                 self.layers[self.config.num_key_value_layers:]):
@@ -379,6 +494,7 @@ class LlamaSwiftKVModel(nn.Module):
         hidden_states, _ = self.norm(hidden_states, residual)
         orig_hidden_states[logits_indices] = hidden_states
         return orig_hidden_states
+        return torch.ops.vllm.swiftkv_expand(orig_hidden_states, hidden_states)
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         stacked_params_mapping = [
@@ -541,15 +657,13 @@ class LlamaSwiftKVForCausalLM(nn.Module):
         inputs_embeds: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, IntermediateTensors]:
         assert intermediate_tensors is None and inputs_embeds is None
-        logits_mask = torch.ones_like(input_ids)
-        attn_metadata = get_forward_context().attn_metadata
-        if attn_metadata is not None:
-            logits_mask[attn_metadata.swiftkv_logits_indices] = 0
-            logits_mask = 1 - logits_mask
-        logits_indices = logits_mask.nonzero(as_tuple=True)[0]
+        #logits_mask = torch.ones_like(input_ids)
+        #attn_metadata = get_forward_context().attn_metadata
+        #if attn_metadata is not None:
+        #    logits_mask[attn_metadata.swiftkv_logits_indices] = 0
+        #    logits_mask = 1 - logits_mask
         torch._dynamo.config.capture_dynamic_output_shape_ops = True
-        torch._dynamo.config.capture_scalar_outputs = True
-        model_output = self.model(input_ids, positions, logits_indices)
+        model_output = self.model(input_ids, positions)#, logits_mask)
         return model_output
 
     def compute_logits(

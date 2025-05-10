@@ -108,3 +108,6 @@ def arctic_inference_plugin():
     # Main optimization patches.
     apply_ulysses_patches()
     apply_spec_decoding_patches()
+
+    from arctic_inference.vllm.compilation import PiecewiseBackendPatch
+    PiecewiseBackendPatch.apply_patch()
