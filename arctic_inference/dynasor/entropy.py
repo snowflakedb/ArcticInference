@@ -17,7 +17,7 @@ import math
 from collections import defaultdict
 from typing import List
 
-from arctic_inference.common.dynasor.evaluator import math_equal
+from arctic_inference.dynasor.evaluator import math_equal
 
 
 def entropy(Plist):

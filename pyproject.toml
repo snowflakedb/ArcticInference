@@ -6,14 +6,6 @@ requires = [
     "cmake>=3.12",
     "pybind11",
     "pybind11_global",
-    "rich",
-    "prompt_toolkit",
-    "pydantic",
-    "datasets",
-    "tqdm",
-    "latex2sympy2",
-    "transformers",
-    "word2number",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -37,10 +29,17 @@ packages = [
     "arctic_inference.vllm.spec_dec",
 ]
 
-[project.scripts]
-arctic-serve = "arctic_inference.common.dynasor.api_serve:main"
-
 [project.optional-dependencies]
 vllm = [
     'vllm==0.8.4',
+]
+dynasor = [
+    "rich",
+    "prompt_toolkit",
+    "pydantic",
+    "datasets",
+    "tqdm",
+    "latex2sympy2",
+    "transformers",
+    "word2number",
 ]

@@ -12,7 +12,7 @@ For more details, see:
 
 Start the server:
 ```bash
-arctic-serve \
+python -m arctic_inference.dynasor.api_serve \
 --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
 --port 8000 \
 -tp 1 --enable-prefix-caching --enable-chunked-prefill --enforce-eager
