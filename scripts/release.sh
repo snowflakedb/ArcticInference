@@ -7,6 +7,6 @@ fi
 
 python -m pip install --upgrade build twine
 
-python -m build --wheel
+python -m build --sdist
 
 python -m twine upload dist/*
