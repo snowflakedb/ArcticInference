@@ -3,7 +3,7 @@ from collections import defaultdict
 from typing import List
 
 # TODO: Properly import with package prefix
-from evaluator import math_equal
+from arctic_inference.common.dynasor.evaluator import math_equal
 
 
 def entropy(Plist):

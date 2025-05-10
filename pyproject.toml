@@ -21,10 +21,14 @@ packages = [
     "arctic_inference.common",
     "arctic_inference.common.suffix_cache",
     "arctic_inference.common.swiftkv",
+    "arctic_inference.common.dynasor",
     "arctic_inference.vllm",
     "arctic_inference.vllm.swiftkv",
     "arctic_inference.vllm.spec_dec",
 ]
+
+[project.scripts]
+arctic-serve = "arctic_inference.common.dynasor.api_serve:main"
 
 [project.optional-dependencies]
 vllm = [

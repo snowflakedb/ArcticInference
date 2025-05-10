@@ -1,7 +1,7 @@
 from typing import Optional
 
 # TODO: Properly import with package prefix
-from evaluator import count_not_empty, eqaul_group
+from arctic_inference.common.dynasor.evaluator import count_not_empty, eqaul_group
 
 uncertain_words = ["wait", "hold", "but", "okay", "no", "hmm"]
 

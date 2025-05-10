@@ -32,9 +32,9 @@ from vllm.entrypoints.openai.serving_completion import OpenAIServingCompletion
 from vllm.version import __version__ as VLLM_VERSION
 
 
-from serving_chat import AdaptiveOpenAIServingChat
-from serving_completion import AdaptiveOpenAIServingCompletion
-from entropy import (
+from arctic_inference.common.dynasor.serving_chat import AdaptiveOpenAIServingChat
+from arctic_inference.common.dynasor.serving_completion import AdaptiveOpenAIServingCompletion
+from .entropy import (
     obtain_answer,
     should_early_exit,
     uncertain_words,
