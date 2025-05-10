@@ -1,4 +1,4 @@
-## Dyansor
+## Dynasor
 
 Dynasor is a tool that helps you speed up LLM reasoning model without training or finetuning. It uses a combination of techniques to improve the prompt, and dynamically execute the prompt, and stop when the LLM has enough information to make a decision. 
 
