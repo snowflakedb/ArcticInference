@@ -3,7 +3,8 @@ cmake_minimum_required (VERSION 3.14)
 project(CustomOps CXX CUDA)
 
 find_package(CUDA REQUIRED)
-# export PATH=$PATH:/code/users/yewang/venv3/lib/python3.10/site-packages/torch/share/cmake
+
+# export PATH=$PATH:<your-path-to>/lib/python3.xx/site-packages/torch/share/cmake
 find_package(Torch REQUIRED)
 
 # if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
@@ -27,11 +28,3 @@ target_include_directories(CustomOps PRIVATE ${TORCH_INCLUDE_DIRS})
 
 target_link_libraries(CustomOps PRIVATE torch ${GPU_LIBRARIES})
 target_link_libraries(CustomOps PRIVATE CUDA::cudart CUDA::cuda_driver)
-
-#install(TARGETS CustomOps LIBRARY arctic_inference custom_ops)
-
-# add_library(CustomOps SHARED
-#   sampler_kernels.cu
-#   torch_bindings.cpp)
-
-# target_link_libraries(CustomOps PRIVATE ${TORCH_LIBRARIES})

@@ -134,9 +134,24 @@ class CMakeBuild(build_ext):
             ["cmake", "--build", ".", *build_args], cwd=build_temp, check=True
         )
 
+def build_custom_kernels():
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    custom_ops_dir = os.path.join(current_dir, "csrc", "custom_ops")
+    build_dir = os.path.join(custom_ops_dir, "build")
+
+    os.makedirs(build_dir, exist_ok=True)
+
+    os.chdir(build_dir)
+    subprocess.run(["cmake", ".."], check=True)
+    num_cores = os.cpu_count() or 1
+    subprocess.run(["make", f"-j{num_cores}"], check=True)
+    os.chdir(current_dir)
+
+    lib_path = os.path.join(build_dir, "libCustomOps.so")
+    return lib_path
 
 setup(
     ext_modules=[CMakeExtension("arctic_inference.common.suffix_cache._C", "csrc/suffix_cache")],
     cmdclass={"build_ext": CMakeBuild},
-    package_data={"": ["*.so",]},
+    package_data={"": [build_custom_kernels()]},
 )
