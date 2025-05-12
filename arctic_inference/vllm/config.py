@@ -102,8 +102,13 @@ class SpeculativeConfigPatch(ArcticPatch[SpeculativeConfig]):
 class VllmConfigPatch(ArcticPatch[VllmConfig]):
 
     _orig_str = VllmConfig.__str__
+    _orig_post_init = VllmConfig.__post_init__
 
     def __str__(self, *args, **kwargs):
         string = self._orig_str(*args, **kwargs)
         string += f", sequence_parallel_size={self.parallel_config.sequence_parallel_size}"
         return string
+
+    def __post_init__(self):
+        VllmConfigPatch._orig_post_init(self)
+        self.compilation_config.splitting_ops.append("vllm.swiftkv_select")
