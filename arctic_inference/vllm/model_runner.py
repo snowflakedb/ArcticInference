@@ -444,6 +444,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         sampled_token_ids: list[list[int]],
         previous_hidden_states: Optional[torch.Tensor] = None,
     ) -> list[list[int]]:
+        if previous_hidden_states is None:
+            return None
+        
         last_tokens : list[int] = []
         for i, sampled_ids in enumerate(sampled_token_ids):
             num_sampled_ids = len(sampled_ids)
