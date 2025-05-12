@@ -1,12 +1,13 @@
 #include "custom_ops.h"
 #include "dispatch_utils.h"
+#include "quant_utils.cuh"
 
 #include <torch/cuda.h>
 #include <c10/cuda/CUDAGuard.h>
 
 #include <vector>
 
-namespace arctic_inference {
+namespace vllm {
 
 template <typename scalar_t>
 __global__ void copy_caches_with_index_kernel(int64_t* src_cache_ptrs,
@@ -95,7 +96,7 @@ __global__ void reshape_and_cache_flash_bulk_kernel(
   }
 }
 
-} // namespace arctic_inference
+} // namespace vllm
 
 void copy_caches_with_index(std::vector<torch::Tensor> const& src_caches,
                             std::vector<torch::Tensor> const& dst_caches,

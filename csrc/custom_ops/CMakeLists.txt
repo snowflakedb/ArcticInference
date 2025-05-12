@@ -3,6 +3,7 @@ cmake_minimum_required (VERSION 3.14)
 project(CustomOps CXX CUDA)
 
 find_package(CUDA REQUIRED)
+# export PATH=$PATH:/code/users/yewang/venv3/lib/python3.10/site-packages/torch/share/cmake
 find_package(Torch REQUIRED)
 
 # if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
