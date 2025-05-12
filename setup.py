@@ -138,4 +138,5 @@ class CMakeBuild(build_ext):
 setup(
     ext_modules=[CMakeExtension("arctic_inference.common.suffix_cache._C", "csrc/suffix_cache")],
     cmdclass={"build_ext": CMakeBuild},
+    package_data={"": ["*.so",]},
 )
