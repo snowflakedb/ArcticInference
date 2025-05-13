@@ -15,7 +15,8 @@
 
 from dataclasses import dataclass
 
-from vllm.config import ParallelConfig, SpeculativeConfig, VllmConfig
+from vllm.config import (ParallelConfig, SpeculativeConfig, VllmConfig,
+                         ModelConfig)        
 
 from arctic_inference.patching import ArcticPatch
 from arctic_inference.vllm.args import get_current_arctic_args
@@ -54,6 +55,14 @@ class ArcticSpeculativeConfig(SpeculativeConfig):
     suffix_max_spec_factor: float = 1.0
     suffix_max_spec_offset: float = 0.0
     suffix_min_token_prob: float = 0.1
+
+
+class ModelConfigPatch(ArcticPatch[ModelConfig]):
+
+    def __post_init__(self):
+        # force-set the seed if not already set
+        if self.seed is None:
+            self.seed = 0
 
 
 class ParallelConfigPatch(ArcticPatch[ParallelConfig]):
