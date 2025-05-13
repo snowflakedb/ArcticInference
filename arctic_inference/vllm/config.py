@@ -14,6 +14,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
+import logging
 
 from vllm.config import (ParallelConfig, SpeculativeConfig, VllmConfig,
                          ModelConfig)        
@@ -21,6 +22,7 @@ from vllm.config import (ParallelConfig, SpeculativeConfig, VllmConfig,
 from arctic_inference.patching import ArcticPatch
 from arctic_inference.vllm.args import get_current_arctic_args
 
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ArcticParallelConfig(ParallelConfig):
@@ -59,14 +61,20 @@ class ArcticSpeculativeConfig(SpeculativeConfig):
 
 class ModelConfigPatch(ArcticPatch[ModelConfig]):
 
-    orig_init = ModelConfig.__init__
+    _orig_init = ModelConfig.__init__
+
     def __init__(self, *args, **kwargs):
-        seed = kwargs.get("seed", None)
+        self._orig_init(*args, **kwargs)
+        self.__post_init__()
 
-        if seed is None:
-            kwargs["seed"] = 0
-
-        self.orig_init(*args, **kwargs)
+    def __post_init__(self):
+        if self.seed is None:
+            # Set the seed to 0 if it is None
+            # This is to ensure each worker has the same seed
+            # and can produce the same sampling result.
+            logger.warning(
+                "ModelConfig: seed is None, setting it to 0.")
+            self.seed = 0
      
 
 class ParallelConfigPatch(ArcticPatch[ParallelConfig]):
