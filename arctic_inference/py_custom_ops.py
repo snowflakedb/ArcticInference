@@ -1,13 +1,18 @@
 import torch
 import os
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 package_name = 'arctic_inference'
 library_name = 'libCustomOps'
 
 package_path = __import__(package_name).__path__[0]
-print(f"package_path: {package_path}")
 library_path = os.path.join(package_path, f'{library_name}.so')
-print(f"library_path: {library_path}")
+
+logger.info(f"Loading custom ops from {library_path}")
+
 torch.ops.load_library(library_path)
 
 def reshape_and_cache_flash_bulk(

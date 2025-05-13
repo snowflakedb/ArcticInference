@@ -4,8 +4,6 @@ from typing import List
 
 from arctic_inference.py_custom_ops import copy_caches_with_index
 
-#torch.ops.load_library("arctic_inference/libCustomOps.so")
-
 CUDA_DEVICES = [
     f"cuda:{0}" 
 ]

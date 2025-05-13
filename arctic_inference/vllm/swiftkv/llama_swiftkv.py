@@ -322,22 +322,32 @@ def swiftkv_select(
     num_fanout = len(rest_layer_names)
     rest_keys = rest_keys.chunk(num_fanout, dim=-1)
     rest_values = rest_values.chunk(num_fanout, dim=-1)
+
+    keys : List[torch.Tensor] = []
+    values : List[torch.Tensor] = []
+    key_caches : List[torch.Tensor] = []
+    value_caches : List[torch.Tensor] = []
+    k_scales : List[torch.Tensor] = []
+    v_scales : List[torch.Tensor] = []
     for idx, layer_name in enumerate(rest_layer_names):
         attn: Attention = forward_context.no_compile_layers[layer_name]
         kv_cache = attn.kv_cache[forward_context.virtual_engine]
         key = rest_keys[idx]
         value = rest_values[idx]
         if kv_cache.numel():
-            torch.ops._C_cache_ops.reshape_and_cache_flash(
-                key.view(-1, attn.num_kv_heads, attn.head_size),
-                value.view(-1, attn.num_kv_heads, attn.head_size),
-                kv_cache[0],
-                kv_cache[1],
-                attn_metadata.slot_mapping,
-                attn.kv_cache_dtype,
-                attn._k_scale,
-                attn._v_scale,
-            )
+            keys.append(key.view(-1, attn.num_kv_heads, attn.head_size))
+            values.append(value.view(-1, attn.num_kv_heads, attn.head_size))
+            key_caches.append(kv_cache[0])
+            value_caches.append(kv_cache[1])
+            k_scales.append(attn._k_scale)
+            v_scales.append(attn._v_scale)
+
+    if len(keys) > 0:
+        from arctic_inference.py_custom_ops import reshape_and_cache_flash_bulk
+        reshape_and_cache_flash_bulk(
+            keys, values, key_caches, value_caches, attn_metadata.slot_mapping,
+            attn.kv_cache_dtype, k_scales, v_scales)
+        
     logits_indices = attn_metadata.swiftkv_logits_indices
     attn_metadata.num_actual_tokens = logits_indices.numel()
     attn_metadata.num_input_tokens = logits_indices.numel()
