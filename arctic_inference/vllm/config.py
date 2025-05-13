@@ -64,17 +64,17 @@ class ModelConfigPatch(ArcticPatch[ModelConfig]):
     _orig_init = ModelConfig.__init__
 
     def __init__(self, *args, **kwargs):
-        self._orig_init(*args, **kwargs)
-        self.__post_init__()
+        seed = kwargs.get("seed", None)
 
-    def __post_init__(self):
-        if self.seed is None:
+        if seed is None:
             # Set the seed to 0 if it is None
             # This is to ensure each worker has the same seed
             # and can produce the same sampling result.
             logger.warning(
                 "ModelConfig: seed is None, setting it to 0.")
-            self.seed = 0
+            kwargs["seed"] = 0
+
+        self._orig_init(*args, **kwargs)
      
 
 class ParallelConfigPatch(ArcticPatch[ParallelConfig]):
