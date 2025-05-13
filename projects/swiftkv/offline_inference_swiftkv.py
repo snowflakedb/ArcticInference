@@ -21,6 +21,7 @@ vllm.plugins.load_general_plugins()
 
 llm = LLM(
     model="Snowflake/Llama-3.1-SwiftKV-8B-Instruct",
+    #enforce_eager=True,
     #compilation_config=CompilationConfig(
     #    cache_dir="/code/users/aqiao/vllm_cache",
     #),

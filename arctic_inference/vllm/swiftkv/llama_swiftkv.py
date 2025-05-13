@@ -23,7 +23,8 @@ from vllm.attention.backends.abstract import AttentionType
 from vllm.attention.backends.flash_attn import FlashAttentionMetadata
 from vllm.compilation.decorators import support_torch_compile
 from vllm.config import CacheConfig, VllmConfig
-from vllm.distributed import get_tensor_model_parallel_world_size
+from vllm.distributed import (get_tensor_model_parallel_rank,
+                              get_tensor_model_parallel_world_size)
 from vllm.forward_context import ForwardContext, get_forward_context
 from vllm.model_executor.layers.layernorm import RMSNorm
 from vllm.model_executor.layers.linear import (ColumnParallelLinear,
@@ -47,6 +48,89 @@ from vllm.sequence import IntermediateTensors
 from vllm.utils import direct_register_custom_op
 
 from arctic_inference.common.swiftkv.configs import LlamaSwiftKVConfig
+
+
+class KVFanoutLinear(ColumnParallelLinear):
+
+    def __init__(self,
+                 num_fanout: int,
+                 hidden_size: int,
+                 head_size: int,
+                 total_num_heads: int,
+                 total_num_kv_heads: Optional[int] = None,
+                 bias: bool = True,
+                 skip_bias_add: bool = False,
+                 params_dtype: Optional[torch.dtype] = None,
+                 quant_config: Optional[QuantizationConfig] = None,
+                 prefix: str = ""):
+        self.num_fanout = num_fanout
+        self.hidden_size = hidden_size
+        self.head_size = head_size
+        self.total_num_heads = total_num_heads
+        if total_num_kv_heads is None:
+            total_num_kv_heads = total_num_heads
+        self.total_num_kv_heads = total_num_kv_heads
+        # Divide the weight matrix along the last dimension.
+        tp_size = get_tensor_model_parallel_world_size()
+        self.num_heads = self.total_num_heads // tp_size
+        if tp_size >= self.total_num_kv_heads:
+            self.num_kv_heads = 1
+            self.num_kv_head_replicas = tp_size // self.total_num_kv_heads
+        else:
+            self.num_kv_heads = self.total_num_kv_heads // tp_size
+            self.num_kv_head_replicas = 1
+        input_size = self.hidden_size
+        output_size = (2 * self.num_kv_heads) * tp_size * self.head_size * self.num_fanout
+        self.output_sizes = [
+            self.num_kv_heads * self.head_size * tp_size,  # k_proj
+            self.num_kv_heads * self.head_size * tp_size,  # v_proj
+        ] * self.num_fanout
+
+        super().__init__(input_size=input_size,
+                         output_size=output_size,
+                         bias=bias,
+                         gather_output=False,
+                         skip_bias_add=skip_bias_add,
+                         params_dtype=params_dtype,
+                         quant_config=quant_config,
+                         prefix=prefix)
+
+    def _get_shard_offset_mapping(self, loaded_shard_id: Tuple[int, str]):
+        chunk = self.num_kv_heads * self.head_size
+        shard_offset_mapping = {
+            "k": chunk * loaded_shard_id[0],
+            "v": chunk * self.num_fanout + chunk * loaded_shard_id[0],
+            "total": 2 * chunk * self.num_fanout,
+        }
+        return shard_offset_mapping.get(loaded_shard_id[1])
+
+    def _get_shard_size_mapping(self, loaded_shard_id: Tuple[int, str]):
+        shard_size_mapping = {
+            "k": self.num_kv_heads * self.head_size,
+            "v": self.num_kv_heads * self.head_size,
+        }
+        return shard_size_mapping.get(loaded_shard_id[1])
+
+    def weight_loader(self,
+                      param: torch.nn.Parameter,
+                      loaded_weight: torch.Tensor,
+                      loaded_shard_id: Tuple[int, str]):
+        param_data = param.data
+        output_dim = param.output_dim
+
+        tp_rank = get_tensor_model_parallel_rank()
+        assert loaded_shard_id[1] in ["k", "v"]
+
+        shard_offset = self._get_shard_offset_mapping(loaded_shard_id)
+        shard_size = self._get_shard_size_mapping(loaded_shard_id)
+
+        param_data = param_data.narrow(output_dim, shard_offset, shard_size)
+        shard_id = tp_rank // self.num_kv_head_replicas
+        start_idx = shard_id * shard_size
+        loaded_weight = loaded_weight.narrow(output_dim, start_idx, shard_size)
+
+        assert param_data.shape == loaded_weight.shape
+        param_data.copy_(loaded_weight)
 
 
 class LlamaSwiftKVAttention(nn.Module):
@@ -99,15 +183,6 @@ class LlamaSwiftKVAttention(nn.Module):
             gather_output=False,
             quant_config=quant_config,
             prefix=f"{prefix}.q_proj_swiftkv",
-        )
-        self.kv_proj_swiftkv = QKVParallelLinear(
-            hidden_size=hidden_size,
-            head_size=self.head_dim,
-            total_num_heads=0,
-            total_num_kv_heads=self.total_num_kv_heads,
-            bias=bias,
-            quant_config=quant_config,
-            prefix=f"{prefix}.kv_proj_swiftkv",
         )
         self.o_proj = RowParallelLinear(
             input_size=self.total_num_heads * self.head_dim,
@@ -236,14 +311,17 @@ class LlamaSwiftKVDecoderLayer(nn.Module):
 
 def swiftkv_select(
     rest_layer_names: str,
-    rest_keys: List[torch.Tensor],
-    rest_values: List[torch.Tensor],
+    rest_keys: torch.Tensor,
+    rest_values: torch.Tensor,
 ) -> None:
     rest_layer_names = rest_layer_names.split(",")
     forward_context: ForwardContext = get_forward_context()
     attn_metadata = forward_context.attn_metadata
     if attn_metadata is None:
-        return 
+        return
+    num_fanout = len(rest_layer_names)
+    rest_keys = rest_keys.chunk(num_fanout, dim=-1)
+    rest_values = rest_values.chunk(num_fanout, dim=-1)
     for idx, layer_name in enumerate(rest_layer_names):
         attn: Attention = forward_context.no_compile_layers[layer_name]
         kv_cache = attn.kv_cache[forward_context.virtual_engine]
@@ -270,8 +348,8 @@ def swiftkv_select(
 
 def swiftkv_select_fake(
     rest_layer_names: str,
-    rest_keys: List[torch.Tensor],
-    rest_values: List[torch.Tensor],
+    rest_keys: torch.Tensor,
+    rest_values: torch.Tensor,
 ) -> None:
     return None
 
@@ -319,6 +397,17 @@ class LlamaSwiftKVModel(nn.Module):
                                      prefix=f"{prefix}.layers.{idx}")
             for idx in range(config.num_hidden_layers)
         ])
+        self.kv_fanout = KVFanoutLinear(
+            num_fanout=(config.num_hidden_layers - config.num_key_value_layers) // config.key_value_group_size,
+            hidden_size=config.hidden_size,
+            head_size=self.layers[0].self_attn.head_dim,
+            total_num_heads=self.layers[0].self_attn.total_num_heads,
+            total_num_kv_heads=self.layers[0].self_attn.total_num_kv_heads,
+            bias=(getattr(config, "bias", False) or
+                  getattr(config, "attention_bias", False)),
+            quant_config=vllm_config.quant_config,
+            prefix=f"{prefix}.kv_fanout",
+        )
         self.norm_swiftkv = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
@@ -345,28 +434,34 @@ class LlamaSwiftKVModel(nn.Module):
         rest_keys = []
         rest_values = []
         swiftkv_hidden_states = self.norm_swiftkv(hidden_states + residual)
+        kv_states, _ = self.kv_fanout(swiftkv_hidden_states)
+
+        # Update the KV cache of all the remaining layers. We concatenate all
+        # the heads together to run it as a batch.
+        num_fanout = self.kv_fanout.num_fanout
+        num_kv_heads = layer.self_attn.num_kv_heads
+        head_dim = layer.self_attn.head_dim
+        q_cat = hidden_states.new_empty(  # Just temporary buffer
+            (hidden_states.size(0), num_fanout * hidden_states.size(1)))
+        k_cat, v_cat = kv_states.split(kv_states.size(-1) // 2, dim=-1)
+        _, k_cat = layer.self_attn.rotary_emb(positions, q_cat, k_cat)
+
         for layer in self.layers[self.config.num_key_value_layers:]:
-            kv, _ = layer.self_attn.kv_proj_swiftkv(swiftkv_hidden_states)
-            k, v = kv.split(layer.self_attn.kv_size, dim=-1)
-            q = torch.empty_like(hidden_states)  # Just temporary buffer
-            _, k = layer.self_attn.rotary_emb(positions, q, k)
             rest_layer_names.append(layer.self_attn.attn.layer_name)
-            rest_keys.append(k)
-            rest_values.append(v)
 
         torch.ops.vllm.swiftkv_select(
             ",".join(rest_layer_names),
-            rest_keys,
-            rest_values,
+            k_cat,
+            v_cat,
         )
 
         orig_hidden_states = hidden_states
         hidden_states = hidden_states[logits_indices]
         residual = residual[logits_indices]
         positions = positions[logits_indices]
-        rest_keys = [key[logits_indices] for key in rest_keys]
-        rest_values = [value[logits_indices] for value in rest_values]
 
+        rest_keys = k_cat[logits_indices].chunk(num_fanout, dim=-1)
+        rest_values = v_cat[logits_indices].chunk(num_fanout, dim=-1)
         for idx, layer in enumerate(
                 self.layers[self.config.num_key_value_layers:]):
             hidden_states, residual = layer(
@@ -387,18 +482,22 @@ class LlamaSwiftKVModel(nn.Module):
             (".gate_up_proj", ".up_proj", 1),
         ]
         for layer_idx in range(self.config.num_key_value_layers):
-            prefix = f".{layer_idx}.self_attn"
             stacked_params_mapping.extend([
-                (f"{prefix}.qkv_proj", f"{prefix}.q_proj", "q"),
-                (f"{prefix}.qkv_proj", f"{prefix}.k_proj", "k"),
-                (f"{prefix}.qkv_proj", f"{prefix}.v_proj", "v"),
+                (f"layers.{layer_idx}.self_attn.qkv_proj",
+                 f"layers.{layer_idx}.self_attn.q_proj", "q"),
+                (f"layers.{layer_idx}.self_attn.qkv_proj",
+                 f"layers.{layer_idx}.self_attn.k_proj", "k"),
+                (f"layers.{layer_idx}.self_attn.qkv_proj",
+                 f"layers.{layer_idx}.self_attn.v_proj", "v"),
             ])
-        for layer_idx in range(self.config.num_key_value_layers,
-                               self.config.num_hidden_layers):
-            prefix = f".{layer_idx}.self_attn"
+        for i, layer_idx in enumerate(range(self.config.num_key_value_layers,
+                                            self.config.num_hidden_layers,
+                                            self.config.key_value_group_size)):
             stacked_params_mapping.extend([
-                (f"{prefix}.kv_proj_swiftkv", f"{prefix}.k_proj_swiftkv", "k"),
-                (f"{prefix}.kv_proj_swiftkv", f"{prefix}.v_proj_swiftkv", "v"),
+                (f"kv_fanout",
+                 f"layers.{layer_idx}.self_attn.k_proj_swiftkv", (i, "k")),
+                (f"kv_fanout",
+                 f"layers.{layer_idx}.self_attn.v_proj_swiftkv", (i, "v")),
             ])
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
