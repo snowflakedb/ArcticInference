@@ -59,11 +59,15 @@ class ArcticSpeculativeConfig(SpeculativeConfig):
 
 class ModelConfigPatch(ArcticPatch[ModelConfig]):
 
-    def __post_init__(self):
-        # force-set the seed if not already set
-        if self.seed is None:
-            self.seed = 0
+    orig_init = ModelConfig.__init__
+    def __init__(self, *args, **kwargs):
+        seed = kwargs.get("seed", None)
 
+        if seed is None:
+            kwargs["seed"] = 0
+
+        self.orig_init(*args, **kwargs)
+     
 
 class ParallelConfigPatch(ArcticPatch[ParallelConfig]):
 
