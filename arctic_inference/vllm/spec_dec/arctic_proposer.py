@@ -31,10 +31,9 @@ class ArcticProposer:
     def __init__(
         self,
         vllm_config: VllmConfig,
-        speculative_config: SpeculativeConfig,
     ):
         self.vllm_config = vllm_config
-        self.speculative_config = speculative_config
+        self.speculative_config = vllm_config.speculative_config
         self.num_predict_tokens = self.speculative_config.num_speculative_tokens
 
         self.model = None
