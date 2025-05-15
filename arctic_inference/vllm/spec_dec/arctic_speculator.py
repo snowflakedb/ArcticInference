@@ -641,7 +641,7 @@ class ArcticLSTMSpeculator(nn.Module):
         if previous_hidden_states is not None:
             hidden_state_buffers[:size] = previous_hidden_states
 
-        padded_size = padding_size(size)
+        padded_size = padding_size(size) if self.cuda_graph_mode else size
 
         static_last_tokens = self.static_cuda_buffers["last_tokens"][:padded_size]
         static_hidden_states = hidden_state_buffers[:padded_size]
