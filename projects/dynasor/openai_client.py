@@ -35,7 +35,7 @@ def parse_args():
         help="Certainty window for adaptive compute"
     )
     parser.add_argument("--prompt", default="2+2=", help="User prompt")
-    parser.add_argument("--no-stream", action="store_true", help="Do not stream the response")
+    # parser.add_argument("--no-stream", action="store_true", help="Do not stream the response")
     return parser.parse_args()
 
 
@@ -43,8 +43,9 @@ def main():
     args = parse_args()
     logger.debug("Args: %s", args)
 
-    stream = not args.no_stream
-    assert stream, "No streaming implementation is not supported yet."
+    # stream = not args.no_stream
+    # assert stream, "No streaming implementation is not supported yet."
+    stream = True
 
     client = OpenAI(
         api_key=args.api_key,
@@ -77,24 +78,9 @@ def main():
     print("Prompt: ", args.prompt)
     print("-" * 10)
     print("Response: \n")
-    if not stream:
-        print(response.choices[0].message.content)
-        return
-
-    else:
-        for chunk in response:
-            if chunk.choices[0].delta.content is not None:
-                print(chunk.choices[0].delta.content, end="", flush=True)
-
-    # for chunk in response:
-    #     if chunk.choices[0].delta.content:  # Only print non-empty content chunks
-    #         print(chunk.choices[0].delta.content, end="", flush=True)
-
-    # for chunk in response:
-    #     print(chunk.choices[0].delta.content, end="", flush=True)
-
-    # print("Chat completion results:")
-    # print(chat_completion)
+    for chunk in response:
+        if chunk.choices[0].delta.content is not None:
+            print(chunk.choices[0].delta.content, end="", flush=True)
 
 
 if __name__ == "__main__":

@@ -267,12 +267,12 @@ async def chat_completions(request: ChatCompletionRequest, raw_request: Request)
                 {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
             ],
         }
-        logger.debug("yielding first chunk")
+        # logger.debug("yielding first chunk")
         yield f"data: {json.dumps(first_chunk)}\n\n"
 
         # Stream the content
         for content in generator:
-            print("yielding content", content)
+            # print("yielding content", content)
             logger.debug("yielding content", content)
             chunk = {
                 "id": request_id,

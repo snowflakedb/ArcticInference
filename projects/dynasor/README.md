@@ -17,9 +17,7 @@ vllm serve deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B -tp 1 --enable-chunked-pref
 
 Start the proxy server:
 ```bash
-python -m arctic_inference.dynasor.openai_server \
---port 8000 \
--tp 1 --enable-prefix-caching --enable-chunked-prefill --enforce-eager
+python -m arctic_inference.dynasor.openai_server
 ```
 
 Start the vLLM client:
