@@ -1,22 +1,39 @@
-import re
+# Copyright 2025 Snowflake Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import time
-import argparse
-import json
-from typing import List, Optional
-
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
+import httpx
+from openai import AsyncOpenAI
 import uvicorn
+from typing import Optional
+import json
+import os
+from fastapi import HTTPException
+import asyncio
+from openai import AsyncOpenAI
+from arctic_inference.dynasor.evaluator import count_not_empty, eqaul_group
+from arctic_inference.dynasor.cot import (
+    obtain_answer, formalize_final_response, 
+    uncertain_words, default_probeing_suffix, format_prompt_for_completions,
+)
 import logging
+import argparse
+from dataclasses import dataclass
 
-from fastapi import FastAPI
-from fastapi import Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
-from openai import OpenAI
-from pydantic import BaseModel
-
-from arctic_inference.dynasor.cot import effort_level
-from arctic_inference.dynasor.cot import openai_chat_completion_stream
-from arctic_inference.dynasor.util import with_cancellation
 
 def init_logger():
     logger = logging.getLogger(__name__)
@@ -25,338 +42,306 @@ def init_logger():
 
 logger = init_logger()
 
-DEFAULT_PROBE = "... Oh, I suddenly got the answer to the whole problem, **Final Answer**\n\n\\[ \\boxed{"
 
-class DynasorOpenAIClient:
-    # The Dynasor OpenAI Client is a wrapper that applys the chat template
-    # and the reasoning stuff to the OpenAI API of vLLM.
-    def __init__(
-        self,
-        base_url: str = "http://localhost:8000/v1",
-        api_key: str = "EMPTY",
-        probe: str = DEFAULT_PROBE,
-        token_interval: int = 32,
-        certainty_window: int = 2,
-    ):
-        """
-        Initialize the OpenAI Chat Client.
+@dataclass
+class ProxyConfig:
+    host: str
+    port: int
+    target_base_url: str
+    api_key: str = "EMPTY"
 
-        Args:
-            api_key: OpenAI API key.
-            model: The model name to use (default: deepseek-ai/DeepSeek-R1-Distill-Qwen-7B).
-            token_interval: Number of tokens before probing (default: 32)
-            certainty_window: Number of consistent answers needed (default: 2)
-        """
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
-        self.probe = probe
-        self.token_interval = token_interval
-        self.certainty_window = certainty_window
-
-        # models = self.client.models.list()
-        
-        # FIXME: Need a reliable way to get the max tokens (without using transformers)
-        self.max_tokens = 131072        
-        
-
-app = FastAPI()
-client: Optional[DynasorOpenAIClient] = None
-
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-# Models for request validation
-class ChatMessage(BaseModel):
-    role: str
-    content: str
-
-
-class CompletionRequest(BaseModel):
-    model: str
-    prompt: str
-    temperature: Optional[float] = 0.7
-    max_tokens: Optional[int] = None
-    stream: Optional[bool] = False
-
-class ChatCompletionRequest(BaseModel):
-    model: str
-    messages: List[ChatMessage]
-    temperature: Optional[float] = 0.7
-    max_tokens: Optional[int] = None
-    stream: Optional[bool] = False
-
-
-@app.get("/v1/models")
-async def models():
-    logger.debug("Reaching models models fetching")
-    global client
-    models = client.client.models.list()
-    return models
-
-# TODO(GindaChen): Adapt to different models
-def format_history(messages: List[ChatMessage]) -> str:
-    """
-    Convert chat conversation history into a prompt string.
-    """
-    formatted = ""
-    for message in messages:
-        role = message.role
-        content = message.content
-        if role == "system":
-            formatted += "" + content + "\n"
-        elif role == "user":
-            formatted += "<｜User｜>" + content + "\n"
-        else:
-            content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
-            formatted += "<｜Assistant｜>" + content + "\n"
-    result = formatted + "<｜Assistant｜>"
-    return result
-
-
-@app.post("/v1/completions")
-@with_cancellation
-async def completions(request: CompletionRequest, raw_request: Request):
-    """Handle chat completion requests."""
-    global client
-    openai_client = client.client
-    prompt = request.prompt
-    stream = request.stream
-
-    # Check for extra body parameters
-    token_interval = client.token_interval
-    certainty_window = client.certainty_window
-    
-    if hasattr(request, "extra_body") and request.extra_body:
-        if "dynasor" in request.extra_body:
-            dynasor_config = request.extra_body["dynasor"]
-            if "token_interval" in dynasor_config:
-                token_interval = dynasor_config["token_interval"]
-            if "certainty_window" in dynasor_config:
-                certainty_window = dynasor_config["certainty_window"]
-
-    max_tokens = request.max_tokens
-    if max_tokens is None:
-        max_tokens = client.max_tokens
-
-    generator = openai_chat_completion_stream(
-        client=openai_client,
-        model=request.model,
-        prompt=prompt,
-        temperature=request.temperature,
-        max_tokens=max_tokens,
-        dynasor_saving_effort=(certainty_window, token_interval),
-        probeing_suffix=client.probe,
-        # token_interval=token_interval,
-        # certainty_window=certainty_window,
-    )
-    if not stream:
-        result = ""
-        for i in generator:
-            result += i
-        return JSONResponse(content={"choices": [{"message": {"content": result}}]})
-
-    
-
-    async def stream_response():
-        request_id = f"chatcmpl-{int(time.time())}"
-        created_time = int(time.time())
-
-        # Send the role first
-        first_chunk = {
-            "id": request_id,
-            "object": "chat.completion.chunk",
-            "created": created_time,
-            "model": request.model,
-            "choices": [
-                {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
-            ],
-        }
-        logger.debug("yielding first chunk")
-        yield f"data: {json.dumps(first_chunk)}\n\n"
-
-        # Stream the content
-        for content in generator:
-            logger.debug("yielding content", content)
-            # print("yielding content", content)
-            chunk = {
-                "id": request_id,
-                "object": "chat.completion.chunk",
-                "created": created_time,
-                "model": request.model,
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": {"content": content},
-                        "finish_reason": None,
-                    }
-                ],
-            }
-            yield f"data: {json.dumps(chunk)}\n\n"
-
-        # Send the final [DONE] message
-        yield "data: [DONE]\n\n"
-
-    return StreamingResponse(stream_response(), media_type="text/event-stream")
-
-
-# TODO: asyncio cancellation is not working properly.
-@app.post("/v1/chat/completions")
-@with_cancellation
-async def chat_completions(request: ChatCompletionRequest, raw_request: Request):
-    """Handle chat completion requests."""
-    global client
-    openai_client = client.client
-    messages = request.messages
-    prompt = format_history(messages)
-    stream = request.stream
-
-    # Check for extra body parameters
-    token_interval = client.token_interval
-    certainty_window = client.certainty_window
-    
-    if hasattr(request, "extra_body") and request.extra_body:
-        if "dynasor" in request.extra_body:
-            dynasor_config = request.extra_body["dynasor"]
-            if "token_interval" in dynasor_config:
-                token_interval = dynasor_config["token_interval"]
-            if "certainty_window" in dynasor_config:
-                certainty_window = dynasor_config["certainty_window"]
-
-    max_tokens = request.max_tokens
-    if max_tokens is None:
-        max_tokens = client.max_tokens
-
-    generator = openai_chat_completion_stream(
-        client=openai_client,
-        model=request.model,
-        prompt=prompt,
-        temperature=request.temperature,
-        max_tokens=max_tokens,
-        dynasor_saving_effort=(certainty_window, token_interval),
-        probeing_suffix=client.probe,
-        # token_interval=token_interval,
-        # certainty_window=certainty_window,
-    )
-
-    if not stream:
-        result = ""
-        for i in generator:
-            result += i
-            logger.debug(result)
-        return JSONResponse(content={"choices": [{"message": {"content": result}}]})
-
-
-
-    async def stream_response():
-        request_id = f"chatcmpl-{int(time.time())}"
-        created_time = int(time.time())
-
-        # Send the role first
-        first_chunk = {
-            "id": request_id,
-            "object": "chat.completion.chunk",
-            "created": created_time,
-            "model": request.model,
-            "choices": [
-                {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
-            ],
-        }
-        # logger.debug("yielding first chunk")
-        yield f"data: {json.dumps(first_chunk)}\n\n"
-
-        # Stream the content
-        for content in generator:
-            # print("yielding content", content)
-            logger.debug("yielding content", content)
-            chunk = {
-                "id": request_id,
-                "object": "chat.completion.chunk",
-                "created": created_time,
-                "model": request.model,
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": {"content": content},
-                        "finish_reason": None,
-                    }
-                ],
-            }
-            yield f"data: {json.dumps(chunk)}\n\n"
-
-        # Send the final [DONE] message
-        yield "data: [DONE]\n\n"
-
-    return StreamingResponse(stream_response(), media_type="text/event-stream")
-
-
-def main():
-    parser = argparse.ArgumentParser(description="OpenAI Chat Client")
-    parser.add_argument("--api-key", type=str, default="token-abc123", help="API key")
+def parse_args() -> ProxyConfig:
+    parser = argparse.ArgumentParser(description="OpenAI API Proxy Server")
     parser.add_argument(
-        "--base-url",
+        "--host",
         type=str,
-        default="http://localhost:8000/v1",
-        help="Base URL (default: http://localhost:8000/v1)",
+        default="0.0.0.0",
+        help="Host to bind the server to (default: 0.0.0.0)",
     )
     parser.add_argument(
         "--port",
         type=int,
         default=8001,
-        help="Port (default: 8001)",
+        help="Port to run the server on (default: 8001)",
     )
     parser.add_argument(
-        "--host",
+        "--target-base-url",
         type=str,
-        default="0.0.0.0",
-        help="Host (default: 0.0.0.0)",
-    )
-    parser.add_argument(
-        "--probe",
-        type=str,
-        default=DEFAULT_PROBE,
-        help=f"Probe (default: {repr(DEFAULT_PROBE)})",
-    )
-    # parser.add_argument(
-    #     "--dynasor-saving-effort",
-    #     type=str,
-    #     default="2,32",
-    #     help="Dynasor saving effort. It is a tuple of two integers. The first integer is the number of consistent answer to get before early exit, and the second integer is the number of tokens before probing. (default: 2,32)",
-    # )
-    parser.add_argument(
-        "--token-interval",
-        type=int,
-        default=32,
-        help="Token interval for adaptive compute (default: 32)",
-    )
-    parser.add_argument(
-        "--certainty-window",
-        type=int,
-        default=2,
-        help="Certainty window for adaptive compute (default: 2)",
+        default="http://localhost:8000",
+        help="Base URL of the target OpenAI API server (default: http://localhost:8000)",
     )
     args = parser.parse_args()
-    global client
-
-    # dynasor_saving_effort = tuple(map(int, args.dynasor_saving_effort.split(",")))
-    # assert len(dynasor_saving_effort) == 2
-    # assert dynasor_saving_effort[0] >= 0
-    # assert dynasor_saving_effort[1] >= 0
-    client = DynasorOpenAIClient(
-        base_url=args.base_url,
-        api_key=args.api_key,
-        probe=args.probe,
-        token_interval=args.token_interval,
-        certainty_window=args.certainty_window,
+    return ProxyConfig(
+        host=args.host,
+        port=args.port,
+        target_base_url=args.target_base_url,
     )
-    print(args)
-    uvicorn.run(app, host=args.host, port=args.port)
 
+app = FastAPI()
+
+# Initialize with None, will be set during startup
+config: Optional[ProxyConfig] = None
+
+
+async def execute_single_probe(
+    client: AsyncOpenAI,
+    model_id: str, 
+    prompt: str, 
+    generated: str,
+    probe_in_progress_event: asyncio.Event,
+    max_tokens: int = 32,
+):
+    
+    try:
+        text = format_prompt_for_completions(prompt, generated)
+        probe_response = await client.completions.create(
+            model=model_id,
+            prompt=text,
+            max_tokens=max_tokens,
+            temperature=0.6,
+            top_p=0.95,
+        )
+
+        if probe_response.choices and probe_response.choices[0].text:
+            response_text_probe = probe_response.choices[0].text
+        else:
+            response_text_probe = ""
+    finally:
+        probe_in_progress_event.clear()
+    return response_text_probe
+
+
+async def handle_chat_completion_request(
+    request: Request,
+    path: str
+) -> StreamingResponse:
+    body = await request.body()
+    body_json = json.loads(body) if body else {}
+
+    client = AsyncOpenAI(
+        api_key=config.api_key,
+        base_url=f"{config.target_base_url}/v1",
+        max_retries=1
+    )
+
+    logger.debug("Handle chat completion request: %s", body_json)
+
+    model_id = body_json.get("model")
+    max_tokens = body_json.get("max_tokens", 1024)
+    
+    # By default disable dynasor, unless client specifies it.
+    dynasor_body = body_json.get("dynasor", {})
+    probe_interval = dynasor_body.get("probe_interval", 1e9)
+    certainty_window = dynasor_body.get("certainty_window", 3)
+
+    if path == "/v1/chat/completions":
+        messages = body_json.get("messages")
+        prompt = messages[-1].get("content")
+
+        _response_stream = client.chat.completions.create(
+            messages=messages,
+            model=model_id,
+            max_tokens=max_tokens,
+            stream=True,
+        )
+        response_stream = await _response_stream
+    
+    elif path == "/v1/completions":
+        prompt = body_json.get("prompt")
+        _response_stream = client.completions.create(
+            model=model_id,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            stream=True,
+        )
+        response_stream = await _response_stream
+        
+
+    probe_task: Optional[asyncio.Task] = None
+    probe_in_progress_event = asyncio.Event()
+    probe_in_progress_event.clear()
+    
+    probe_answers = []
+    probe_responses = []
+    adaptive_end = False
+
+    should_launch_next_probe = False
+    generated_text = ""
+    chunks_processed = 0
+
+    async for chunk in response_stream:
+        _chunk = chunk.to_json(indent=None,)
+        reconstructed_chunk = f"data: {_chunk}\n\n"
+        yield reconstructed_chunk.encode("utf-8")
+
+        # TODO: Properly set the exit condition.
+        if (
+            chunk.choices[0].finish_reason is not None
+            and chunk.choices[0].finish_reason != "length"
+        ):
+            break
+
+        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content is not None:
+            text = chunk.choices[0].delta.content
+            generated_text += text
+            # print(text, end="", flush=True)
+            chunks_processed += 1
+        
+        if chunks_processed > 0 and chunks_processed % probe_interval == 0:
+            should_launch_next_probe = True
+            pass
+
+        if probe_task is not None and probe_task.done():
+            # Obtain the result from the probe task.
+            probe_text = probe_task.result()
+            answer = obtain_answer(probe_text)
+            probe_task = None
+
+            # Now check the certaindex for exiting condition.
+            probe_answers.append(answer)
+            probe_responses.append(probe_text)
+
+            
+            probe_certain_count = [
+                not any(word in res.lower() for word in uncertain_words)
+                for res in probe_responses[-certainty_window:]
+            ]
+            is_group_equal = eqaul_group(probe_answers[-certainty_window:])                
+            count_not_empty_count = count_not_empty(probe_answers[-certainty_window:])
+
+            if (
+                not adaptive_end
+                and is_group_equal
+                and count_not_empty_count == certainty_window
+                and sum(probe_certain_count) == certainty_window
+            ):
+                adaptive_end = True
+
+            if adaptive_end:
+                should_launch_next_probe = False
+                
+                # TODO: Make the probe customizable
+                output_text = formalize_final_response(generated_text, probe_answers[-1])
+                
+                # Make a new chunk with the output text.
+                new_chunk = chunk.model_copy()
+                new_chunk.choices[0].delta.content = output_text
+                # new_chunk.choices[0].finish_reason = "stop"
+                new_chunk_bytes = new_chunk.to_json(indent=None)
+                reconstructed_chunk = f"data: {new_chunk_bytes}\n\n"
+                yield reconstructed_chunk.encode("utf-8")
+
+                new_chunk.choices[0].delta.content = ""
+                new_chunk.choices[0].finish_reason = "stop"
+                reconstructed_chunk = f"data: {new_chunk.to_json(indent=None)}\n\n"
+                yield reconstructed_chunk.encode("utf-8")
+                break
+            pass
+
+
+        if should_launch_next_probe:
+            if not probe_in_progress_event.is_set():
+                should_launch_next_probe = False
+                probe_in_progress_event.set()
+                probe_task = asyncio.create_task(
+                    execute_single_probe(
+                        client, 
+                        model_id, 
+                        prompt, 
+                        generated_text,
+                        probe_in_progress_event, 
+                        max_tokens=32,
+                    )
+                )
+
+    await response_stream.close()
+    yield "data: [DONE]\n\n".encode("utf-8")
+    pass
+    
+    
+
+
+@app.post("/v1/chat/completions")
+async def chat_completions_endpoint(request: Request):
+    gen = handle_chat_completion_request(request, "/v1/chat/completions")
+    return StreamingResponse(
+        gen, media_type="text/event-stream",
+    )
+
+@app.post("/v1/completions")
+async def completions_endpoint(request: Request):
+    gen = handle_chat_completion_request(request, "/v1/completions")
+    return StreamingResponse(
+        gen, media_type="text/event-stream",
+    )
+
+async def proxy_request(request: Request, path: str) -> StreamingResponse:
+    # Skip chat/completions endpoints since they are handled separately
+    if request.method == "POST" and request.url.path in ["/v1/chat/completions", "/v1/completions"]:
+        raise HTTPException(status_code=404, detail="Not Found")
+    
+    # Get the raw request body
+    body = await request.body()
+    body_json = json.loads(body) if body else {}
+    
+    # Forward headers but exclude host
+    headers = {k: v for k, v in request.headers.items() if k.lower() != "host"}
+    
+    # Construct target URL
+    target_url = config.target_base_url.rstrip('/') + '/' + path.lstrip('/')
+
+    # Check if streaming is requested
+    is_stream = body_json.get("stream", False)
+    
+    async with httpx.AsyncClient() as client:
+        # Forward the request with same method, headers, and body
+        response = await client.request(
+            method=request.method,
+            url=target_url,
+            headers=headers,
+            content=body,
+        )
+
+        if is_stream:
+            # For streaming responses, stream each chunk
+            async def stream_generator():
+                buffer = b""
+                async for chunk in response.aiter_bytes():
+                    yield chunk
+                if buffer:  # Yield any remaining data
+                    yield buffer
+
+            proxy_headers = {
+                k: v for k, v in response.headers.items()
+                if k.lower() not in {"content-length", "transfer-encoding", "content-encoding"}
+            }
+            return StreamingResponse(
+                stream_generator(),
+                status_code=response.status_code,
+                headers=proxy_headers,
+                media_type="text/event-stream"
+            )
+        else:
+            # For non-streaming responses, return the full response
+            return StreamingResponse(
+                response.aiter_bytes(),
+                status_code=response.status_code,
+                headers=dict(response.headers)
+            )
+
+@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"])
+async def proxy(request: Request, path: str):
+    return await proxy_request(request, "/" + path)
+
+def start_server(config: ProxyConfig):
+    uvicorn.run(app, host=config.host, port=config.port)
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    config = ProxyConfig(
+        host=args.host,
+        port=args.port,
+        target_base_url=args.target_base_url,
+    )
+    logger.info(f"Starting server with config: {config}")
+    start_server(config)
