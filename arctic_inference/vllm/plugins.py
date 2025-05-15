@@ -76,7 +76,7 @@ def arctic_inference_plugin():
         return
     
     if os.environ["VLLM_USE_V1"] == "0":
-        logger.error("ArcticInference only supports vLLM V1, but detected V0 engine. "
+        logger.warning("ArcticInference only supports vLLM V1, but detected V0 engine. "
                      "Ignoring plugin!\n"
                      "Hint: To strictly enforce the V1 vLLM engine, please set "
                      "VLLM_USE_V1=1.")
