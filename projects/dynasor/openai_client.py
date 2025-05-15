@@ -43,6 +43,11 @@ def parse_args():
         "--max-tokens", type=int, default=2048, help="Maximum tokens for completion"
     )
     parser.add_argument(
+        "--disable-dynasor",
+        action="store_true",
+        help="Disable Dynasor"
+    )
+    parser.add_argument(
         "--probe-interval", 
         type=int,
         default=32,
@@ -66,6 +71,7 @@ def main():
     # stream = not args.no_stream
     # assert stream, "No streaming implementation is not supported yet."
     stream = True
+    disable_dynasor = args.disable_dynasor
 
     client = OpenAI(
         api_key=args.api_key,
@@ -78,6 +84,13 @@ def main():
     model = models.data[0].id
     logger.debug("Model: %s", model)
 
+    dynasor_config = dict()
+    if not disable_dynasor:
+        dynasor_config = dict(
+            probe_interval=args.probe_interval,
+            certainty_window=args.certainty_window,
+        )
+
     response = client.chat.completions.create(
         messages=[
             {"role": "system", "content": "You are a helpful assistant."},
@@ -86,10 +99,7 @@ def main():
         model=model,
         max_tokens=args.max_tokens,
         extra_body={
-            "dynasor": {
-                "probe_interval": args.probe_interval,
-                "certainty_window": args.certainty_window
-            }
+            "dynasor": dynasor_config
         },
         stream=stream,
     )
