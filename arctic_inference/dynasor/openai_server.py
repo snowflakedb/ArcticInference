@@ -12,6 +12,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+"""
+OpenAI-compatible proxy server that injects Dynasor probes.
+
+Known issues:
+- Prompt formatting is currently hardcoded - limitation to get system prompt to format a proper prefix. Potential accuracy degrade (unknown prompt) and/or performance issue (kv reuse)
+- API key is currently used as "EMPTY" placeholder.
+"""
 
 import time
 from fastapi import FastAPI, Request
@@ -38,6 +45,11 @@ from dataclasses import dataclass
 def init_logger():
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.DEBUG)
+    handler = logging.StreamHandler()
+    handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
     return logger
 
 logger = init_logger()
@@ -93,6 +105,14 @@ async def execute_single_probe(
 ):
     
     try:
+        # TODO(GindaChen)(Refactor): Prompt formatting is currently highly hardcoded. 
+        # Main issue is that we have to control the `</think>` token, and 
+        # except for the `/v1/completions` endpoint, we don't have a 
+        # proper way to control.
+        # Case: 
+        # - If the template is unknown, then we can only submit something reasonoable.
+        # - If the template is know-able, then the proxy server has to know about it. 
+        #   Either the server provide an endpoint, or the user override this function.
         text = format_prompt_for_completions(prompt, generated)
         probe_response = await client.completions.create(
             model=model_id,
@@ -258,8 +278,6 @@ async def handle_chat_completion_request(
     yield "data: [DONE]\n\n".encode("utf-8")
     pass
     
-    
-
 
 @app.post("/v1/chat/completions")
 async def chat_completions_endpoint(request: Request):

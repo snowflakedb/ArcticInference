@@ -17,13 +17,19 @@ vllm serve deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B -tp 1 --enable-chunked-pref
 
 Start the proxy server:
 ```bash
-python -m arctic_inference.dynasor.openai_server
+python -m arctic_inference.dynasor.openai_server \
+--target-base-url http://localhost:8000 \
+--port 8080
 ```
 
 Start the vLLM client:
 ```bash
 cd arctic_inference/projects/dynasor/
-python openai_client.py
+python openai_client.py \
+--base-url http://localhost:8080/v1 \
+--probe-interval 32 \
+--certainty-window 2 \
+--prompt "2 + 2 ="
 ```
 
 ### Quick Start (with vLLM API Server)
