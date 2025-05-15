@@ -35,7 +35,7 @@ def parse_args():
         help="Certainty window for adaptive compute"
     )
     parser.add_argument("--prompt", default="2+2=", help="User prompt")
-    parser.add_argument("--stream", action="store_true", help="Stream the response")
+    parser.add_argument("--no-stream", action="store_true", help="Do not stream the response")
     return parser.parse_args()
 
 
@@ -43,7 +43,8 @@ def main():
     args = parse_args()
     logger.debug("Args: %s", args)
 
-    stream = args.stream
+    stream = not args.no_stream
+    assert stream, "No streaming implementation is not supported yet."
 
     client = OpenAI(
         api_key=args.api_key,
