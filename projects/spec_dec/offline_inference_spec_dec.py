@@ -30,7 +30,9 @@ llm = LLM(
         "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.1-70B-Instruct",
         "num_speculative_tokens": 3,
         "enable_suffix_decoding": True,
+        "disable_by_batch_size": 64,
     },
+    seed=0,
 )
 
 print("=" * 80)
@@ -50,7 +52,7 @@ conversation = [
     },
 ]
 
-sampling_params = SamplingParams(temperature=0, max_tokens=128)
+sampling_params = SamplingParams(temperature=0.1, max_tokens=128)
 
 outputs = llm.chat(conversation, sampling_params=sampling_params)
 
