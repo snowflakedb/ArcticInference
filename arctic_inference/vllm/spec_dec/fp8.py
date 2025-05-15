@@ -36,6 +36,10 @@ class Fp8ConfigWithEmbedding(Fp8Config):
         from vllm.attention.layer import Attention  # Avoid circular import
         from vllm.model_executor.layers.vocab_parallel_embedding import VocabParallelEmbedding
     
+        from vllm.distributed.parallel_state import _SP
+        if _SP.rank == 0:
+            print(f"******************************** init Fp8ConfigWithEmbedding ")
+        
         if isinstance(layer, LinearBase):
             if is_layer_skipped(prefix, self.ignored_layers):
                 return UnquantizedLinearMethod()
