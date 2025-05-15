@@ -18,6 +18,10 @@ class Fp8LinearMethodEmbedding(Fp8LinearMethod):
     def __init__(self, config: Fp8Config):
         super().__init__(config)
 
+    from vllm.distributed import _SP
+    if _SP.rank == 0:
+        print(f"******************************** init FP8LinearMethodEmbedding ")
+
     def embedding(self, layer: torch.nn.Module,
                   input_: torch.Tensor) -> torch.Tensor:
         import torch.nn.functional as F
