@@ -39,6 +39,8 @@ from arctic_inference.patching import ArcticPatch
 from arctic_inference.vllm.spec_dec.arctic_proposer import ArcticProposer
 from arctic_inference.common.suffix_cache import SuffixSpecResult
 
+SP_TP_MODE = None
+SP_TP_PROFILE_RUN = None
 
 class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
@@ -86,6 +88,20 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         vllm_config.speculative_config = speculative_config
 
+        # for shapeshifter, set SP_TP_PROFILE_RUN
+        def monkeypatch_profile_run(self):
+            profile_run = self.profile_run
+
+            def shapeshifter_profile_run():
+                global SP_TP_PROFILE_RUN
+                SP_TP_PROFILE_RUN = True
+                profile_run()
+                SP_TP_PROFILE_RUN = False
+
+            self.profile_run = shapeshifter_profile_run
+
+        monkeypatch_profile_run(self)
+
     def _prepare_inputs(self, *args, **kwargs):
         attn_metadata, logits_indices, *rest = (
             self._orig_prepare_inputs(*args, **kwargs))
@@ -102,25 +118,45 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         model_forward = self.model.forward
 
         def ulysses_forward(*args, **kwargs):
+            assert SP_TP_PROFILE_RUN is not None
             # update inputs
             input_ids = kwargs['input_ids']
             positions = kwargs['positions']
             # Ulysses parameters
             N = input_ids.shape[0]
-            N_ulysses = N // SP_size
-            N_offset = N_ulysses * SP_rank
-            # narrow the input
-            kwargs['input_ids'] = input_ids[N_offset:N_offset + N_ulysses]
-            kwargs['positions'] = positions[N_offset:N_offset + N_ulysses]
-            # original forward
-            output = model_forward(*args, **kwargs)
-            # all-gather model_output
-            model_output = torch.empty((N, self.model.config.hidden_size),
-                                       dtype=output.dtype,
-                                       device=output.device)
-            torch.distributed.all_gather_into_tensor(model_output,
-                                                     output,
-                                                     group=device_group)
+
+            global SP_TP_MODE
+            sp_tp_threshold = self.parallel_config.shapeshifter_threshold
+            SP_TP_MODE = bool(sp_tp_threshold >= N)
+
+            if _SP.rank == 0:
+                print(f"SP_TP_PROFILE_RUN {SP_TP_PROFILE_RUN} ,"
+                      f"Ulysses forward. SP_TP_MODE {SP_TP_MODE}")
+
+            if SP_TP_PROFILE_RUN or SP_TP_MODE is True:
+                if torch.distributed.get_rank() == 0:
+                    print(f"N {N}")
+                if SP_TP_PROFILE_RUN:
+                    SP_TP_MODE = True
+                model_output = model_forward(*args, **kwargs)
+            if SP_TP_PROFILE_RUN or SP_TP_MODE is False:
+                N_ulysses = N // SP_size
+                N_offset = N_ulysses * SP_rank
+                if torch.distributed.get_rank() == 0:
+                    print(f"N {N}, N_ranks {[N_ulysses] * SP_size}")
+                # narrow the input
+                kwargs['input_ids'] = input_ids[N_offset:N_offset + N_ulysses]
+                kwargs['positions'] = positions[N_offset:N_offset + N_ulysses]
+                if SP_TP_PROFILE_RUN:
+                    SP_TP_MODE = False
+                output = model_forward(*args, **kwargs)
+                # all-gather model_output
+                model_output = torch.empty((N, self.model.config.hidden_size),
+                                           dtype=output.dtype,
+                                           device=output.device)
+                torch.distributed.all_gather_into_tensor(model_output,
+                                                         output,
+                                                         group=device_group)
             return model_output
 
         self.model.forward = ulysses_forward
@@ -152,18 +188,27 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         attn_metadata, logits_indices, spec_decode_metadata = (
             self._prepare_inputs(scheduler_output))
         num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
-        # add padding to the batch size to make it a multiple of SP
-        SP = self.parallel_config.sequence_parallel_size
-        num_input_tokens = (num_scheduled_tokens + SP - 1) // SP * SP
-        if (self.use_cuda_graph
-                and num_input_tokens // SP <= self.cudagraph_batch_sizes[-1]):
-            # Use piecewise CUDA graphs.
-            # Add padding to the batch size.
-            num_input_tokens = SP * self.vllm_config.pad_for_cudagraph(
-                num_input_tokens // SP)
+        sp_tp_threshold = self.parallel_config.shapeshifter_threshold
+        if num_scheduled_tokens <= sp_tp_threshold:
+            if (self.use_cuda_graph and num_scheduled_tokens
+                    <= self.cudagraph_batch_sizes[-1]):
+                # Use piecewise CUDA graphs.
+                # Add padding to the batch size.
+                num_input_tokens = self.vllm_config.pad_for_cudagraph(
+                    num_scheduled_tokens)
+            else:
+                # Eager mode.
+                num_input_tokens = num_scheduled_tokens
         else:
-            # Eager mode.
-            pass
+            # add padding to the batch size to make it a multiple of SP
+            SP = self.parallel_config.sequence_parallel_size
+            num_input_tokens = (num_scheduled_tokens + SP - 1) // SP * SP
+            if (self.use_cuda_graph and num_input_tokens // SP
+                    <= self.cudagraph_batch_sizes[-1]):
+                num_input_tokens = SP * self.vllm_config.pad_for_cudagraph(
+                    num_input_tokens // SP)
+            else:
+                pass
         attn_metadata.num_input_tokens = num_input_tokens
 
         if self.is_multimodal_model:
@@ -565,13 +610,27 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         # Trigger CUDA graph capture for specific shapes.
         # Capture the large shapes first so that the smaller shapes
         # can reuse the memory pool allocated for the large shapes.
-        sp_size = self.parallel_config.sequence_parallel_size
         with graph_capture(device=self.device):
+            sp_tp_threshold = self.parallel_config.shapeshifter_threshold
             for num_tokens in reversed(self.cudagraph_batch_sizes):
-                for _ in range(self.vllm_config.compilation_config.
-                               cudagraph_num_of_warmups):
-                    self._dummy_run(num_tokens * sp_size)
-                self._dummy_run(num_tokens * sp_size)
+                SP = self.parallel_config.sequence_parallel_size
+                if torch.distributed.get_rank() == 0:
+                    print(f"capture SP: {num_tokens * SP}")
+                if num_tokens * SP > sp_tp_threshold and \
+                    num_tokens * SP <= self.max_num_tokens:
+                    for _ in range(self.vllm_config.compilation_config.
+                                cudagraph_num_of_warmups):
+                        self._dummy_run(num_tokens * SP)
+                    self._dummy_run(num_tokens * SP)
+
+            for num_tokens in reversed(self.cudagraph_batch_sizes):
+                if torch.distributed.get_rank() == 0:
+                    print(f"capture SP_TP: {num_tokens}")
+                if num_tokens <= sp_tp_threshold:
+                    for _ in range(self.vllm_config.compilation_config.
+                                   cudagraph_num_of_warmups):
+                        self._dummy_run(num_tokens)
+                    self._dummy_run(num_tokens)
 
         end_time = time.perf_counter()
         end_free_gpu_memory = torch.cuda.mem_get_info()[0]

@@ -28,11 +28,13 @@ logger = logging.getLogger(__name__)
 class ArcticParallelConfig(ParallelConfig):
 
     sequence_parallel_size: int = 1
+    shapeshifter_threshold: int = 0
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         arctic_args = get_current_arctic_args()
         self.sequence_parallel_size = arctic_args.sequence_parallel_size
+        self.shapeshifter_threshold = arctic_args.shapeshifter_threshold
 
     @property
     def world_size(self) -> int:
@@ -127,4 +129,5 @@ class VllmConfigPatch(ArcticPatch[VllmConfig]):
     def __str__(self, *args, **kwargs):
         string = self._orig_str(*args, **kwargs)
         string += f", sequence_parallel_size={self.parallel_config.sequence_parallel_size}"
+        string += f", shapeshifter_threshold={self.parallel_config.shapeshifter_threshold}"
         return string
