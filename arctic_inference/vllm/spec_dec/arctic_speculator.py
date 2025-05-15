@@ -23,8 +23,9 @@ import torch.nn as nn
 from vllm.config import VllmConfig
 from arctic_inference.vllm.spec_dec.logits_processor_opt import LogitsProcessorOpt
 from vllm.model_executor.layers.sampler import SamplerOutput, get_sampler
-from vllm.model_executor.layers.quantization.fp8 import Fp8LinearMethod
-from arctic_inference.vllm.spec_dec.fp8 import Fp8ConfigWithEmbedding
+
+from arctic_inference.vllm.spec_dec.fp8 import (Fp8ConfigWithEmbedding, 
+                                                OriginalFp8LinearMethod)
 from arctic_inference.vllm.spec_dec.vocab_parallel_embedding import (
     ParallelLMHead,
     VocabParallelEmbedding,
@@ -154,7 +155,7 @@ class ArcticMLPSpeculator(nn.Module):
                     quant_config=quant_config,
                     skip_quantization=False,
                 )
-                qhead.quant_method = Fp8LinearMethod(quant_config=quant_config)
+                qhead.quant_method = OriginalFp8LinearMethod(quant_config=quant_config)
                 self.qhead = nn.ModuleList([qhead] * self.max_speculative_tokens)
 
             ln = MLPSpeculatorLayerNorm(
@@ -458,7 +459,7 @@ class ArcticLSTMSpeculator(nn.Module):
                     quant_config=quant_config,
                     skip_quantization=False,
                 )
-                qhead.quant_method = Fp8LinearMethod(quant_config=quant_config)
+                qhead.quant_method = OriginalFp8LinearMethod(quant_config=quant_config)
                 self.qhead = nn.ModuleList([qhead] * self.max_speculative_tokens)
         else:
             self.head = nn.ModuleList(
