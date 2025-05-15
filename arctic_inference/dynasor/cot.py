@@ -18,6 +18,27 @@ from typing import Optional
 from arctic_inference.dynasor.evaluator import count_not_empty, eqaul_group
 
 uncertain_words = ["wait", "hold", "but", "okay", "no", "hmm"]
+sys = f"You are a helpful assistant."
+default_probeing_suffix = "... Oh, I suddenly got the answer to the whole problem, **Final Answer**\n\n\\[ \\boxed{"
+
+# TODO: Generalize this to other models. 
+# The problem is that only the model with known template can properly use this function.
+def format_prompt_for_completions(prompt: str, generated: str) -> str:
+    # probe = ""
+    # if "</think>" not in generated:
+    #     probe += "\n\n...</think>\n"
+    # else:
+    #     probe += "\n\n..."
+    # probe += " "
+    text = f"<｜begin▁of▁sentence｜>{sys}<｜User｜>{prompt}<｜Assistant｜><think>\n{generated} {default_probeing_suffix}"
+    return text
+
+def formalize_final_response(generated_text: str, answer: str) -> str:
+    if "</think>" in generated_text:
+        output_text = "\n\n... Oh, I have got the answer to the whole problem\n**Final Answer:**\n\\[\n \\boxed{" + answer + "}\n\\]"
+    else:
+        output_text = "\n\n...</think>\n Oh, I have got the answer to the whole problem\n**Final Answer:**\n\\[\n \\boxed{" + answer + "}\n\\]"
+    return output_text
 
 
 def effort_level(effort_level: str) -> int:
@@ -47,7 +68,7 @@ def obtain_answer(s):
             stack.pop()
     return ""
 
-
+# TODO: Test stopping condition
 def openai_chat_completion_stream(
     client,
     model,
@@ -55,7 +76,7 @@ def openai_chat_completion_stream(
     temperature: float = 0.7,
     max_tokens: Optional[int] = 2048,
     dynasor_saving_effort: tuple = None,
-    probeing_suffix: str = "... Oh, I suddenly got the answer to the whole problem, **Final Answer**\n\n\\[ \\boxed{",
+    probeing_suffix: str = default_probeing_suffix,
 ):
     print("dynasor_saving_effort:", dynasor_saving_effort)
 
@@ -70,17 +91,8 @@ def openai_chat_completion_stream(
         probe_answers = []
         probe_responses = []
 
-        for _ in range(0, max_tokens, chunk_size):
+        for iter_id in range(0, max_tokens, chunk_size):
 
-            result = ""
-            buffer = ""
-            api_response = client.completions.create(
-                model=model,
-                prompt=current_prompt,
-                temperature=temperature,
-                max_tokens=chunk_size,
-                stream=True,
-            )
             if not adaptive_end:
                 probe = client.completions.create(
                     model=model,
@@ -91,25 +103,45 @@ def openai_chat_completion_stream(
                     top_p=0.95,
                 )
 
+            result = ""
+            buffer = ""
+            api_response = client.completions.create(
+                model=model,
+                prompt=current_prompt,
+                temperature=temperature,
+                max_tokens=chunk_size,
+                stream=True,
+            )
+
+            # for chunk in api_response:
+            #     if (
+            #         hasattr(chunk.choices[0], "text")
+            #         and chunk.choices[0].text is not None
+            #     ):
+            #         content = chunk.choices[0].text
+            #         buffer += content
+            #         if " " in buffer or "\n" in buffer:
+            #             # if console:
+            #             #    console.print(buffer, end='')
+            #             yield buffer
+            #             accumulated_response += buffer
+            #             result += buffer
+            #             buffer = ""
+            # if buffer:
+            #     yield buffer
+            #     accumulated_response += buffer
+            #     # console.print(buffer, end='')
+            #     result += buffer
+
             for chunk in api_response:
                 if (
                     hasattr(chunk.choices[0], "text")
                     and chunk.choices[0].text is not None
                 ):
                     content = chunk.choices[0].text
-                    buffer += content
-                    if " " in buffer or "\n" in buffer:
-                        # if console:
-                        #    console.print(buffer, end='')
-                        yield buffer
-                        accumulated_response += buffer
-                        result += buffer
-                        buffer = ""
-            if buffer:
-                yield buffer
-                accumulated_response += buffer
-                # console.print(buffer, end='')
-                result += buffer
+                    yield content
+                    accumulated_response += content
+                    result += content
 
             current_prompt += (
                 result  # Update the prompt with the new text for subsequent iterations
@@ -154,6 +186,7 @@ def openai_chat_completion_stream(
             if adaptive_end and not append_answer:
                 # print('Adaptive Ending')
                 append_answer = True
+                # TODO: Make the probe customizable
                 if "</think>" in accumulated_response:
                     yield "\n\n... Oh, I have got the answer to the whole problem\n**Final Answer:**\n\\[\n \\boxed{" + probe_answers[
                         -1

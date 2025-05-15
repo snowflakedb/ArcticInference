@@ -8,7 +8,27 @@ For more details, see:
 - [Github (hao-ai-lab/Dynasor)](https://github.com/hao-ai-lab/Dynasor)
 
 
-### Quick Start
+## Quick Start
+
+Start an vLLM server:
+```bash
+vllm serve deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B -tp 1 --enable-chunked-prefill --enforce-eager
+```
+
+Start the proxy server:
+```bash
+python -m arctic_inference.dynasor.openai_server \
+--port 8000 \
+-tp 1 --enable-prefix-caching --enable-chunked-prefill --enforce-eager
+```
+
+Start the vLLM client:
+```bash
+cd arctic_inference/projects/dynasor/
+python openai_client.py
+```
+
+### Quick Start (with vLLM API Server)
 
 Start the server:
 ```bash
@@ -23,3 +43,4 @@ Start the vLLM client:
 cd arctic_inference/projects/dynasor/
 python vllm_client.py
 ```
+
