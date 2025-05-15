@@ -21,7 +21,8 @@ from vllm.v1.worker.worker_base import WorkerBase
 from arctic_inference.patching import ArcticPatch
 from arctic_inference.utils import get_compatible_vllm_version
 from arctic_inference.vllm.args import EngineArgsPatch, AsyncEngineArgsPatch
-from arctic_inference.vllm.config import (ParallelConfigPatch,
+from arctic_inference.vllm.config import (ModelConfigPatch,
+                                          ParallelConfigPatch,
                                           SpeculativeConfigPatch,
                                           VllmConfigPatch)
 from arctic_inference.vllm.ulysses import apply_ulysses_patches
@@ -101,6 +102,7 @@ def arctic_inference_plugin():
     # Patches to vLLM arguments and configuration objects.
     EngineArgsPatch.apply_patch()
     AsyncEngineArgsPatch.apply_patch()
+    ModelConfigPatch.apply_patch()
     ParallelConfigPatch.apply_patch()
     SpeculativeConfigPatch.apply_patch()
     VllmConfigPatch.apply_patch()
