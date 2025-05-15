@@ -18,8 +18,8 @@ class Fp8LinearMethodEmbedding(Fp8LinearMethod):
     def __init__(self, config: Fp8Config):
         super().__init__(config)
 
-    from vllm.distributed.parallel_state import _SP
-    if _SP.rank == 0:
+    from vllm.distributed.parallel_state import get_world_group
+    if get_world_group().rank == 0:
         print(f"******************************** init FP8LinearMethodEmbedding ")
 
     def embedding(self, layer: torch.nn.Module,
