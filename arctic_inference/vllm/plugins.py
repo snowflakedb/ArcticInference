@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import vllm
 from vllm.logger import init_logger
 from vllm.v1.engine.core import EngineCoreProc
@@ -21,7 +22,8 @@ from vllm.v1.worker.worker_base import WorkerBase
 from arctic_inference.patching import ArcticPatch
 from arctic_inference.utils import get_compatible_vllm_version
 from arctic_inference.vllm.args import EngineArgsPatch, AsyncEngineArgsPatch
-from arctic_inference.vllm.config import (ParallelConfigPatch,
+from arctic_inference.vllm.config import (ModelConfigPatch,
+                                          ParallelConfigPatch,
                                           SpeculativeConfigPatch,
                                           VllmConfigPatch)
 from arctic_inference.vllm.ulysses import apply_ulysses_patches
@@ -72,6 +74,13 @@ def arctic_inference_plugin():
         logger.warning(
             f"ArcticInference requires the cuda platform. Ignoring plugin!")
         return
+    
+    if os.environ["VLLM_USE_V1"] == "0":
+        logger.warning("ArcticInference only supports vLLM V1, but detected V0 engine. "
+                     "Ignoring plugin!\n"
+                     "Hint: To strictly enforce the V1 vLLM engine, please set "
+                     "VLLM_USE_V1=1.")
+        return
 
     from transformers import AutoConfig
     from arctic_inference.common.swiftkv import LlamaSwiftKVConfig
@@ -101,6 +110,7 @@ def arctic_inference_plugin():
     # Patches to vLLM arguments and configuration objects.
     EngineArgsPatch.apply_patch()
     AsyncEngineArgsPatch.apply_patch()
+    ModelConfigPatch.apply_patch()
     ParallelConfigPatch.apply_patch()
     SpeculativeConfigPatch.apply_patch()
     VllmConfigPatch.apply_patch()

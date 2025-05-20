@@ -51,6 +51,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         speculative_config = vllm_config.speculative_config
 
+        # Delay the creation of the drafter until
+        # after the child class has been initialized.
         vllm_config.speculative_config = None
         self._orig_init(vllm_config, *args, **kwargs)
 
@@ -59,6 +61,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         if speculative_config:
             self.use_spec_decode = True
             self.speculative_config = speculative_config
+            self.vllm_config.speculative_config = speculative_config
 
             from vllm.distributed.parallel_state import get_pp_group
             if get_pp_group().is_last_rank:
@@ -69,8 +72,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                                                  self.device)  # type: ignore
                 elif (self.speculative_config.method == "arctic" or
                       self.speculative_config.method == "mlp_speculator"):
-                    self.drafter = ArcticProposer(self.vllm_config,
-                                                  self.speculative_config)
+                    self.drafter = ArcticProposer(self.vllm_config)
                 elif self.speculative_config.method != "suffix":
                     raise ValueError("Unknown speculative decoding method: "
                                      f"{self.speculative_config.method}")
