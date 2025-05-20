@@ -20,26 +20,27 @@ Known issues:
 - API key is currently used as "EMPTY" placeholder.
 """
 
-import time
-from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
-import httpx
-from openai import AsyncOpenAI
-import uvicorn
-from typing import Optional
-import json
-import os
-from fastapi import HTTPException
+import argparse
 import asyncio
+import httpx
+import json
+import logging
+import os
+import time
+import uvicorn
+from dataclasses import dataclass
+from fastapi import FastAPI, Request
+from fastapi import HTTPException
+from fastapi.responses import StreamingResponse
 from openai import AsyncOpenAI
-from arctic_inference.dynasor.evaluator import count_not_empty, eqaul_group
+from openai import AsyncOpenAI
+from typing import Optional
+
 from arctic_inference.dynasor.cot import (
-    obtain_answer, formalize_final_response, 
+    obtain_answer, formalize_final_response,
     uncertain_words, default_probeing_suffix, format_prompt_for_completions,
 )
-import logging
-import argparse
-from dataclasses import dataclass
+from arctic_inference.dynasor.evaluator import count_not_empty, eqaul_group
 
 
 def init_logger():
@@ -52,6 +53,7 @@ def init_logger():
     logger.addHandler(handler)
     return logger
 
+
 logger = init_logger()
 
 
@@ -61,6 +63,7 @@ class ProxyConfig:
     port: int
     target_base_url: str
     api_key: str = "EMPTY"
+
 
 def parse_args() -> ProxyConfig:
     parser = argparse.ArgumentParser(description="OpenAI API Proxy Server")
@@ -89,6 +92,7 @@ def parse_args() -> ProxyConfig:
         target_base_url=args.target_base_url,
     )
 
+
 app = FastAPI()
 
 # Initialize with None, will be set during startup
@@ -97,13 +101,12 @@ config: Optional[ProxyConfig] = None
 
 async def execute_single_probe(
     client: AsyncOpenAI,
-    model_id: str, 
-    prompt: str, 
+    model_id: str,
+    prompt: str,
     generated: str,
     probe_in_progress_event: asyncio.Event,
     max_tokens: int = 32,
 ):
-    
     try:
         # TODO(GindaChen)(Refactor): Prompt formatting is currently highly hardcoded. 
         # Main issue is that we have to control the `</think>` token, and 
@@ -148,7 +151,7 @@ async def handle_chat_completion_request(
 
     model_id = body_json.get("model")
     max_tokens = body_json.get("max_tokens", 1024)
-    
+
     # By default disable dynasor, unless client specifies it.
     dynasor_body = body_json.get("dynasor", {})
     probe_interval = dynasor_body.get("probe_interval", 1e9)
@@ -165,7 +168,7 @@ async def handle_chat_completion_request(
             stream=True,
         )
         response_stream = await _response_stream
-    
+
     elif path == "/v1/completions":
         prompt = body_json.get("prompt")
         _response_stream = client.completions.create(
@@ -175,12 +178,13 @@ async def handle_chat_completion_request(
             stream=True,
         )
         response_stream = await _response_stream
-        
+    else:
+        raise HTTPException(status_code=404)
 
     probe_task: Optional[asyncio.Task] = None
     probe_in_progress_event = asyncio.Event()
     probe_in_progress_event.clear()
-    
+
     probe_answers = []
     probe_responses = []
     adaptive_end = False
@@ -190,7 +194,7 @@ async def handle_chat_completion_request(
     chunks_processed = 0
 
     async for chunk in response_stream:
-        _chunk = chunk.to_json(indent=None,)
+        _chunk = chunk.to_json(indent=None, )
         reconstructed_chunk = f"data: {_chunk}\n\n"
         yield reconstructed_chunk.encode("utf-8")
 
@@ -206,7 +210,7 @@ async def handle_chat_completion_request(
             generated_text += text
             # print(text, end="", flush=True)
             chunks_processed += 1
-        
+
         if chunks_processed > 0 and chunks_processed % probe_interval == 0:
             should_launch_next_probe = True
             pass
@@ -221,12 +225,11 @@ async def handle_chat_completion_request(
             probe_answers.append(answer)
             probe_responses.append(probe_text)
 
-            
             probe_certain_count = [
                 not any(word in res.lower() for word in uncertain_words)
                 for res in probe_responses[-certainty_window:]
             ]
-            is_group_equal = eqaul_group(probe_answers[-certainty_window:])                
+            is_group_equal = eqaul_group(probe_answers[-certainty_window:])
             count_not_empty_count = count_not_empty(probe_answers[-certainty_window:])
 
             if (
@@ -239,10 +242,10 @@ async def handle_chat_completion_request(
 
             if adaptive_end:
                 should_launch_next_probe = False
-                
+
                 # TODO: Make the probe customizable
                 output_text = formalize_final_response(generated_text, probe_answers[-1])
-                
+
                 # Make a new chunk with the output text.
                 new_chunk = chunk.model_copy()
                 new_chunk.choices[0].delta.content = output_text
@@ -258,18 +261,17 @@ async def handle_chat_completion_request(
                 break
             pass
 
-
         if should_launch_next_probe:
             if not probe_in_progress_event.is_set():
                 should_launch_next_probe = False
                 probe_in_progress_event.set()
                 probe_task = asyncio.create_task(
                     execute_single_probe(
-                        client, 
-                        model_id, 
-                        prompt, 
+                        client,
+                        model_id,
+                        prompt,
                         generated_text,
-                        probe_in_progress_event, 
+                        probe_in_progress_event,
                         max_tokens=32,
                     )
                 )
@@ -277,7 +279,7 @@ async def handle_chat_completion_request(
     await response_stream.close()
     yield "data: [DONE]\n\n".encode("utf-8")
     pass
-    
+
 
 @app.post("/v1/chat/completions")
 async def chat_completions_endpoint(request: Request):
@@ -286,6 +288,7 @@ async def chat_completions_endpoint(request: Request):
         gen, media_type="text/event-stream",
     )
 
+
 @app.post("/v1/completions")
 async def completions_endpoint(request: Request):
     gen = handle_chat_completion_request(request, "/v1/completions")
@@ -293,24 +296,25 @@ async def completions_endpoint(request: Request):
         gen, media_type="text/event-stream",
     )
 
+
 async def proxy_request(request: Request, path: str) -> StreamingResponse:
     # Skip chat/completions endpoints since they are handled separately
     if request.method == "POST" and request.url.path in ["/v1/chat/completions", "/v1/completions"]:
         raise HTTPException(status_code=404, detail="Not Found")
-    
+
     # Get the raw request body
     body = await request.body()
     body_json = json.loads(body) if body else {}
-    
+
     # Forward headers but exclude host
     headers = {k: v for k, v in request.headers.items() if k.lower() != "host"}
-    
+
     # Construct target URL
     target_url = config.target_base_url.rstrip('/') + '/' + path.lstrip('/')
 
     # Check if streaming is requested
     is_stream = body_json.get("stream", False)
-    
+
     async with httpx.AsyncClient() as client:
         # Forward the request with same method, headers, and body
         response = await client.request(
@@ -347,12 +351,15 @@ async def proxy_request(request: Request, path: str) -> StreamingResponse:
                 headers=dict(response.headers)
             )
 
+
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"])
 async def proxy(request: Request, path: str):
     return await proxy_request(request, "/" + path)
 
+
 def start_server(config: ProxyConfig):
     uvicorn.run(app, host=config.host, port=config.port)
+
 
 if __name__ == "__main__":
     args = parse_args()

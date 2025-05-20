@@ -1,6 +1,7 @@
-from typing import Optional
 import asyncio
-from openai import AsyncOpenAI 
+from openai import AsyncOpenAI
+from typing import Optional
+
 
 def log(message: str):
     print(f"\033[93m{message}\033[0m", flush=True)
@@ -12,19 +13,20 @@ sys = f"You are a helpful assistant."
 # probe_prompt = "Oh, I have got the answer to the whole problem\n**Final Answer:**\n\\[\n \\boxed{"
 probe_prompt = "... Oh, I suddenly got the answer to the whole problem, **Final Answer**\n\n\\[ \\boxed{"
 
+
 def format_prompt(prompt: str, generated: str) -> str:
     text = f"<｜begin▁of▁sentence｜>{sys}<｜User｜>{prompt}<｜Assistant｜><think>\n{generated} {probe_prompt}"
     return text
 
+
 async def execute_single_probe(
     client: AsyncOpenAI,
-    model_id: str, 
-    prompt: str, 
+    model_id: str,
+    prompt: str,
     generated: str,
     probe_in_progress_event: asyncio.Event,
     max_tokens: int = 32,
 ):
-    
     try:
         text = format_prompt(prompt, generated)
         probe_response = await client.completions.create(
@@ -48,7 +50,7 @@ async def execute_single_probe(
 async def main():
     client = AsyncOpenAI(  # Changed to AsyncOpenAI
         api_key="EMPTY",  # Using default empty key for local server
-        base_url="http://localhost:8080/v1", 
+        base_url="http://localhost:8080/v1",
         max_retries=1
     )
 
@@ -61,12 +63,12 @@ async def main():
     user_messages = [
         {"role": "system", "content": sys},
         # {"role": "user", "content": "What is 2+2?"} # Shorter query for testing without probes
-        {"role": "user", "content": prompt} # Longer query
+        {"role": "user", "content": prompt}  # Longer query
     ]
     _response_stream = client.chat.completions.create(
         messages=user_messages,
         model=model_id,
-        max_tokens=1024, # Reduced for testing
+        max_tokens=1024,  # Reduced for testing
         stream=True,
         extra_body=dict(
             dynasor=dict(
@@ -75,7 +77,6 @@ async def main():
         )
     )
     response_stream = await _response_stream
-    
 
     probe_task: Optional[asyncio.Task] = None
     probe_in_progress_event = asyncio.Event()
@@ -92,7 +93,7 @@ async def main():
             generated_text += text
             print(text, end="", flush=True)
             chunks_processed += 1
-        
+
         if chunks_processed > 0 and chunks_processed % 32 == 0:
             should_launch_next_probe = True
             pass
@@ -108,11 +109,11 @@ async def main():
                 probe_in_progress_event.set()
                 probe_task = asyncio.create_task(
                     execute_single_probe(
-                        client, 
-                        model_id, 
-                        prompt, 
+                        client,
+                        model_id,
+                        prompt,
                         generated_text,
-                        probe_in_progress_event, 
+                        probe_in_progress_event,
                         max_tokens=32,
                     )
                 )

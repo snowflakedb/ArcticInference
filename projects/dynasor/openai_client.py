@@ -16,9 +16,9 @@
 """Dynasor OpenAI client API example"""
 
 import argparse
+import logging
 from openai import OpenAI
 
-import logging
 
 def init_logger():
     logger = logging.getLogger(__name__)
@@ -29,6 +29,7 @@ def init_logger():
     handler.setFormatter(formatter)
     logger.addHandler(handler)
     return logger
+
 
 logger = init_logger()
 
@@ -48,7 +49,7 @@ def parse_args():
         help="Disable Dynasor"
     )
     parser.add_argument(
-        "--probe-interval", 
+        "--probe-interval",
         type=int,
         default=32,
         help="Probe interval for adaptive compute"
@@ -104,7 +105,6 @@ def main():
         stream=stream,
     )
 
-    
     print("Prompt: ", args.prompt)
     print("-" * 10)
     print("Response: \n")

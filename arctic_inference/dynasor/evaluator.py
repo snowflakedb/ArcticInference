@@ -19,14 +19,13 @@
 
 import multiprocessing
 import re
-from math import isclose
-from typing import Union
-
 import regex
 from latex2sympy2 import latex2sympy
+from math import isclose
 from sympy import simplify, N
 from sympy.parsing.latex import parse_latex
 from sympy.parsing.sympy_parser import parse_expr
+from typing import Union
 from word2number import w2n
 
 
@@ -665,29 +664,29 @@ def math_equal(
             or prediction.startswith("\\begin{bmatrix}")
         )
         and (
-            prediction.endswith("\\end{pmatrix}")
-            or prediction.endswith("\\end{bmatrix}")
-        )
+        prediction.endswith("\\end{pmatrix}")
+        or prediction.endswith("\\end{bmatrix}")
+    )
         and (
-            reference.startswith("\\begin{pmatrix}")
-            or reference.startswith("\\begin{bmatrix}")
-        )
+        reference.startswith("\\begin{pmatrix}")
+        or reference.startswith("\\begin{bmatrix}")
+    )
         and (
-            reference.endswith("\\end{pmatrix}") or reference.endswith("\\end{bmatrix}")
-        )
+        reference.endswith("\\end{pmatrix}") or reference.endswith("\\end{bmatrix}")
+    )
     ):
         pred_lines = [
             line.strip()
             for line in prediction[
-                len("\\begin{pmatrix}") : -len("\\end{pmatrix}")
-            ].split("\\\\")
+                        len("\\begin{pmatrix}"): -len("\\end{pmatrix}")
+                        ].split("\\\\")
             if line.strip()
         ]
         ref_lines = [
             line.strip()
             for line in reference[
-                len("\\begin{pmatrix}") : -len("\\end{pmatrix}")
-            ].split("\\\\")
+                        len("\\begin{pmatrix}"): -len("\\end{pmatrix}")
+                        ].split("\\\\")
             if line.strip()
         ]
         matched = True

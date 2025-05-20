@@ -21,7 +21,8 @@ uncertain_words = ["wait", "hold", "but", "okay", "no", "hmm"]
 sys = f"You are a helpful assistant."
 default_probeing_suffix = "... Oh, I suddenly got the answer to the whole problem, **Final Answer**\n\n\\[ \\boxed{"
 
-# TODO: Generalize this to other models. 
+
+# TODO: Generalize this to other models.
 # The problem is that only the model with known template can properly use this function.
 def format_prompt_for_completions(prompt: str, generated: str) -> str:
     # probe = ""
@@ -32,6 +33,7 @@ def format_prompt_for_completions(prompt: str, generated: str) -> str:
     # probe += " "
     text = f"<｜begin▁of▁sentence｜>{sys}<｜User｜>{prompt}<｜Assistant｜><think>\n{generated} {default_probeing_suffix}"
     return text
+
 
 def formalize_final_response(generated_text: str, answer: str) -> str:
     if "</think>" in generated_text:
@@ -68,6 +70,7 @@ def obtain_answer(s):
             stack.pop()
     return ""
 
+
 # TODO: Test stopping condition
 def openai_chat_completion_stream(
     client,
@@ -81,7 +84,7 @@ def openai_chat_completion_stream(
     print("dynasor_saving_effort:", dynasor_saving_effort)
 
     assert max_tokens is not None, "max_tokens must be provided"
-    
+
     if dynasor_saving_effort is not None:
         threshold, chunk_size = dynasor_saving_effort
         accumulated_response = ""
@@ -188,13 +191,15 @@ def openai_chat_completion_stream(
                 append_answer = True
                 # TODO: Make the probe customizable
                 if "</think>" in accumulated_response:
-                    yield "\n\n... Oh, I have got the answer to the whole problem\n**Final Answer:**\n\\[\n \\boxed{" + probe_answers[
-                        -1
-                    ] + "}\n\\]"
+                    yield "\n\n... Oh, I have got the answer to the whole problem\n**Final Answer:**\n\\[\n \\boxed{" + \
+                        probe_answers[
+                            -1
+                        ] + "}\n\\]"
                 else:
-                    yield "\n\n...</think>\n Oh, I have got the answer to the whole problem\n**Final Answer:**\n\\[\n \\boxed{" + probe_answers[
-                        -1
-                    ] + "}\n\\]"
+                    yield "\n\n...</think>\n Oh, I have got the answer to the whole problem\n**Final Answer:**\n\\[\n \\boxed{" + \
+                        probe_answers[
+                            -1
+                        ] + "}\n\\]"
                 break
 
     else:
