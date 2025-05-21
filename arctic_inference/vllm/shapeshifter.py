@@ -74,12 +74,12 @@ class ShapeShifterFP8LinearMethod(ArcticPatch[Fp8LinearMethod]):
         sp_size = parallel_state._SP.world_size
         sp_rank = parallel_state._SP.rank_in_group
         output_partition_sizes = layer.logical_widths
-        if output_partition_sizes == [layer.weight.shape[1]]:
+        if isinstance(layer, RowParallelLinear):
             assert layer.weight.shape[0] % sp_size == 0
             chunk_size = layer.weight.shape[0] // sp_size
             self.sp_tp_weight = layer.weight.split(
                 chunk_size, dim=0)[sp_rank].t().contiguous().t()
-        else:
+        elif isinstance(layer, ColumnParallelLinear):
             assert layer.weight.shape[1] % sp_size == 0
             chunk_sizes = []
             for size in output_partition_sizes:
@@ -89,6 +89,9 @@ class ShapeShifterFP8LinearMethod(ArcticPatch[Fp8LinearMethod]):
             self.sp_tp_weight = torch.cat(
                 [split[i] for i in range(sp_rank, len(split), sp_size)],
                 dim=1).t().contiguous().t()
+        else:
+            # replicated linear
+            self.sp_tp_weight = layer.weight
 
         # print (remove later)
         if parallel_state._SP.rank == 0:
@@ -160,13 +163,13 @@ class ShapeShifterUnquantizedLinearMethod(ArcticPatch[UnquantizedLinearMethod]):
         output_partition_sizes = self.output_partition_sizes
         sp_size = parallel_state._SP.world_size
         sp_rank = parallel_state._SP.rank_in_group
-        if output_partition_sizes == [layer.weight.shape[0]]:
+        if isinstance(layer, RowParallelLinear):
             # row parallel linear
             assert layer.weight.shape[1] % sp_size == 0
             chunk_size = layer.weight.shape[1] // sp_size
             self.sp_tp_weight = layer.weight.split(
                 chunk_size, dim=1)[sp_rank].contiguous()
-        else:
+        elif isinstance(layer, ColumnParallelLinear):
             # column parallel linear
             assert layer.weight.shape[0] % sp_size == 0
             chunk_sizes = []
@@ -176,6 +179,9 @@ class ShapeShifterUnquantizedLinearMethod(ArcticPatch[UnquantizedLinearMethod]):
             split = layer.weight.split(chunk_sizes, dim=0)
             self.sp_tp_weight = torch.cat(
                 [split[i] for i in range(sp_rank, len(split), sp_size)])
+        else:
+            # replicated linear
+            self.sp_tp_weight = layer.weight
 
         # print (remove later)
         if torch.distributed.get_rank() == 0:
@@ -279,9 +285,9 @@ class ShapeShifterLlamaAttention(ArcticPatch[LlamaAttention]):
         hidden_states: torch.Tensor,
     ) -> torch.Tensor:
         qkv, _ = self.qkv_proj(hidden_states)
-        from .model_runner import SP_TP_MODE
+        import arctic_inference.vllm.model_runner as model_runner
         SP = parallel_state._SP.world_size
-        if SP_TP_MODE:
+        if model_runner.SP_TP_MODE:
             q_size = self.q_size // SP
             kv_size = self.kv_size // SP
         else:
@@ -712,7 +718,6 @@ class UlyssesFlashAttentionImplPatch(ArcticPatch[FlashAttentionImpl]):
             v_ = value.reshape(-1, self.num_kv_heads, self.head_size)
             c_ = output.reshape(-1, self.num_heads, self.head_size)
         else:
-            # pack
             qkv = torch.cat(
                 (query.view(-1, self.SP, self.num_heads * self.head_size),
                  key.view(-1, self.SP, self.num_kv_heads * self.head_size),

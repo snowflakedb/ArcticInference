@@ -18,7 +18,16 @@ from vllm import LLM, SamplingParams
 
 vllm.plugins.load_general_plugins()
 
-llm = LLM(model="Snowflake/Llama-3.1-SwiftKV-8B-Instruct")
+llm = LLM(
+    model="Snowflake/Llama-3.1-SwiftKV-8B-Instruct",
+    #model="/checkpoint/llama3.3_70b_swiftkv_16bit",
+    tensor_parallel_size=1,
+    sequence_parallel_size=4,
+    shapeshifter_threshold=512,
+    seed=0,
+    distributed_executor_backend="mp",
+    quantization="fp8",
+)
 
 print("=" * 80)
 
@@ -37,7 +46,7 @@ conversation = [
     },
 ]
 
-sampling_params = SamplingParams(temperature=0.1, max_tokens=800)
+sampling_params = SamplingParams(temperature=0, max_tokens=800)
 
 outputs = llm.chat(conversation, sampling_params=sampling_params)
 

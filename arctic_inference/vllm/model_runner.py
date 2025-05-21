@@ -19,6 +19,7 @@ from typing import List, Union, Optional, TYPE_CHECKING
 import numpy as np
 import torch
 import torch.nn as nn
+import vllm.distributed.parallel_state as parallel_state
 from vllm.config import CompilationLevel
 from vllm.distributed.parallel_state import get_pp_group, graph_capture
 from vllm.forward_context import set_forward_context
@@ -150,13 +151,18 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 if SP_TP_PROFILE_RUN:
                     SP_TP_MODE = False
                 output = model_forward(*args, **kwargs)
-                # all-gather model_output
-                model_output = torch.empty((N, self.model.config.hidden_size),
-                                           dtype=output.dtype,
-                                           device=output.device)
-                torch.distributed.all_gather_into_tensor(model_output,
-                                                         output,
-                                                         group=device_group)
+                if output.size(0) == N_ulysses: # not SP_TP_MODE:
+                    # all-gather model_output
+                    model_output = torch.empty((N, self.model.config.hidden_size),
+                                            dtype=output.dtype,
+                                            device=output.device)
+                    torch.distributed.all_gather_into_tensor(model_output,
+                                                            output,
+                                                            group=device_group)
+                else:
+                    # SwiftKV models will already have all-gathered the output.
+                    assert output.size(0) == N
+                    model_output = output
             return model_output
 
         self.model.forward = ulysses_forward
@@ -610,7 +616,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         # Trigger CUDA graph capture for specific shapes.
         # Capture the large shapes first so that the smaller shapes
         # can reuse the memory pool allocated for the large shapes.
-        with graph_capture(device=self.device):
+        with parallel_state.graph_capture(device=self.device):
             sp_tp_threshold = self.parallel_config.shapeshifter_threshold
             for num_tokens in reversed(self.cudagraph_batch_sizes):
                 SP = self.parallel_config.sequence_parallel_size
