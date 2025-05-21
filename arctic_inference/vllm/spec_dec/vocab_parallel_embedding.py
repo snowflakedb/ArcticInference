@@ -212,9 +212,11 @@ class VocabParallelEmbedding(torch.nn.Module):
                  skip_quantization: bool = True):
         super().__init__()
 
+        from vllm.distributed.parallel_state import (_TP, _SP)
         # Keep the input dimensions.
-        tp_rank = get_tensor_model_parallel_rank()
-        self.tp_size = get_tensor_model_parallel_world_size()
+        tp_rank = _TP.rank
+        self.tp_size = _TP.world_size * _SP.world_size
+                   
         self.num_embeddings = num_embeddings
         self.padding_size = padding_size
         self.org_vocab_size = org_num_embeddings or num_embeddings

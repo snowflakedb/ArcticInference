@@ -23,9 +23,8 @@ import torch.nn as nn
 from vllm.config import VllmConfig
 from arctic_inference.vllm.spec_dec.logits_processor_opt import LogitsProcessorOpt
 from vllm.model_executor.layers.sampler import SamplerOutput, get_sampler
-
-from arctic_inference.vllm.spec_dec.fp8 import (Fp8ConfigWithEmbedding, 
-                                                OriginalFp8LinearMethod)
+from vllm.model_executor.layers.quantization.fp8 import Fp8LinearMethod
+from arctic_inference.vllm.spec_dec.fp8 import Fp8ConfigWithEmbedding
 from arctic_inference.vllm.spec_dec.vocab_parallel_embedding import (
     ParallelLMHead,
     VocabParallelEmbedding,
@@ -155,7 +154,7 @@ class ArcticMLPSpeculator(nn.Module):
                     quant_config=quant_config,
                     skip_quantization=False,
                 )
-                qhead.quant_method = OriginalFp8LinearMethod(quant_config=quant_config)
+                qhead.quant_method = Fp8LinearMethod(quant_config=quant_config)
                 self.qhead = nn.ModuleList([qhead] * self.max_speculative_tokens)
 
             ln = MLPSpeculatorLayerNorm(
@@ -459,7 +458,7 @@ class ArcticLSTMSpeculator(nn.Module):
                     quant_config=quant_config,
                     skip_quantization=False,
                 )
-                qhead.quant_method = OriginalFp8LinearMethod(quant_config=quant_config)
+                qhead.quant_method = Fp8LinearMethod(quant_config=quant_config)
                 self.qhead = nn.ModuleList([qhead] * self.max_speculative_tokens)
         else:
             self.head = nn.ModuleList(
@@ -598,34 +597,32 @@ class ArcticLSTMSpeculator(nn.Module):
 
         self.cuda_graph_max_batch_size = 0
         self.cuda_graph_mode = False
-
-        self.cuda_graph_max_batch_size = padding_size(
-            vllm_config.scheduler_config.max_num_seqs
-        )
-        self.static_cuda_buffers = {
-            "last_tokens": torch.empty(
-                self.cuda_graph_max_batch_size, 1, dtype=torch.long
-            ),
-            "previous_hidden_states": torch.empty(
-                self.cuda_graph_max_batch_size, 1, self.input_hidden_dim
-            ),
-            "cell_states": torch.empty(
-                self.cuda_graph_max_batch_size, 1, self.inner_dim[-1]
-            ),
-            "next_tokens": [
-                torch.empty(self.cuda_graph_max_batch_size, 1, dtype=torch.long)
-                for _ in range(self.n_predict)
-            ],
-        }
-        if self.inner_dim[-1] != self.input_hidden_dim:
-            print("CREATED NEXT PREVIOUS HIDDEN STATES")
-            self.static_cuda_buffers["next_previous_hidden_states"] = torch.empty(
-                self.cuda_graph_max_batch_size, 1, self.inner_dim[-1]
-            )
-
         if not vllm_config.model_config.enforce_eager:
             self.cuda_graph_mode = True
             self.cuda_graphs = {}
+            self.cuda_graph_max_batch_size = padding_size(
+                vllm_config.scheduler_config.max_num_seqs
+            )
+            self.static_cuda_buffers = {
+                "last_tokens": torch.empty(
+                    self.cuda_graph_max_batch_size, 1, dtype=torch.long
+                ),
+                "previous_hidden_states": torch.empty(
+                    self.cuda_graph_max_batch_size, 1, self.input_hidden_dim
+                ),
+                "cell_states": torch.empty(
+                    self.cuda_graph_max_batch_size, 1, self.inner_dim[-1]
+                ),
+                "next_tokens": [
+                    torch.empty(self.cuda_graph_max_batch_size, 1, dtype=torch.long)
+                    for _ in range(self.n_predict)
+                ],
+            }
+            if self.inner_dim[-1] != self.input_hidden_dim:
+                print("CREATED NEXT PREVIOUS HIDDEN STATES")
+                self.static_cuda_buffers["next_previous_hidden_states"] = torch.empty(
+                    self.cuda_graph_max_batch_size, 1, self.inner_dim[-1]
+                )
 
     def _prepare_cuda_graph_ios(
         self,
@@ -642,7 +639,7 @@ class ArcticLSTMSpeculator(nn.Module):
         if previous_hidden_states is not None:
             hidden_state_buffers[:size] = previous_hidden_states
 
-        padded_size = padding_size(size) if self.cuda_graph_mode else size
+        padded_size = padding_size(size)
 
         static_last_tokens = self.static_cuda_buffers["last_tokens"][:padded_size]
         static_hidden_states = hidden_state_buffers[:padded_size]
@@ -787,34 +784,34 @@ class ArcticLSTMSpeculator(nn.Module):
         static_last_tokens = None
         static_hidden_states = None
 
-        static_states = self.static_cuda_buffers["previous_hidden_states"]
-        if self.method == "sum_lstm":
-            previous_cell_states = torch.zeros(
-                state_shapes,
-                device=previous_hidden_states.device,
-                dtype=previous_hidden_states.dtype,
-            )
-            (
-                padded_size,
-                static_last_tokens,
-                static_hidden_states,
-                static_cell_states,
-            ) = self._prepare_cuda_graph_ios(
-                batch_size,
-                last_tokens,
-                previous_hidden_states,
-                static_states,
-                previous_cell_states,
-                use_lstm=True,
-            )
-        else:
-            padded_size, static_last_tokens, static_hidden_states = (
-                self._prepare_cuda_graph_ios(
-                    batch_size, last_tokens, previous_hidden_states, static_states
-                )
-            )
-
         if self.cuda_graph_mode and batch_size <= self.cuda_graph_max_batch_size:
+            static_states = self.static_cuda_buffers["previous_hidden_states"]
+            if self.method == "sum_lstm":
+                previous_cell_states = torch.zeros(
+                    state_shapes,
+                    device=previous_hidden_states.device,
+                    dtype=previous_hidden_states.dtype,
+                )
+                (
+                    padded_size,
+                    static_last_tokens,
+                    static_hidden_states,
+                    static_cell_states,
+                ) = self._prepare_cuda_graph_ios(
+                    batch_size,
+                    last_tokens,
+                    previous_hidden_states,
+                    static_states,
+                    previous_cell_states,
+                    use_lstm=True,
+                )
+            else:
+                padded_size, static_last_tokens, static_hidden_states = (
+                    self._prepare_cuda_graph_ios(
+                        batch_size, last_tokens, previous_hidden_states, static_states
+                    )
+                )
+
             cg_key = _generate_cg_key(padded_size, 0)
             g = self.cuda_graphs.get(cg_key)
 
