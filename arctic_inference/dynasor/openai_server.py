@@ -65,7 +65,7 @@ class ProxyConfig:
     api_key: str = "EMPTY"
 
 
-def parse_args() -> ProxyConfig:
+def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="OpenAI API Proxy Server")
     parser.add_argument(
         "--host",
@@ -85,7 +85,13 @@ def parse_args() -> ProxyConfig:
         default="http://localhost:8000",
         help="Base URL of the target OpenAI API server (default: http://localhost:8000)",
     )
-    args = parser.parse_args()
+    return parser
+
+    
+
+def parse_args(args_=None) -> ProxyConfig:
+    parser = make_parser()
+    args = parser.parse_args(args=args_)
     return ProxyConfig(
         host=args.host,
         port=args.port,
@@ -97,6 +103,11 @@ app = FastAPI()
 
 # Initialize with None, will be set during startup
 config: Optional[ProxyConfig] = None
+
+
+def set_config(c: ProxyConfig):
+    global config
+    config = c
 
 
 async def execute_single_probe(
