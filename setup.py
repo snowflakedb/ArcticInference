@@ -19,6 +19,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import torch
+
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 
@@ -135,29 +137,53 @@ class CMakeBuild(build_ext):
         )
 
 def build_custom_kernels():
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    custom_ops_dir = os.path.join(current_dir, "csrc", "custom_ops")
-    build_dir = os.path.join(custom_ops_dir, "build")
+    compiled_lib_filename = "libCustomOps.so"
+    c_source_base_subdir = "csrc"
+    custom_ops_module_subdir = "custom_ops"
+    build_artefacts_subdir = "build"
+    python_lib_import_subdir = "arctic_inference"
 
-    main_dir = os.path.join(current_dir, "arctic_inference")
+    try:
+        project_root_dir = Path(__file__).resolve().parent
+    except NameError:
+        print(
+            "Warning: __file__ is not defined. Using current working directory as project_root_dir. "
+            "Ensure this is the correct root for 'csrc' and 'arctic_inference' directories."
+        )
+        project_root_dir = Path.cwd()
 
-    os.makedirs(build_dir, exist_ok=True)
+    cpp_custom_ops_source_dir = project_root_dir / c_source_base_subdir / custom_ops_module_subdir
+    build_output_dir = cpp_custom_ops_source_dir / build_artefacts_subdir
+    symlink_destination_dir = project_root_dir / python_lib_import_subdir
 
-    os.chdir(build_dir)
-    subprocess.run(["cmake", ".."], check=True)
-    num_cores = os.cpu_count() or 1
-    subprocess.run(["make", f"-j{num_cores}"], check=True)
-    os.chdir(current_dir)
+    build_output_dir.mkdir(parents=True, exist_ok=True)
+    symlink_destination_dir.mkdir(parents=True, exist_ok=True)
 
-    lib_path = os.path.join(build_dir, "libCustomOps.so")
-   
-    os.makedirs(main_dir, exist_ok=True)
-    main_lib_path = os.path.join(main_dir, "libCustomOps.so")
-    if os.path.exists(main_lib_path):
-        os.remove(main_lib_path)
-    os.symlink(lib_path, main_lib_path)
-    
-    return main_lib_path
+    torch_cmake_prefix = torch.utils.cmake_prefix_path
+
+    cmake_configure_command = [
+        "cmake",
+        f"-DTORCH_CMAKE_PREFIX_PATH={torch_cmake_prefix}",
+        ".."
+    ]
+    subprocess.run(cmake_configure_command, cwd=build_output_dir, check=True)
+
+    num_cpu_cores = os.cpu_count() or 1
+    make_build_command = ["make", f"-j{num_cpu_cores}"]
+    subprocess.run(make_build_command, cwd=build_output_dir, check=True)
+
+    compiled_library_file_path = build_output_dir / compiled_lib_filename
+    symlink_path_for_python_usage = symlink_destination_dir / compiled_lib_filename
+
+    try:
+        symlink_path_for_python_usage.unlink(missing_ok=True)
+    except TypeError:
+        if symlink_path_for_python_usage.exists() or symlink_path_for_python_usage.is_symlink():
+            symlink_path_for_python_usage.unlink()
+
+    symlink_path_for_python_usage.symlink_to(compiled_library_file_path)
+
+    return str(symlink_path_for_python_usage.resolve())
 
 
 setup(
