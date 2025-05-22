@@ -4,11 +4,6 @@
 
 TORCH_LIBRARY(arctic_inference, ops) {
   ops.def(
-      "copy_caches_with_index(Tensor(a!)[] src_caches, Tensor[](b!) dst_caches, "
-      "Tensor shared_indices) -> ()");
-  ops.impl("copy_caches_with_index", torch::kCUDA, &copy_caches_with_index);
-
-  ops.def(
       "reshape_and_cache_flash_bulk(Tensor keys,"
       "                             Tensor values,"
       "                             Tensor(c!)[] key_caches," 

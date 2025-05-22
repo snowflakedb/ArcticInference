@@ -6,12 +6,6 @@
 #include <torch/all.h>
 #include <torch/library.h>
 
-void copy_caches_with_index(
-    std::vector<torch::Tensor> const& src_caches,
-    std::vector<torch::Tensor> const& dst_caches,
-    const torch::Tensor& shared_indices
-);
-
 void reshape_and_cache_flash_bulk(
     torch::Tensor& keys, 
     torch::Tensor& values,

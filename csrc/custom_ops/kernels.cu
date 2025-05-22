@@ -9,30 +9,6 @@
 
 namespace vllm {
 
-template <typename scalar_t>
-__global__ void copy_caches_with_index_kernel(int64_t* src_cache_ptrs,
-                                              int64_t* dst_cache_ptrs,
-                                              const int64_t* __restrict__ shared_indices,
-                                              const int numel_per_cache) {
-  const int cache_idx = blockIdx.x;
-  const int dst_row_idx = blockIdx.y;
-  const int src_row_idx = shared_indices[dst_row_idx];
-
-  scalar_t* src_cache = 
-      reinterpret_cast<scalar_t*>(src_cache_ptrs[cache_idx]);
-  scalar_t* dst_cache =
-      reinterpret_cast<scalar_t*>(dst_cache_ptrs[cache_idx]);
-
-  const int64_t src_cache_offset = src_row_idx * numel_per_cache;
-  const int64_t dst_cache_offset = dst_row_idx * numel_per_cache;
-
-  for (int i = threadIdx.x; i < numel_per_cache; i += blockDim.x) {
-    int64_t src_offset = src_cache_offset + i;
-    int64_t dst_offset = dst_cache_offset + i;
-    dst_cache[dst_offset] = src_cache[src_offset];
-  }
-}
-
 template <typename scalar_t, 
           typename cache_t, 
           Fp8KVCacheDataType kv_dt>
@@ -93,54 +69,6 @@ __global__ void reshape_and_cache_flash_bulk_kernel(
 }
 
 } // namespace vllm
-
-void copy_caches_with_index(std::vector<torch::Tensor> const& src_caches,
-                            std::vector<torch::Tensor> const& dst_caches,
-                            const torch::Tensor& shared_indices) {
-  const int num_caches = src_caches.size();
-  TORCH_CHECK(num_caches == dst_caches.size());
-  if (num_caches == 0) {
-    return;
-  }
-
-  torch::Device cache_device = src_caches[0].device();
-  TORCH_CHECK(cache_device.is_cuda());
-
-  int64_t src_cache_ptrs[num_caches];
-  int64_t dst_cache_ptrs[num_caches];
-  for (int cache_idx = 0; cache_idx < num_caches; ++cache_idx) {
-    src_cache_ptrs[cache_idx] =
-        reinterpret_cast<int64_t>(src_caches[cache_idx].data_ptr());
-    dst_cache_ptrs[cache_idx] =
-        reinterpret_cast<int64_t>(dst_caches[cache_idx].data_ptr());
-  }
-
-  int num_indices = shared_indices.size(0);
-
-  // Move the data structures to the GPU.
-  // NOTE: This synchronizes the CPU and GPU.
-  torch::Tensor src_cache_ptrs_tensor =
-      torch::from_blob(src_cache_ptrs, {num_caches}, torch::kInt64)
-          .to(cache_device);
-  torch::Tensor dst_cache_ptrs_tensor =
-      torch::from_blob(dst_cache_ptrs, {num_caches}, torch::kInt64)
-          .to(cache_device);
-
-  // Launch the kernel.
-  const int numel_per_cache = src_caches[0][0].numel();
-  printf("numel_per_cache: %d\n", numel_per_cache);
-  dim3 grid(num_caches, num_indices);
-  dim3 block(std::min(1024, numel_per_cache));
-  const at::cuda::OptionalCUDAGuard device_guard(cache_device);
-  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  VLLM_DISPATCH_FLOATING_AND_BYTE_TYPES(
-      src_caches[0].scalar_type(), "copy_caches_with_index_kernel", ([&] {
-        vllm::copy_caches_with_index_kernel<scalar_t><<<grid, block, 0, stream>>>(
-            src_cache_ptrs_tensor.data_ptr<int64_t>(),
-            dst_cache_ptrs_tensor.data_ptr<int64_t>(),
-            shared_indices.data_ptr<int64_t>(), numel_per_cache);
-      }));
-}
 
 #define CALL_RESHAPE_AND_CACHE_FLASH_BULK(KV_T, CACHE_T, KV_DTYPE)       \
   vllm::reshape_and_cache_flash_bulk_kernel<KV_T, CACHE_T, KV_DTYPE>     \
