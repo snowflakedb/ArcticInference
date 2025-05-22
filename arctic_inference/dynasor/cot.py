@@ -25,12 +25,6 @@ default_probing_suffix = "... Oh, I suddenly got the answer to the whole problem
 # TODO: Generalize this to other models.
 # The problem is that only the model with known template can properly use this function.
 def format_prompt_for_completions(prompt: str, generated: str) -> str:
-    # probe = ""
-    # if "</think>" not in generated:
-    #     probe += "\n\n...</think>\n"
-    # else:
-    #     probe += "\n\n..."
-    # probe += " "
     text = f"<｜begin▁of▁sentence｜>{sys}<｜User｜>{prompt}<｜Assistant｜><think>\n{generated} {default_probing_suffix}"
     return text
 
