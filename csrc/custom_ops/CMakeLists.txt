@@ -5,14 +5,15 @@ project(CustomOps CXX CUDA)
 find_package(CUDA REQUIRED)
 
 set(TORCH_CUDA_ARCH_LIST "7.0 7.5 8.0 8.6 8.9 9.0+PTX")
-# export PATH=$PATH:<your-path-to>/lib/python3.xx/site-packages/torch/share/cmake
+
+message(STATUS "TORCH_CMAKE_PREFIX_PATH: ${TORCH_CMAKE_PREFIX_PATH}")
+
+list(APPEND CMAKE_PREFIX_PATH ${TORCH_CMAKE_PREFIX_PATH})
 find_package(Torch REQUIRED)
 
 add_library(CustomOps SHARED
   kernels.cu
   torch_bindings.cpp)
-
-set(CMAKE_CUDA_ARCHITECTURES 90)
 
 set_property(TARGET CustomOps PROPERTY CXX_STANDARD 17)
 
