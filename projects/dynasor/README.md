@@ -14,7 +14,8 @@ Start an arctic inference server:
 ```bash
 python -m arctic_inference.dynasor.vllm_server \
 --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B  \
--tp 1 --enable-chunked-prefill --enforce-eager
+-tp 1 --enable-chunked-prefill --enforce-eager \
+--port 8080
 ```
 
 Start the vLLM client:

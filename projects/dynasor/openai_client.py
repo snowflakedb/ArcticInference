@@ -38,7 +38,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="OpenAI Chat Client")
     parser.add_argument("--api-key", default="EMPTY", help="OpenAI API key")
     parser.add_argument(
-        "--base-url", default="http://localhost:8001/v1", help="OpenAI API base URL"
+        "--base-url", default="http://localhost:8000/v1", help="OpenAI API base URL"
     )
     parser.add_argument(
         "--max-tokens", type=int, default=2048, help="Maximum tokens for completion"
