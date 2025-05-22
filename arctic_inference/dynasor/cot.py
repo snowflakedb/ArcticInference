@@ -37,23 +37,8 @@ def formalize_final_response(generated_text: str, answer: str) -> str:
     return output_text
 
 
-def effort_level(effort_level: str) -> int:
-    if effort_level == "mild":
-        return (8, 64)
-    elif effort_level == "low":
-        return (5, 64)
-    elif effort_level == "mid":
-        return (3, 64)
-    elif effort_level == "high":
-        return (2, 64)
-    elif effort_level == "crazy":
-        return (2, 32)
-    else:
-        raise ValueError(f"Invalid effort level: {effort_level}")
-
-
 def obtain_answer(s):
-    # Find first unpaired } by counting { and }
+    """# Find first unpaired } by counting { and }"""
     stack = []
     for i, c in enumerate(s):
         if c == "{":
