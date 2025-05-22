@@ -760,7 +760,7 @@ def count_not_empty(answers):
     return sum(1 for answer in answers if answer != "")
 
 
-def eqaul_group(answers):
+def equal_group(answers):
     equiv_classes = []
 
     for answer in answers:

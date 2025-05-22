@@ -15,11 +15,11 @@
 
 from typing import Optional
 
-from arctic_inference.dynasor.evaluator import count_not_empty, eqaul_group
+from arctic_inference.dynasor.evaluator import count_not_empty, equal_group
 
 uncertain_words = ["wait", "hold", "but", "okay", "no", "hmm"]
 sys = f"You are a helpful assistant."
-default_probeing_suffix = "... Oh, I suddenly got the answer to the whole problem, **Final Answer**\n\n\\[ \\boxed{"
+default_probing_suffix = "... Oh, I suddenly got the answer to the whole problem, **Final Answer**\n\n\\[ \\boxed{"
 
 
 # TODO: Generalize this to other models.
@@ -31,7 +31,7 @@ def format_prompt_for_completions(prompt: str, generated: str) -> str:
     # else:
     #     probe += "\n\n..."
     # probe += " "
-    text = f"<｜begin▁of▁sentence｜>{sys}<｜User｜>{prompt}<｜Assistant｜><think>\n{generated} {default_probeing_suffix}"
+    text = f"<｜begin▁of▁sentence｜>{sys}<｜User｜>{prompt}<｜Assistant｜><think>\n{generated} {default_probing_suffix}"
     return text
 
 
@@ -79,10 +79,8 @@ def openai_chat_completion_stream(
     temperature: float = 0.7,
     max_tokens: Optional[int] = 2048,
     dynasor_saving_effort: tuple = None,
-    probeing_suffix: str = default_probeing_suffix,
+    probing_suffix: str = default_probing_suffix,
 ):
-    print("dynasor_saving_effort:", dynasor_saving_effort)
-
     assert max_tokens is not None, "max_tokens must be provided"
 
     if dynasor_saving_effort is not None:
@@ -100,7 +98,7 @@ def openai_chat_completion_stream(
                 probe = client.completions.create(
                     model=model,
                     temperature=0.6,
-                    prompt=current_prompt + probeing_suffix,
+                    prompt=current_prompt + probing_suffix,
                     stream=True,
                     max_tokens=20,
                     top_p=0.95,
@@ -115,26 +113,6 @@ def openai_chat_completion_stream(
                 max_tokens=chunk_size,
                 stream=True,
             )
-
-            # for chunk in api_response:
-            #     if (
-            #         hasattr(chunk.choices[0], "text")
-            #         and chunk.choices[0].text is not None
-            #     ):
-            #         content = chunk.choices[0].text
-            #         buffer += content
-            #         if " " in buffer or "\n" in buffer:
-            #             # if console:
-            #             #    console.print(buffer, end='')
-            #             yield buffer
-            #             accumulated_response += buffer
-            #             result += buffer
-            #             buffer = ""
-            # if buffer:
-            #     yield buffer
-            #     accumulated_response += buffer
-            #     # console.print(buffer, end='')
-            #     result += buffer
 
             for chunk in api_response:
                 if (
@@ -179,7 +157,7 @@ def openai_chat_completion_stream(
 
             if (
                 not adaptive_end
-                and eqaul_group(probe_answers[-threshold:])
+                and equal_group(probe_answers[-threshold:])
                 and count_not_empty(probe_answers[-threshold:]) == threshold
                 and sum(probe_certain_count) == threshold
             ):

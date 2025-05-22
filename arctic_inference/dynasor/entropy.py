@@ -52,7 +52,7 @@ def count_not_empty(answers):
     return sum(1 for answer in answers if answer != "")
 
 
-def eqaul_group(answers):
+def equal_group(answers):
     equiv_classes = []
 
     for answer in answers:
@@ -94,7 +94,7 @@ def majority_voting(answers):
     return max_rep
 
 
-def obtaint_answer(s):
+def obtain_answer(s):
     # Find first unpaired } by counting { and }
     stack = []
     for i, c in enumerate(s):
@@ -105,10 +105,6 @@ def obtaint_answer(s):
                 return s[:i]
             stack.pop()
     return ""
-
-
-def obtain_answer(s):
-    return obtaint_answer(s)
 
 
 uncertain_words = ["wait", "hold", "but", "okay", "no", "hmm"]
@@ -155,7 +151,7 @@ def should_early_exit(
     # The last answer window should be consistent
     answer_candidates = answers[-continue_certain_bar:]
     is_certains = is_certains[-continue_certain_bar:]
-    if eqaul_group(answer_candidates):
+    if equal_group(answer_candidates):
         if count_not_empty(answer_candidates) == continue_certain_bar:
             if sum(is_certains) == continue_certain_bar:
                 # logger.debug(f"Early exit on: {answer_candidates = } ({is_certains = })")

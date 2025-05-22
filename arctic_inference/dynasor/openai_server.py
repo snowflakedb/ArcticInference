@@ -38,9 +38,9 @@ from typing import Optional
 
 from arctic_inference.dynasor.cot import (
     obtain_answer, formalize_final_response,
-    uncertain_words, default_probeing_suffix, format_prompt_for_completions,
+    uncertain_words, default_probing_suffix, format_prompt_for_completions,
 )
-from arctic_inference.dynasor.evaluator import count_not_empty, eqaul_group
+from arctic_inference.dynasor.evaluator import count_not_empty, equal_group
 
 
 def init_logger():
@@ -229,7 +229,7 @@ async def handle_chat_completion_request(
                 not any(word in res.lower() for word in uncertain_words)
                 for res in probe_responses[-certainty_window:]
             ]
-            is_group_equal = eqaul_group(probe_answers[-certainty_window:])
+            is_group_equal = equal_group(probe_answers[-certainty_window:])
             count_not_empty_count = count_not_empty(probe_answers[-certainty_window:])
 
             if (
