@@ -138,11 +138,17 @@ async def handle_chat_completion_request(
     request: Request,
     path: str
 ) -> StreamingResponse:
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        api_key = auth_header.split(" ")[1]
+    else:
+        api_key = config.api_key  # Fallback to default
+
     body = await request.body()
     body_json = json.loads(body) if body else {}
 
     client = AsyncOpenAI(
-        api_key=config.api_key,
+        api_key=api_key,
         base_url=f"{config.target_base_url}/v1",
         max_retries=1
     )
