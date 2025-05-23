@@ -53,6 +53,8 @@ If your favorite model is not already available as a `SwiftKV-compatible model
 <https://huggingface.co/collections/Snowflake/swiftkv-models-674f7d7474eb789e185d31cb>`_,
 you can fine-tune it with `ArcticTraining
 <https://github.com/snowflakedb/ArcticTraining>`_ to make it compatible with
-SwiftKV. To get started, take a look at our provided `examples
+SwiftKV. 
+
+To get started, refer to our provided `examples
 <https://github.com/snowflakedb/ArcticTraining/tree/main/projects/swiftkv/configs>`_
 for how we fine-tuned the Llama-3 and Qwen-2.5 models with SwiftKV
