@@ -27,6 +27,7 @@ from vllm.config import CacheConfig, VllmConfig
 from vllm.distributed import (get_tensor_model_parallel_rank,
                               get_tensor_model_parallel_world_size)
 from vllm.forward_context import ForwardContext, get_forward_context
+from vllm.logger import init_logger
 from vllm.model_executor.layers.layernorm import RMSNorm
 from vllm.model_executor.layers.linear import (ColumnParallelLinear,
                                                QKVParallelLinear,
@@ -48,89 +49,9 @@ from vllm.sequence import IntermediateTensors
 
 import arctic_inference.vllm.model_runner as model_runner
 from arctic_inference.common.swiftkv.configs import LlamaSwiftKVConfig
+from arctic_inference.vllm.swiftkv.linear import SwiftKVLinear
 
-
-class KVFanoutLinear(ColumnParallelLinear):
-
-    def __init__(self,
-                 num_fanout: int,
-                 hidden_size: int,
-                 head_size: int,
-                 total_num_heads: int,
-                 total_num_kv_heads: Optional[int] = None,
-                 bias: bool = True,
-                 skip_bias_add: bool = False,
-                 params_dtype: Optional[torch.dtype] = None,
-                 quant_config: Optional[QuantizationConfig] = None,
-                 prefix: str = ""):
-        self.num_fanout = num_fanout
-        self.hidden_size = hidden_size
-        self.head_size = head_size
-        self.total_num_heads = total_num_heads
-        if total_num_kv_heads is None:
-            total_num_kv_heads = total_num_heads
-        self.total_num_kv_heads = total_num_kv_heads
-        # Divide the weight matrix along the last dimension.
-        tp_size = get_tensor_model_parallel_world_size()
-        self.num_heads = self.total_num_heads // tp_size
-        if tp_size >= self.total_num_kv_heads:
-            self.num_kv_heads = 1
-            self.num_kv_head_replicas = tp_size // self.total_num_kv_heads
-        else:
-            self.num_kv_heads = self.total_num_kv_heads // tp_size
-            self.num_kv_head_replicas = 1
-        input_size = self.hidden_size
-        output_size = (2 * self.num_kv_heads) * tp_size * self.head_size * self.num_fanout
-        self.output_sizes = [
-            self.num_kv_heads * self.head_size * tp_size,  # k_proj
-            self.num_kv_heads * self.head_size * tp_size,  # v_proj
-        ] * self.num_fanout
-
-        super().__init__(input_size=input_size,
-                         output_size=output_size,
-                         bias=bias,
-                         gather_output=False,
-                         skip_bias_add=skip_bias_add,
-                         params_dtype=params_dtype,
-                         quant_config=quant_config,
-                         prefix=prefix)
-
-    def _get_shard_offset_mapping(self, loaded_shard_id: Tuple[int, str]):
-        chunk = self.num_kv_heads * self.head_size
-        shard_offset_mapping = {
-            "k": chunk * loaded_shard_id[0],
-            "v": chunk * self.num_fanout + chunk * loaded_shard_id[0],
-            "total": 2 * chunk * self.num_fanout,
-        }
-        return shard_offset_mapping.get(loaded_shard_id[1])
-
-    def _get_shard_size_mapping(self, loaded_shard_id: Tuple[int, str]):
-        shard_size_mapping = {
-            "k": self.num_kv_heads * self.head_size,
-            "v": self.num_kv_heads * self.head_size,
-        }
-        return shard_size_mapping.get(loaded_shard_id[1])
-
-    def weight_loader(self,
-                      param: torch.nn.Parameter,
-                      loaded_weight: torch.Tensor,
-                      loaded_shard_id: Tuple[int, str]):
-        param_data = param.data
-        output_dim = param.output_dim
-
-        tp_rank = get_tensor_model_parallel_rank()
-        assert loaded_shard_id[1] in ["k", "v"]
-
-        shard_offset = self._get_shard_offset_mapping(loaded_shard_id)
-        shard_size = self._get_shard_size_mapping(loaded_shard_id)
-
-        param_data = param_data.narrow(output_dim, shard_offset, shard_size)
-        shard_id = tp_rank // self.num_kv_head_replicas
-        start_idx = shard_id * shard_size
-        loaded_weight = loaded_weight.narrow(output_dim, start_idx, shard_size)
-
-        assert param_data.shape == loaded_weight.shape
-        param_data.copy_(loaded_weight)
+logger = init_logger(__name__)
 
 
 class LlamaSwiftKVAttention(nn.Module):
@@ -442,16 +363,15 @@ class LlamaSwiftKVModel(nn.Module):
                                      prefix=f"{prefix}.layers.{idx}")
             for idx in range(config.num_hidden_layers)
         ])
-        self.kv_fanout = KVFanoutLinear(
-            num_fanout=(config.num_hidden_layers - config.num_key_value_layers) // config.key_value_group_size,
+        self.swiftkv_proj = SwiftKVLinear(
+            num_layers=(config.num_hidden_layers - config.num_key_value_layers) // config.key_value_group_size,
             hidden_size=config.hidden_size,
             head_size=self.layers[0].self_attn.head_dim,
-            total_num_heads=self.layers[0].self_attn.total_num_heads,
             total_num_kv_heads=self.layers[0].self_attn.total_num_kv_heads,
             bias=(getattr(config, "bias", False) or
                   getattr(config, "attention_bias", False)),
             quant_config=vllm_config.quant_config,
-            prefix=f"{prefix}.kv_fanout",
+            prefix=f"{prefix}.swiftkv_proj",
         )
         self.norm_swiftkv = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -491,7 +411,7 @@ class LlamaSwiftKVModel(nn.Module):
             self.cuda_graph_max_batch_size = max(
                 vllm_config.compilation_config.cudagraph_capture_sizes)
             sp_size = parallel_state._SP.world_size
-            kv_size = sum(self.kv_fanout.output_partition_sizes) // sp_size // 2
+            kv_size = sum(self.swiftkv_proj.output_partition_sizes) // sp_size // 2
             self.decode_runner_inputs = {
                 "hidden_states": torch.empty(self.cuda_graph_max_batch_size,
                                             config.hidden_size, device="cuda"),
@@ -581,7 +501,7 @@ class LlamaSwiftKVModel(nn.Module):
         else:
             num_layers = (self.config.num_hidden_layers -
                           self.config.num_key_value_layers)
-            
+
             k_split = k_states.chunk(num_layers, dim=-1)
             v_split = v_states.chunk(num_layers, dim=-1)
 
@@ -649,16 +569,18 @@ class LlamaSwiftKVModel(nn.Module):
         model_runner.SP_TP_MODE = True
 
         # KV projection of all the remaining layers
-        swiftkv_hidden_states = self.norm_swiftkv.forward_cuda(hidden_states + residual)
-        kv_states, _ = self.kv_fanout(swiftkv_hidden_states)
+        swiftkv_hidden_states = (
+            self.norm_swiftkv.forward_cuda(hidden_states + residual))
+        kv_states, _ = self.swiftkv_proj(swiftkv_hidden_states)
 
         # Update the KV cache of all the remaining layers. We concatenate all
         # the heads together to run it as a batch.
-        num_fanout = self.kv_fanout.num_fanout
         q_states = hidden_states.new_empty(  # Just temporary buffer
-            (hidden_states.size(0), num_fanout * hidden_states.size(1)))
+            (hidden_states.size(0),
+             self.swiftkv_proj.num_layers * hidden_states.size(1)))
         k_states, v_states = kv_states.split(kv_states.size(-1) // 2, dim=-1)
-        _, k_states = self.layers[0].self_attn.rotary_emb.forward_cuda(positions, q_states, k_states)
+        rotary_emb = self.layers[0].self_attn.rotary_emb
+        _, k_states = rotary_emb.forward_cuda(positions, q_states, k_states)
 
         orig_hidden_states = hidden_states
         hidden_states, residual, positions, k_states, v_states = (
@@ -720,9 +642,9 @@ class LlamaSwiftKVModel(nn.Module):
                                             self.config.num_hidden_layers,
                                             self.config.key_value_group_size)):
             stacked_params_mapping.extend([
-                (f"kv_fanout",
+                (f"swiftkv_proj",
                  f"layers.{layer_idx}.self_attn.k_proj_swiftkv", (i, "k")),
-                (f"kv_fanout",
+                (f"swiftkv_proj",
                  f"layers.{layer_idx}.self_attn.v_proj_swiftkv", (i, "v")),
             ])
         params_dict = dict(self.named_parameters())
@@ -756,7 +678,7 @@ class LlamaSwiftKVModel(nn.Module):
                     continue
 
                 if name not in params_dict:
-                    print(f"Skip loading {orig_name}")
+                    logger.debug(f"Skip loading {orig_name}")
                     continue
 
                 param = params_dict[name]
@@ -777,7 +699,7 @@ class LlamaSwiftKVModel(nn.Module):
                     continue
 
                 if name not in params_dict:
-                    print(f"Skip loading {orig_name}")
+                    logger.debug(f"Skip loading {orig_name}")
                     continue
 
                 param = params_dict[name]
