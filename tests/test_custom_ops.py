@@ -2,8 +2,6 @@ import pytest
 import torch
 from typing import List
 
-from arctic_inference.py_custom_ops import reshape_and_cache_flash_bulk
-
 CUDA_DEVICES = [f"cuda:{0}"]
 
 
@@ -53,6 +51,11 @@ def test_reshape_and_cache_flash_bulk(
     num_heads: int,
     head_size: int,
 ) -> None:
+    from arctic_inference.py_custom_ops import (try_load_torch_library,
+                                                reshape_and_cache_flash_bulk)
+    if not try_load_torch_library():
+        pytest.skip("Custom ops not available, skipping test.")
+
     torch.set_default_device(device)
 
     hidden_size = num_heads * head_size
@@ -96,3 +99,5 @@ def test_reshape_and_cache_flash_bulk(
         assert torch.allclose(
             value_caches[i],
             value_caches_ref[i]), f"Value caches do not match for layer {i}"
+
+    return None

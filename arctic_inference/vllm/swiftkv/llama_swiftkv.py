@@ -459,6 +459,9 @@ class LlamaSwiftKVModel(nn.Module):
         self._init_prefill_runners(vllm_config)
         self._init_decode_runner(vllm_config)
 
+        from arctic_inference.py_custom_ops import try_load_torch_library
+        self.use_custom_ops = True if try_load_torch_library() else False
+
     def _init_prefill_runners(self, vllm_config: VllmConfig):
         # SP Prefill Runner
         vllm_config.compilation_config = (
@@ -552,32 +555,51 @@ class LlamaSwiftKVModel(nn.Module):
         attn_metadata = forward_context.attn_metadata
         if attn_metadata is None:
             return hidden_states, residual, positions, k_states, v_states
-        num_layers = (self.config.num_hidden_layers -
-                      self.config.num_key_value_layers)
 
-        key_caches : List[torch.Tensor] = []
-        value_caches : List[torch.Tensor] = []
-        k_scales : List[torch.Tensor] = []
-        v_scales : List[torch.Tensor] = []
-        num_heads = self.layers[0].self_attn.attn.num_kv_heads
-        head_size = self.layers[0].self_attn.attn.head_size
-        for idx, layer in enumerate(
-                self.layers[self.config.num_key_value_layers:]):
-            attn = layer.self_attn.attn
-            kv_cache = attn.kv_cache[forward_context.virtual_engine]
-            if kv_cache.numel():
-                # keys.append(k_split[idx].reshape(-1, attn.num_kv_heads, attn.head_size))
-                # values.append(v_split[idx].reshape(-1, attn.num_kv_heads, attn.head_size))
-                key_caches.append(kv_cache[0])
-                value_caches.append(kv_cache[1])
-                k_scales.append(attn._k_scale)
-                v_scales.append(attn._v_scale)
+        if self.use_custom_ops:
+            key_caches : List[torch.Tensor] = []
+            value_caches : List[torch.Tensor] = []
+            k_scales : List[torch.Tensor] = []
+            v_scales : List[torch.Tensor] = []
+            num_heads = self.layers[0].self_attn.attn.num_kv_heads
+            head_size = self.layers[0].self_attn.attn.head_size
+            for idx, layer in enumerate(
+                    self.layers[self.config.num_key_value_layers:]):
+                attn = layer.self_attn.attn
+                kv_cache = attn.kv_cache[forward_context.virtual_engine]
+                if kv_cache.numel():
+                    key_caches.append(kv_cache[0])
+                    value_caches.append(kv_cache[1])
+                    k_scales.append(attn._k_scale)
+                    v_scales.append(attn._v_scale)
 
-        if len(key_caches) > 0:
-            from arctic_inference.py_custom_ops import reshape_and_cache_flash_bulk
-            reshape_and_cache_flash_bulk(
-                k_states, v_states, key_caches, value_caches, attn_metadata.slot_mapping,
-                attn.kv_cache_dtype, k_scales, v_scales, num_heads, head_size)
+            if len(key_caches) > 0:
+                from arctic_inference.py_custom_ops import reshape_and_cache_flash_bulk
+                reshape_and_cache_flash_bulk(
+                    k_states, v_states, key_caches, value_caches, attn_metadata.slot_mapping,
+                    attn.kv_cache_dtype, k_scales, v_scales, num_heads, head_size)
+        else:
+            num_layers = (self.config.num_hidden_layers -
+                          self.config.num_key_value_layers)
+            
+            k_split = k_states.chunk(num_layers, dim=-1)
+            v_split = v_states.chunk(num_layers, dim=-1)
+
+            for idx, layer in enumerate(
+                    self.layers[self.config.num_key_value_layers:]):
+                attn = layer.self_attn.attn
+                kv_cache = attn.kv_cache[forward_context.virtual_engine]
+                if kv_cache.numel():
+                    torch.ops._C_cache_ops.reshape_and_cache_flash(
+                        k_split[idx].view(-1, attn.num_kv_heads, attn.head_size),
+                        v_split[idx].view(-1, attn.num_kv_heads, attn.head_size),
+                        kv_cache[0],
+                        kv_cache[1],
+                        attn_metadata.slot_mapping,
+                        attn.kv_cache_dtype,
+                        attn._k_scale,
+                        attn._v_scale,
+                    )
 
         logits_indices = attn_metadata.swiftkv_logits_indices
 
