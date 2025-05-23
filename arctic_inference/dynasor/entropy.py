@@ -15,12 +15,20 @@
 
 import math
 from collections import defaultdict
-from typing import List
+from typing import List, Dict, Any, Union, Optional
 
 from arctic_inference.dynasor.evaluator import math_equal
 
 
-def entropy(Plist):
+def entropy(Plist: List[float]) -> float:
+    """Calculate the Shannon entropy of a probability distribution.
+    
+    Args:
+        Plist: List of probabilities that sum to 1
+        
+    Returns:
+        float: The entropy value in bits (using log base 2)
+    """
     if len(Plist):
         result = 0
         for x in Plist:
@@ -30,12 +38,28 @@ def entropy(Plist):
         return 0
 
 
-def norm(Olist):
+def norm(Olist: List[float]) -> List[float]:
+    """Normalize a list of numbers to sum to 1.
+    
+    Args:
+        Olist: List of numbers to normalize
+        
+    Returns:
+        List[float]: Normalized list where sum equals 1
+    """
     s = sum(Olist)
     return [o / s for o in Olist]
 
 
-def count(Olist):
+def count(Olist: List[Any]) -> List[float]:
+    """Count occurrences of each unique element in a list.
+    
+    Args:
+        Olist: List of elements to count
+        
+    Returns:
+        List[float]: List of counts for each unique element
+    """
     x_dict = defaultdict(lambda: 0.0)
     for x in Olist:
         x_dict[x] += 1
@@ -44,15 +68,39 @@ def count(Olist):
     return cc
 
 
-def item_entropy(answers: List) -> float:
+def item_entropy(answers: List[Any]) -> float:
+    """Calculate the entropy of a list of answers.
+    
+    Args:
+        answers: List of answers to calculate entropy for
+        
+    Returns:
+        float: Entropy value in bits
+    """
     return entropy(norm(count(answers)))
 
 
-def count_not_empty(answers):
+def count_not_empty(answers: List[str]) -> int:
+    """Count the number of non-empty strings in a list.
+    
+    Args:
+        answers: List of strings to check
+        
+    Returns:
+        int: Number of non-empty strings
+    """
     return sum(1 for answer in answers if answer != "")
 
 
-def equal_group(answers):
+def equal_group(answers: List[Any]) -> bool:
+    """Check if all answers in a list are equivalent.
+    
+    Args:
+        answers: List of answers to compare
+        
+    Returns:
+        bool: True if all answers are equivalent, False otherwise
+    """
     equiv_classes = []
 
     for answer in answers:
@@ -69,7 +117,15 @@ def equal_group(answers):
     return len(equiv_classes) == 1
 
 
-def majority_voting(answers):
+def majority_voting(answers: List[Any]) -> Any:
+    """Find the most common answer using majority voting.
+    
+    Args:
+        answers: List of answers to vote on
+        
+    Returns:
+        Any: The most common answer
+    """
     equiv_classes = []
     equiv_weights = []
     max_vote = 0
@@ -94,7 +150,15 @@ def majority_voting(answers):
     return max_rep
 
 
-def obtain_answer(s):
+def obtain_answer(s: str) -> str:
+    """Extract the first complete answer from a string by matching braces.
+    
+    Args:
+        s: Input string containing potential answer
+        
+    Returns:
+        str: The first complete answer found, or empty string if none found
+    """
     # Find first unpaired } by counting { and }
     stack = []
     for i, c in enumerate(s):
@@ -110,12 +174,28 @@ def obtain_answer(s):
 uncertain_words = ["wait", "hold", "but", "okay", "no", "hmm"]
 
 
-def is_certain_answer(probe_response_text: str, uncertain_words: list[str]) -> bool:
-    """Check if the answer is certain"""
+def is_certain_answer(probe_response_text: str, uncertain_words: List[str]) -> bool:
+    """Check if the answer is certain by looking for uncertain words.
+    
+    Args:
+        probe_response_text: Text to check for uncertainty
+        uncertain_words: List of words that indicate uncertainty
+        
+    Returns:
+        bool: True if the answer is certain, False otherwise
+    """
     return not any(word in probe_response_text.lower() for word in uncertain_words)
 
 
-def has_value(x) -> bool:
+def has_value(x: Any) -> bool:
+    """Check if a value exists and is non-empty.
+    
+    Args:
+        x: Value to check
+        
+    Returns:
+        bool: True if value exists and is non-empty, False otherwise
+    """
     if x is None:
         return False
     if isinstance(x, str):
@@ -126,17 +206,27 @@ def has_value(x) -> bool:
 
 
 def should_early_exit(
-    answers: list[str],
+    answers: List[str],
     probe_response_text: str,
-    uncertain_words: list[str],
+    uncertain_words: List[str],
     continue_certain_bar: int,
-    is_certains: list[bool],
+    is_certains: List[bool],
 ) -> bool:
-    """
-    Check if the answer is consistent or certain.
+    """Check if the answer is consistent and certain enough to exit early.
     1. Number of answers should be greater than the threshold
     2. The probe response text should not contain any uncertain words
     3. The answers should be consistent
+    
+    Args:
+        answers: List of answers to check
+        probe_response_text: Text of the probe response
+        uncertain_words: List of words that indicate uncertainty
+        continue_certain_bar: Threshold for number of consistent answers needed
+        is_certains: List of booleans indicating if each answer is certain
+        
+    Returns:
+        bool: True if should exit early, False otherwise
+
     """
 
     # Number of answers should be greater than the threshold

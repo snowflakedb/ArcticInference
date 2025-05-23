@@ -141,22 +141,23 @@ def openai_chat_completion_stream(
                 and sum(probe_certain_count) == threshold
             ):
                 adaptive_end = True
-                aanswer = probe_answers[-1]
 
             if adaptive_end and not append_answer:
                 # print('Adaptive Ending')
                 append_answer = True
                 # TODO: Make the probe customizable
                 if "</think>" in accumulated_response:
-                    yield "\n\n... Oh, I have got the answer to the whole problem\n**Final Answer:**\n\\[\n \\boxed{" + \
-                        probe_answers[
-                            -1
-                        ] + "}\n\\]"
+                    yield (
+                        "\n\n... Oh, I have got the answer to the whole problem\n**Final Answer:**\n\\[\n \\boxed{"
+                        + probe_answers[-1]
+                        + "}\n\\]"
+                    )
                 else:
-                    yield "\n\n...</think>\n Oh, I have got the answer to the whole problem\n**Final Answer:**\n\\[\n \\boxed{" + \
-                        probe_answers[
-                            -1
-                        ] + "}\n\\]"
+                    yield (
+                        "\n\n...</think>\n Oh, I have got the answer to the whole problem\n**Final Answer:**\n\\[\n \\boxed{"
+                        + probe_answers[-1]
+                        + "}\n\\]"
+                    )
                 break
 
     else:
