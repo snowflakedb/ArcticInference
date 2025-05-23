@@ -102,7 +102,8 @@ class SwiftKVLinear(ColumnParallelLinear):
                          param: BasevLLMParameter,
                          loaded_weight: torch.Tensor,
                          loaded_shard_id: Optional[str] = None):
-        logger.info("Falling back to original weight loader for SwiftKVLinear")
+        logger.info_once(
+            "Falling back to original weight loader for SwiftKVLinear")
         return self.weight_loader(param, loaded_weight, loaded_shard_id)
 
     def weight_loader(self,
