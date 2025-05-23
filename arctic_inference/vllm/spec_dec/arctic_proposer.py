@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-    
+
 import copy
 from typing import Optional, Union
 
@@ -68,12 +68,20 @@ class ArcticProposer:
         self.model = get_model(vllm_config=draft_worker_config)
         self.device = next(model.parameters()).device
 
+        self.input_hidden_dim = self.model.input_hidden_dim if isinstance(
+            self.model, ArcticLSTMSpeculator) else self.model.emb_dim
+
     def prepare_hidden_states(
         self,
         sample_hidden_states: torch.Tensor,
         sampled_token_ids: np.ndarray,
         spec_decode_metadata: SpecDecodeMetadata,
     ) -> torch.Tensor:
+        if sample_hidden_states is not None:
+            assert sample_hidden_states.shape[-1] == self.input_hidden_dim, \
+                f"hidden_states shape mismatch: {sample_hidden_states.shape[-1]} != {self.input_hidden_dim}. \
+                Please make sure spec model is trained using the same base model."
+
         max_gen_len = sampled_token_ids.shape[-1]
         if max_gen_len == 1:
             return sample_hidden_states
