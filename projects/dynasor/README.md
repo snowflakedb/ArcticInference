@@ -21,7 +21,7 @@ For more details, see:
 
 Start an arctic inference server (vLLM backend + OpenAI proxy server):
 ```bash
-python -m arctic_inference.dynasor.vllm_server \
+VLLM_USE_V1=1 python -m arctic_inference.dynasor.vllm_server \
 --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B  \
 -tp 1 --enable-chunked-prefill --enforce-eager \
 --port 8080
@@ -29,7 +29,7 @@ python -m arctic_inference.dynasor.vllm_server \
 
 Start the vLLM client:
 ```bash
-cd arctic_inference/projects/dynasor/
+cd projects/dynasor/
 python openai_client.py \
 --base-url http://localhost:8080/v1 \
 --probe-interval 32 \
@@ -53,7 +53,7 @@ python -m arctic_inference.dynasor.openai_server \
 
 Start the vLLM client:
 ```bash
-cd arctic_inference/projects/dynasor/
+cd projects/dynasor/
 python openai_client.py \
 --base-url http://localhost:8080/v1 \
 --probe-interval 32 \
