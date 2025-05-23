@@ -1,0 +1,6 @@
+
+.. _embeddings:
+
+====================
+Optimized Embeddings
+====================

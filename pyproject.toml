@@ -32,3 +32,9 @@ packages = [
 vllm = [
     'vllm==0.8.4',
 ]
+
+docs = [
+    "sphinx>=8.1.3",
+    "sphinx-copybutton",
+    "sphinx-rtd-theme",
+]
