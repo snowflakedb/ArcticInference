@@ -587,6 +587,12 @@ class LlamaSwiftKVModel(nn.Module):
             logits_indices, attn_metadata.query_start_loc, out_int32=True)
         attn_metadata.slot_mapping = attn_metadata.slot_mapping[logits_indices]
 
+        # TODO: Make cascade attention work with SwiftKV
+        attn_metadata.use_cascade = False
+        attn_metadata.cu_prefix_query_lens = None
+        attn_metadata.prefix_kv_lens = None
+        attn_metadata.suffix_kv_lens = None
+
         hidden_states = hidden_states[logits_indices]
         residual = residual[logits_indices]
         positions = positions[logits_indices]
