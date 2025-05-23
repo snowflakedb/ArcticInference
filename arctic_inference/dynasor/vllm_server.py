@@ -102,7 +102,7 @@ def main():
         sys.exit(1)
 
     # Keep the main process running and handle signals
-    while server_process.is_alive() or openai_server.is_alive(): 
+    while server_process.is_alive() or proxy_server.is_alive(): 
         server_process.join(timeout=3.0)
         proxy_server.join(timeout=3.0)
             

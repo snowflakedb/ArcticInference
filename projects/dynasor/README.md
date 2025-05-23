@@ -1,6 +1,6 @@
 # Dynasor
 
-Dynasor is a tool that helps you speed up LLM reasoning model without training or finetuning. It uses a combination of techniques to improve the prompt, and dynamically execute the prompt, and stop when the LLM has enough information to make a decision. 
+Dynasor is a tool that helps you speed up LLM reasoning models without training or finetuning. It uses a combination of techniques to improve the prompt, and dynamically execute the prompt, and stop when the LLM has enough information to make a decision. 
 
 For more details, see:
 - [Blog post](https://hao-ai-lab.github.io/blogs/dynasor-cot/)
