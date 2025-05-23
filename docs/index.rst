@@ -15,15 +15,20 @@ to use their familiar vLLM APIs and CLI. It's easy to get started!
 Key Features
 ------------
 
-🚀 :ref:`SwiftKV <swiftkv>`: Reduce compute during prefill by reusing key-value pairs across transformer layers
+🚀 :ref:`SwiftKV <swiftkv>`:
+   Reduce compute during prefill by reusing key-value pairs across transformer layers
 
-🚀 :ref:`Arctic Ulysses <ulysses>`: Improve long-context inference latency and throughput via sequence parallelism across GPUs
+🚀 :ref:`Arctic Ulysses <ulysses>`:
+   Improve long-context inference latency and throughput via sequence parallelism across GPUs
 
-🚀 :ref:`Speculative Decoding <spec-decode>`: Boosts LLM speed by drafting tokens with a small model and verifying them in bulk
+🚀 :ref:`Speculative Decoding <spec-decode>`:
+   Boosts LLM speed by drafting tokens with a small model and verifying them in bulk
 
-🚀 :ref:`Shift Parallelism <shift>`: <add description of Shift Parallelism here>
+🚀 :ref:`Shift Parallelism <shift>`:
+   <add description of Shift Parallelism here>
 
-🚀 :ref:`Optimized Embeddings <embeddings>`: <add description of Optimized Embeddings here>
+🚀 :ref:`Optimized Embeddings <embeddings>`:
+   <add description of Optimized Embeddings here>
 
 Quick Start
 -----------
