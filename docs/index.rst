@@ -15,22 +15,23 @@ to use their familiar vLLM APIs and CLI. It's easy to get started!
 Key Features
 ------------
 
-- **SwiftKV**: <add description of SwiftKV here>
-- **Arctic Ulysses**: <add description of Arctic Ulysses here>
-- **Speculative Decoding**: <add description of Speculative Decoding here>
-- **Shift Parallelism**: <add description of Shift Parallelism here>
-- **Optimized Embeddings**: <add description of Optimized Embeddings here>
+🚀 :ref:`SwiftKV <swiftkv>`: Reduce compute during prefill by reusing key-value pairs across transformer layers
+
+🚀 :ref:`Arctic Ulysses <ulysses>`: Improve long-context inference latency and throughput via sequence parallelism across GPUs
+
+🚀 :ref:`Speculative Decoding <spec-decode>`: Boosts LLM speed by drafting tokens with a small model and verifying them in bulk
+
+🚀 :ref:`Shift Parallelism <shift>`: <add description of Shift Parallelism here>
+
+🚀 :ref:`Optimized Embeddings <embeddings>`: <add description of Optimized Embeddings here>
 
 Quick Start
 -----------
 
 To get started with ArcticInference check out the :ref:`quick start guide <quickstart>`
 
-Contents
---------
-
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
    :caption: Contents:
 
    quick-start
