@@ -38,9 +38,12 @@ class ArcticParallelConfig(ParallelConfig):
 
     @property
     def world_size(self) -> int:
+        args = get_current_arctic_args()
+        if args is None:
+            args = self
         return (self.pipeline_parallel_size *
                 self.tensor_parallel_size *
-                self.sequence_parallel_size)
+                args.sequence_parallel_size)
 
     @world_size.setter
     def world_size(self, value: int) -> None:
