@@ -25,7 +25,7 @@ from arctic_inference.vllm.config import (ModelConfigPatch,
                                           ParallelConfigPatch,
                                           SpeculativeConfigPatch,
                                           VllmConfigPatch)
-from arctic_inference.vllm.shapeshifter import apply_shapeshifter_patches
+from arctic_inference.vllm.shift_parallel import apply_shift_parallel_patches
 from arctic_inference.vllm.spec_decoding import apply_spec_decoding_patches
 
 logger = init_logger(__name__)
@@ -108,5 +108,5 @@ def arctic_inference_plugin():
     VllmConfigPatch.apply_patch()
 
     # Main optimization patches.
-    apply_shapeshifter_patches()
+    apply_shift_parallel_patches()
     apply_spec_decoding_patches()

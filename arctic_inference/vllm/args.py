@@ -28,7 +28,7 @@ from arctic_inference.patching import ArcticPatch
 class ArcticArgs:
 
     sequence_parallel_size: int = 1
-    shapeshifter_threshold: int = 0
+    shift_parallel_threshold: int = 0
 
 
 @dataclass
@@ -73,11 +73,12 @@ class EngineArgsPatch(ArcticPatch[EngineArgs]):
             help="Number of sequence parallel replicas",
         )
         parser.add_argument(
-            "--shapeshifter-threshold",
+            "--shift-parallel-threshold",
             "-sst",
             type=int,
-            default=ArcticEngineArgs.shapeshifter_threshold,
-            help="SP if batch size > threshold else TP",
+            default=ArcticEngineArgs.shift_parallel_threshold,
+            help=("Sequence parallel if batch size > threshold, otherwise "
+                  "tensor parallel"),
         )
         return parser
 

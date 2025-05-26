@@ -89,17 +89,17 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         vllm_config.speculative_config = speculative_config
 
-        # for shapeshifter, set SP_TP_PROFILE_RUN
+        # for shift parallel, set SP_TP_PROFILE_RUN
         def monkeypatch_profile_run(self):
             profile_run = self.profile_run
 
-            def shapeshifter_profile_run():
+            def shift_parallel_profile_run():
                 global SP_TP_PROFILE_RUN
                 SP_TP_PROFILE_RUN = True
                 profile_run()
                 SP_TP_PROFILE_RUN = False
 
-            self.profile_run = shapeshifter_profile_run
+            self.profile_run = shift_parallel_profile_run
 
         monkeypatch_profile_run(self)
 
@@ -127,7 +127,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             N = input_ids.shape[0]
 
             global SP_TP_MODE
-            sp_tp_threshold = self.parallel_config.shapeshifter_threshold
+            sp_tp_threshold = self.parallel_config.shift_parallel_threshold
             SP_TP_MODE = bool(sp_tp_threshold >= N)
 
             if _SP.rank == 0:
@@ -194,7 +194,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         attn_metadata, logits_indices, spec_decode_metadata = (
             self._prepare_inputs(scheduler_output))
         num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
-        sp_tp_threshold = self.parallel_config.shapeshifter_threshold
+        sp_tp_threshold = self.parallel_config.shift_parallel_threshold
         if num_scheduled_tokens <= sp_tp_threshold:
             if (self.use_cuda_graph and num_scheduled_tokens
                     <= self.cudagraph_batch_sizes[-1]):
@@ -617,7 +617,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         # Capture the large shapes first so that the smaller shapes
         # can reuse the memory pool allocated for the large shapes.
         with parallel_state.graph_capture(device=self.device):
-            sp_tp_threshold = self.parallel_config.shapeshifter_threshold
+            sp_tp_threshold = self.parallel_config.shift_parallel_threshold
             for num_tokens in reversed(self.cudagraph_batch_sizes):
                 SP = self.parallel_config.sequence_parallel_size
                 if torch.distributed.get_rank() == 0:

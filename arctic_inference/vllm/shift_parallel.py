@@ -52,25 +52,26 @@ from vllm.sequence import IntermediateTensors
 from arctic_inference.patching import ArcticPatch
 
 
-def apply_shapeshifter_patches():
+def apply_shift_parallel_patches():
     UlyssesModelConfigPatch.apply_patch()
     UlyssesParallelStatePatch.apply_patch()
     UlyssesMultiprocExecutorPatch.apply_patch()
     UlyssesAttentionPatch.apply_patch()
     UlyssesFlashAttentionImplPatch.apply_patch()
-    ShapeShifterLlamaForCausalLM.apply_patch()
-    ShapeShifterLlamaAttention.apply_patch()
-    ShapeShifterRowParallelLinear.apply_patch()
-    ShapeShifterColumnParallelLinear.apply_patch()
-    ShapeShifterUnquantizedLinearMethod.apply_patch()
-    ShapeShifterFP8LinearMethod.apply_patch()
+    ShiftParallelLlamaForCausalLM.apply_patch()
+    ShiftParallelLlamaAttention.apply_patch()
+    ShiftParallelRowParallelLinear.apply_patch()
+    ShiftParallelColumnParallelLinear.apply_patch()
+    ShiftParallelUnquantizedLinearMethod.apply_patch()
+    ShiftParallelFP8LinearMethod.apply_patch()
 
-class ShapeShifterFP8LinearMethod(ArcticPatch[Fp8LinearMethod]):
+
+class ShiftParallelFP8LinearMethod(ArcticPatch[Fp8LinearMethod]):
     _orig_process_weights_after_loading = Fp8LinearMethod.process_weights_after_loading
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         self._orig_process_weights_after_loading(layer)
 
-        # TODO: skip the rest if shapeshifter threshold is 0
+        # TODO: skip the rest if shift parallel threshold is 0
         sp_size = parallel_state._SP.world_size
         sp_rank = parallel_state._SP.rank_in_group
         output_partition_sizes = layer.logical_widths
@@ -144,7 +145,7 @@ class ShapeShifterFP8LinearMethod(ArcticPatch[Fp8LinearMethod]):
             input_scale=layer.input_scale,
             bias=bias)
 
-class ShapeShifterUnquantizedLinearMethod(ArcticPatch[UnquantizedLinearMethod]):
+class ShiftParallelUnquantizedLinearMethod(ArcticPatch[UnquantizedLinearMethod]):
 
     _orig_create_weighs = UnquantizedLinearMethod.create_weights
     def create_weights(self, *args, **kwargs):
@@ -154,11 +155,11 @@ class ShapeShifterUnquantizedLinearMethod(ArcticPatch[UnquantizedLinearMethod]):
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
 
         # TODO: skip weight duplication
-        # if ParallelConfig.shapeshifter_threshold == 0:
+        # if ParallelConfig.shift_parallel_threshold == 0:
         #     return
 
         if torch.distributed.get_rank() == 0:
-            print(f"ShapeShifterUnquantizedLinearMethod: "
+            print(f"ShiftParallelUnquantizedLinearMethod: "
                   f"output_partition_sizes: {self.output_partition_sizes}")
         output_partition_sizes = self.output_partition_sizes
         sp_size = parallel_state._SP.world_size
@@ -206,13 +207,13 @@ class ShapeShifterUnquantizedLinearMethod(ArcticPatch[UnquantizedLinearMethod]):
               x: torch.Tensor,
               bias: Optional[torch.Tensor] = None) -> torch.Tensor:
         from .model_runner import SP_TP_MODE
-        # ShapeShifter
+        # ShiftParallel
         if SP_TP_MODE:
             return F.linear(x, self.sp_tp_weight, bias)
         else:
             return F.linear(x, layer.weight, bias)
 
-class ShapeShifterRowParallelLinear(ArcticPatch[RowParallelLinear]):
+class ShiftParallelRowParallelLinear(ArcticPatch[RowParallelLinear]):
     def forward(
         self, input_
     ) -> Union[torch.Tensor, tuple[torch.Tensor, Optional[Parameter]]]:
@@ -255,7 +256,7 @@ class ShapeShifterRowParallelLinear(ArcticPatch[RowParallelLinear]):
             return output
         return output, output_bias
 
-class ShapeShifterColumnParallelLinear(ArcticPatch[ColumnParallelLinear]):
+class ShiftParallelColumnParallelLinear(ArcticPatch[ColumnParallelLinear]):
     def forward(
         self, input_
     ) -> Union[torch.Tensor, tuple[torch.Tensor, Optional[Parameter]]]:
@@ -278,7 +279,7 @@ class ShapeShifterColumnParallelLinear(ArcticPatch[ColumnParallelLinear]):
             return output
         return output, output_bias
 
-class ShapeShifterLlamaAttention(ArcticPatch[LlamaAttention]):
+class ShiftParallelLlamaAttention(ArcticPatch[LlamaAttention]):
     def forward(
         self,
         positions: torch.Tensor,
@@ -325,7 +326,7 @@ class LlamaModelTP(nn.Module):
         return self.model.forward(input_ids, positions, intermediate_tensors,
                                   inputs_embeds)
     
-class ShapeShifterLlamaForCausalLM(ArcticPatch[LlamaForCausalLM]):
+class ShiftParallelLlamaForCausalLM(ArcticPatch[LlamaForCausalLM]):
 
     # TODO: make the below work
     # _orig_init = LlamaForCausalLM.__init__
@@ -390,7 +391,7 @@ class ShapeShifterLlamaForCausalLM(ArcticPatch[LlamaForCausalLM]):
                       f"decode {self.decode} "
                       f"mixed {self.mixed}")
 
-        # ShapeShifter
+        # ShiftParallel
         if SP_TP_MODE:
             model_output = self.model_tp(input_ids, positions,
                                          intermediate_tensors, inputs_embeds)
@@ -550,7 +551,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                                         backend,
                                         group_name="sp")
         
-        # Build full-TP groups for ShapeShifter
+        # Build full-TP groups for ShiftParallel
         assert parallel_state._SP_TP is None, (
             "full-TP group is already initialized")
         group_ranks = []
