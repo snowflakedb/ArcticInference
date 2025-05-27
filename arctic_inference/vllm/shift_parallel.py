@@ -414,14 +414,15 @@ class UlyssesModelConfigPatch(ArcticPatch[ModelConfig]):
         # case where the number of KV heads is smaller than the tensor
         # parallel size so each GPU has at least one KV head.
         return max(
-            1, total_num_kv_heads // (parallel_config.tensor_parallel_size *
-                                      parallel_config.sequence_parallel_size))
+            1, total_num_kv_heads // (
+                parallel_config.tensor_parallel_size *
+                parallel_config.ulysses_sequence_parallel_size))
 
     def get_num_attention_heads(self: ModelConfig,
                                 parallel_config: ParallelConfig) -> int:
         num_heads = getattr(self.hf_text_config, "num_attention_heads", 0)
         return num_heads // (parallel_config.tensor_parallel_size *
-                             parallel_config.sequence_parallel_size)
+                             parallel_config.ulysses_sequence_parallel_size)
     
     def get_layers_start_end_indices(self: ModelConfig,
                                      parallel_config: ParallelConfig,
@@ -436,7 +437,7 @@ class UlyssesModelConfigPatch(ArcticPatch[ModelConfig]):
         # the layout order is: DP x PP x SP x TP
         pp_rank = (parallel_config.rank //
                    (parallel_config.tensor_parallel_size *
-                    parallel_config.sequence_parallel_size)
+                    parallel_config.ulysses_sequence_parallel_size)
                    ) % parallel_config.pipeline_parallel_size
         pp_size = parallel_config.pipeline_parallel_size
         start, end = get_pp_indices(total_num_hidden_layers, pp_rank, pp_size)
@@ -490,7 +491,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
             data_parallel_size = config.parallel_config.data_parallel_size
 
         sequence_parallel_size = \
-            config.parallel_config.sequence_parallel_size
+            config.parallel_config.ulysses_sequence_parallel_size
 
         # the layout order is: ExternalDP x DP x PP x SP x TP
         # ExternalDP is the data parallel group that is not part of the model,
@@ -632,7 +633,7 @@ class UlyssesMultiprocExecutorPatch(ArcticPatch[MultiprocExecutor]):
 
         self.world_size = self.parallel_config.world_size
         tensor_parallel_size = self.parallel_config.tensor_parallel_size
-        sequence_parallel_size = self.parallel_config.sequence_parallel_size
+        sequence_parallel_size = self.parallel_config.ulysses_sequence_parallel_size
         assert self.world_size == tensor_parallel_size \
             * sequence_parallel_size, (
             f"world_size ({self.world_size}) must be equal to the "

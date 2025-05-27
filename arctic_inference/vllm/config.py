@@ -27,13 +27,14 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ArcticParallelConfig(ParallelConfig):
 
-    sequence_parallel_size: int = 1
+    ulysses_sequence_parallel_size: int = 1
     shift_parallel_threshold: int = 0
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         arctic_args = get_current_arctic_args()
-        self.sequence_parallel_size = arctic_args.sequence_parallel_size
+        self.ulysses_sequence_parallel_size = (
+            arctic_args.ulysses_sequence_parallel_size)
         self.shift_parallel_threshold = arctic_args.shift_parallel_threshold
 
     @property
@@ -43,7 +44,7 @@ class ArcticParallelConfig(ParallelConfig):
             args = self
         return (self.pipeline_parallel_size *
                 self.tensor_parallel_size *
-                args.sequence_parallel_size)
+                args.ulysses_sequence_parallel_size)
 
     @world_size.setter
     def world_size(self, value: int) -> None:
@@ -131,6 +132,6 @@ class VllmConfigPatch(ArcticPatch[VllmConfig]):
 
     def __str__(self, *args, **kwargs):
         string = self._orig_str(*args, **kwargs)
-        string += f", sequence_parallel_size={self.parallel_config.sequence_parallel_size}"
+        string += f", ulysses_sequence_parallel_size={self.parallel_config.ulysses_sequence_parallel_size}"
         string += f", shift_parallel_threshold={self.parallel_config.shift_parallel_threshold}"
         return string

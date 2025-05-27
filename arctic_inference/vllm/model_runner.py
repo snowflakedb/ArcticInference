@@ -169,7 +169,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
     def load_model(self: GPUModelRunner, *args, **kwargs):
         self._orig_load_model(*args, **kwargs)
-        if self.parallel_config.sequence_parallel_size > 1:
+        if self.parallel_config.ulysses_sequence_parallel_size > 1:
             self.monkeypatch_forward()
     
     @torch.inference_mode()
@@ -207,7 +207,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 num_input_tokens = num_scheduled_tokens
         else:
             # add padding to the batch size to make it a multiple of SP
-            SP = self.parallel_config.sequence_parallel_size
+            SP = self.parallel_config.ulysses_sequence_parallel_size
             num_input_tokens = (num_scheduled_tokens + SP - 1) // SP * SP
             if (self.use_cuda_graph and num_input_tokens // SP
                     <= self.cudagraph_batch_sizes[-1]):
@@ -619,7 +619,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         with parallel_state.graph_capture(device=self.device):
             sp_tp_threshold = self.parallel_config.shift_parallel_threshold
             for num_tokens in reversed(self.cudagraph_batch_sizes):
-                SP = self.parallel_config.sequence_parallel_size
+                SP = self.parallel_config.ulysses_sequence_parallel_size
                 if torch.distributed.get_rank() == 0:
                     print(f"capture SP: {num_tokens * SP}")
                 if num_tokens * SP > sp_tp_threshold and \
