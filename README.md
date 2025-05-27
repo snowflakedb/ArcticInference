@@ -30,8 +30,8 @@ To better understand what features ArcticInference supports please refer to the 
 vllm serve \
 Snowflake/Llama-3.1-SwiftKV-70B-Instruct \
 --quantization "fp8" \
---shift-parallel-min-tp-size 1 \
---shift-parallel-max-tp-size 4 \
+--tensor-parallel-size 1 \
+--ulysses-sequence-parallel-size 4 \
 --shift-parallel-threshold 512 \
 --speculative-config '{
     "method": "arctic",
