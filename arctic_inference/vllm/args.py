@@ -67,6 +67,7 @@ class EngineArgsPatch(ArcticPatch[EngineArgs]):
         parser = EngineArgsPatch._orig_add_cli_args(parser)
         parser.add_argument(
             "--sequence-parallel-size",
+            "--ulysses-sequence-parallel-size",
             "-sp",
             type=int,
             default=ArcticEngineArgs.sequence_parallel_size,
