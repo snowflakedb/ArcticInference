@@ -52,8 +52,8 @@ vllm.plugins.load_general_plugins()
 llm = LLM(
     model="Snowflake/Llama-3.1-SwiftKV-70B-Instruct",
     quantization="fp8",
-    shift_parallel_min_tp_size=1,
-    shift_parallel_max_tp_size=4,
+    tensor_parallel_size=1,
+    ulysses_sequence_parallel_size=4,
     shift_parallel_threshold=512,
     speculative_config={
         "method": "arctic",
