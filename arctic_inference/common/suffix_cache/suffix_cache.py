@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Hashable, List, Sequence, Union
+from typing import Hashable, List, Optional, Sequence, Union
 
 from arctic_inference.common.suffix_cache._C import SuffixTree, Candidate
 
@@ -152,7 +152,7 @@ class SuffixCache:
         self,
         req_id: Hashable,
         pattern: Sequence[int],
-        max_spec_tokens: int = 0,
+        max_spec_tokens: Optional[int] = None,
         max_spec_factor: float = 1.0,
         max_spec_offset: float = 0.0,
         min_token_prob: float = 0.1,
@@ -191,7 +191,7 @@ class SuffixCache:
         if not pattern:
             raise ValueError("Pattern must not be empty")
 
-        if not max_spec_tokens:
+        if max_spec_tokens is None:
             max_spec_tokens = self.max_depth
 
         if len(pattern) > self._max_depth:
