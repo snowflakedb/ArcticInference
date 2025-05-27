@@ -71,7 +71,6 @@ class ShiftParallelFP8LinearMethod(ArcticPatch[Fp8LinearMethod]):
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         self._orig_process_weights_after_loading(layer)
 
-        # TODO: skip if shift parallel threshold is 0
         # if ParallelConfig.shift_parallel_threshold == 0:
             # If shift parallel threshold is 0, we skip the rest of the
             # processing and use the original weight.
@@ -85,10 +84,7 @@ class ShiftParallelFP8LinearMethod(ArcticPatch[Fp8LinearMethod]):
             chunk_size = layer.weight.shape[0] // sp_size
             self.sp_tp_weight = layer.weight.split(
                 chunk_size, dim=0)[sp_rank].t().contiguous().t()
-        elif isinstance(layer, ColumnParal        if ParallelConfig.shift_parallel_threshold == 0:
-            # If shift parallel threshold is 0, we skip the rest of the
-            # processing and use the original weight.
-            returnlelLinear):
+        elif isinstance(layer, ColumnParallelLinear):
             assert layer.weight.shape[1] % sp_size == 0
             chunk_sizes = []
             for size in output_partition_sizes:
@@ -162,7 +158,6 @@ class ShiftParallelUnquantizedLinearMethod(ArcticPatch[UnquantizedLinearMethod])
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
 
-        # TODO: skip if shift parallel threshold is 0
         # if ParallelConfig.shift_parallel_threshold == 0:
             # If shift parallel threshold is 0, we skip the rest of the
             # processing and use the original weight.
