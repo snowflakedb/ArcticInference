@@ -268,7 +268,7 @@ async def main():
     parser = argparse.ArgumentParser(description="gRPC client for vLLM inference")
     parser.add_argument("--host", type=str, default="localhost", help="Server host")
     parser.add_argument("--port", type=int, default=50050, help="Server port")
-    parser.add_argument("--model", type=str, default="BAAI/bge-base-en-v1.5", help="Model name")
+    parser.add_argument("--model", type=str, default="Snowflake/snowflake-arctic-embed-m-v1.5", help="Model name")
     parser.add_argument("--prompt", type=str, required=True, help="Prompt to generate completions for")
     
     
@@ -295,7 +295,7 @@ async def main():
 
         # Embed text
         logger.info("Embedding text...")
-        embeddings = await client.embed(prompts=["Hello, world!"] * 16, model_name="BAAI/bge-base-en-v1.5")
+        embeddings = await client.embed(prompts=["Hello, world!"] * 16, model_name="Snowflake/snowflake-arctic-embed-m-v1.5")
         
     finally:
         # Close the client

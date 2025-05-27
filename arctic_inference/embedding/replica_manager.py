@@ -24,7 +24,7 @@ Usage example:
 python -m arctic_inference.embedding.replica_manager \
   --port 60050                         \
   --num-replicas 2                     \
-  --model BAAI/bge-base-en-v1.5        
+  --model "Snowflake/snowflake-arctic-embed-m-v1.5"        
 ```
 
 The replica manager will listen on ``--port`` (60050) and spawn two replicas on
@@ -492,7 +492,7 @@ if __name__ == "__main__":
         health_interval=2,
         forward_timeout=20,
         startup_timeout=120,
-        model="BAAI/bge-base-en-v1.5",
+        model="Snowflake/snowflake-arctic-embed-m-v1.5",
     )
 
     asyncio.run(serve(sys.argv[1:]))

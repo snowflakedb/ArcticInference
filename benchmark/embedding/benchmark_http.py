@@ -238,8 +238,8 @@ async def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="BAAI/bge-base-en-v1.5",
-        help="Model name to use for embedding (default: BAAI/bge-base-en-v1.5)",
+        default="Snowflake/snowflake-arctic-embed-m-v1.5",
+        help="Model name to use for embedding (default: Snowflake/snowflake-arctic-embed-m-v1.5)",
     )
     parser.add_argument(
         "--batch-sizes",

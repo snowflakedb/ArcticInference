@@ -40,6 +40,6 @@ vllm = [
 embedding = [
     "grpcio",
     "grpcio-tools",
-    "protobuf",
+    "protobuf>=6.0.0",
     "transformers",
 ]

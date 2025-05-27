@@ -2,7 +2,7 @@
 
 CURR_DIR=$(pwd)
 FILE_DIR=$(dirname $0)
-MODEL=${1:-"BAAI/bge-base-en-v1.5"}
+MODEL=${1:-"Snowflake/snowflake-arctic-embed-m-v1.5"}
 N_REQUESTS=${2:-1280}
 PROMPT_LENGTH=${3:-50}
 CONCURRENCY=${4:-64}

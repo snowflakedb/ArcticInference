@@ -15,7 +15,7 @@ python benchmark.py [options]
 #### Options
 
 - `--server ADDRESS`: Server address in the format `host:port` (default: localhost:50050)
-- `--model MODEL_NAME`: Model name to use for encoding (default: BAAI/bge-base-en-v1.5)
+- `--model MODEL_NAME`: Model name to use for encoding (default: Snowflake/snowflake-arctic-embed-m-v1.5)
 - `--batch-sizes SIZES`: Comma-separated list of batch sizes to test (default: 1,4,16,64)
 - `--requests N`: Number of requests per batch size (default: 1024)
 - `--concurrency N`: Maximum number of concurrent requests (default: 16)
@@ -34,8 +34,14 @@ python benchmark.py --server 0.0.0.0:50050 --batch-sizes 1,4,16,64 --concurrency
 # Specify a different model
 python benchmark.py --model "Snowflake/snowflake-arctic-embed-m-v1.5"
 
-# Use absolute path if needed
-python /path/to/arctic_inference/grpc/benchmark.py --server localhost:50050
+# The command we use for benchmarking on H200
+python benchmark.py --model "Snowflake/snowflake-arctic-embed-m-v1.5" \
+    --server localhost:50050 \
+    --batch-sizes 1,16,64 \
+    --requests 10240 \
+    --concurrency 1024 \
+    --prompt-length 50
+
 ```
 
 ### Output
@@ -87,7 +93,7 @@ python benchmark_http.py [options]
 #### Options
 
 - `--server ADDRESS`: Server address including protocol (default: http://localhost:8000)
-- `--model MODEL_NAME`: Model name to use for embedding (default: BAAI/bge-base-en-v1.5)
+- `--model MODEL_NAME`: Model name to use for embedding (default: Snowflake/snowflake-arctic-embed-m-v1.5)
 - `--endpoint ENDPOINT`: API endpoint for embeddings (default: v1/embeddings)
 - `--batch-sizes SIZES`: Comma-separated list of batch sizes to test (default: 1,4,16,64)
 - `--requests N`: Number of requests per batch size (default: 1024)
@@ -119,10 +125,10 @@ First, start the vLLM server and the arctic_inference server:
 
 ```bash
 # Start the vLLM server
-vllm serve BAAI/bge-base-en-v1.5
+vllm serve Snowflake/snowflake-arctic-embed-m-v1.5
 
 # Start the arctic_inference server
-python -m arctic_inference.embedding.manager --model BAAI/bge-base-en-v1.5 --port 50050
+python -m arctic_inference.embedding.manager --model Snowflake/snowflake-arctic-embed-m-v1.5 --port 50050
 ```
 
 ```bash

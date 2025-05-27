@@ -470,7 +470,7 @@ if __name__ == "__main__":
     )
 
     # Default model
-    parser.set_defaults(model="BAAI/bge-base-en-v1.5")
+    parser.set_defaults(model="Snowflake/snowflake-arctic-embed-m-v1.5")
 
     args = parser.parse_args()
 

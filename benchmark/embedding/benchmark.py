@@ -133,7 +133,8 @@ class EncodeBenchmark:
                     print(
                         "Waiting for replicas to be ready... {} / {}".format(
                             info_response.n_healthy_replicas, info_response.n_replicas
-                        ), end="\r"
+                        ),
+                        end="\r",
                     )
                     await asyncio.sleep(2)
                 else:
@@ -146,7 +147,7 @@ class EncodeBenchmark:
         """Run warmup requests to ensure the server is ready."""
         print("\nRunning warmup requests...")
         warmup_prompts = self._generate_prompts(self.prompt_length, 20, "fixed")
-        
+
         for i in range(20):
             try:
                 request_id = f"warmup-{i}-{uuid.uuid4()}"
@@ -161,7 +162,7 @@ class EncodeBenchmark:
             except Exception as e:
                 print(f"Warmup request {i} failed: {e}")
                 return False
-        
+
         print("Warmup completed successfully")
         return True
 
@@ -329,7 +330,10 @@ async def main():
         "--server", type=str, default="localhost:50050", help="Server address"
     )
     parser.add_argument(
-        "--model", type=str, default="BAAI/bge-base-en-v1.5", help="Model name"
+        "--model",
+        type=str,
+        default="Snowflake/snowflake-arctic-embed-m-v1.5",
+        help="Model name",
     )
     parser.add_argument(
         "--batch-sizes",
@@ -361,11 +365,11 @@ async def main():
     batch_sizes = [int(bs) for bs in args.batch_sizes.split(",")]
 
     # Validate model-specific constraints
-    if args.model == "BAAI/bge-base-en-v1.5":
+    if args.model == "Snowflake/snowflake-arctic-embed-m-v1.5":
         if args.prompt_length > 512:
             print(
-                "Prompt length must be less than 512 for BAAI/bge-base-en-v1.5 because "
-                "the model has a max sequence length of 512"
+                "Prompt length must be less than 512 for Snowflake/snowflake-arctic-embed-m-v1.5 "
+                "because the model has a max sequence length of 512"
             )
             return
 
