@@ -13,12 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
+import os
 from typing import Optional, Union
 
-from vllm.config import VllmConfig, SpeculativeConfig
+from vllm.config import VllmConfig
 from vllm.model_executor.model_loader import get_model
 from vllm.v1.spec_decode.metadata import SpecDecodeMetadata
+from vllm.v1.worker.gpu_model_runner import logger
 
 import numpy as np
 import torch
@@ -46,6 +47,18 @@ class ArcticProposer:
         from vllm.config import VllmConfig
 
         draft_config_model_config = self.speculative_config.draft_model_config
+
+        if os.getenv("ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK", "0") != "1":
+            draft_model_name = draft_config_model_config.hf_config.base_model_name_or_path
+            base_model_name = self.vllm_config.model_config.model
+            if draft_model_name != base_model_name:
+                logger.error(
+                    f"Draft model name {draft_model_name} does not match base model name {base_model_name}. "
+                    "Please ensure the draft model is compatible with the base model. "
+                    "Set ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK=1 to skip this assertion."
+                )
+                assert False
+
         draft_config_quant_config = VllmConfig._get_quantization_config(
             self.vllm_config.model_config,
             self.vllm_config.load_config,
