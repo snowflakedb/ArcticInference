@@ -364,7 +364,6 @@ class ShiftParallelLlamaForCausalLM(ArcticPatch[LlamaForCausalLM]):
     ) -> Union[torch.Tensor, IntermediateTensors]:
 
         from .model_runner import SP_TP_MODE
-        assert SP_TP_MODE is not None
 
         from vllm.forward_context import get_forward_context
         metadata = get_forward_context().attn_metadata
