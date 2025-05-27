@@ -140,8 +140,11 @@ class CompileGrpc(_build_py):
     """Custom build command to compile .proto files before building."""
 
     def run(self):
-        # from arctic_inference.embedding.generate_proto import generate_grpc_code
-        # generate_grpc_code()
+        import os
+        import sys
+        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+        from arctic_inference.embedding.generate_proto import generate_grpc_code
+        generate_grpc_code()
         # Run the original build_py command
         _build_py.run(self)
 
