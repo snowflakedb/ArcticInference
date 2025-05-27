@@ -71,7 +71,11 @@ class ShiftParallelFP8LinearMethod(ArcticPatch[Fp8LinearMethod]):
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         self._orig_process_weights_after_loading(layer)
 
-        # TODO: skip the rest if shift parallel threshold is 0
+        if ParallelConfig.shift_parallel_threshold == 0:
+            # If shift parallel threshold is 0, we skip the rest of the
+            # processing and use the original weight.
+            return
+
         sp_size = parallel_state._SP.world_size
         sp_rank = parallel_state._SP.rank_in_group
         output_partition_sizes = layer.logical_widths
@@ -154,9 +158,10 @@ class ShiftParallelUnquantizedLinearMethod(ArcticPatch[UnquantizedLinearMethod])
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
 
-        # TODO: skip weight duplication
-        # if ParallelConfig.shift_parallel_threshold == 0:
-        #     return
+        if ParallelConfig.shift_parallel_threshold == 0:
+            # If shift parallel threshold is 0, we skip the rest of the
+            # processing and use the original weight.
+            return
 
         if torch.distributed.get_rank() == 0:
             print(f"ShiftParallelUnquantizedLinearMethod: "
