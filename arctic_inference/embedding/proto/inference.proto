@@ -6,9 +6,6 @@ service InferenceService {
   // encode a given prompt
   rpc Encode (EncodeRequest) returns (EncodeResponse) {}
 
-  // Generate completions for a given prompt
-  rpc Generate (GenerateRequest) returns (stream GenerateResponse) {}
-  
   // Abort an ongoing generation
   rpc Abort (AbortRequest) returns (AbortResponse) {}
   
@@ -18,6 +15,8 @@ service InferenceService {
   // Health check
   rpc HealthCheck (HealthCheckRequest) returns (HealthCheckResponse) {}
 }
+
+
 message EncodeRequest {
   string request_id = 1;
   int32 n_prompts = 2;
@@ -44,31 +43,6 @@ message EncodeResponse {
 
   // error message, empty if success
   string error = 5;
-}
-
-// Request for text generation
-message GenerateRequest {
-  string request_id = 1;
-  // The prompt to generate from, can be a string or a list of token ids
-  // use bytes to avoid serialization/deserialization overhead
-  int32 n_prompts = 2;
-  repeated string prompt = 3;
-  repeated bytes token_id_bytes_i32 = 4;
-
-  string model_name = 5;
-
-  SamplingParams sampling_params = 6;
-  int32 priority = 7;
-  LoRARequest lora_request = 8;
-}
-
-// Response for text generation
-message GenerateResponse {
-  string request_id = 1;
-  string text = 2;
-  bool finished = 3;
-  repeated int32 token_ids = 4;
-  // LogProbs logprobs = 6;
 }
 
 // Request to abort a generation
@@ -115,41 +89,3 @@ message HealthCheckResponse {
   string message = 2;
 }
 
-// Sampling parameters
-message SamplingParams {
-  float temperature = 1;
-  int32 top_k = 2;
-  float top_p = 3;
-  float presence_penalty = 4;
-  float frequency_penalty = 5;
-  int32 max_tokens = 6;
-  repeated string stop = 7;
-  bool include_logprobs = 8;
-  bool stream = 9;
-  int32 n = 10;
-  bool echo = 11;
-  bool use_beam_search = 12;
-  int32 best_of = 13;
-  int32 seed = 14;
-}
-
-// LoRA request
-message LoRARequest {
-  string lora_name = 1;
-  float lora_int8_enable = 2;
-  float lora_r = 3;
-  float lora_alpha = 4;
-  float lora_dropout = 5;
-}
-
-// Log probabilities
-message LogProbs {
-  repeated float token_logprobs = 1;
-  repeated string tokens = 2;
-  repeated TopLogProbs top_logprobs = 3;
-}
-
-// Top log probabilities for a token
-message TopLogProbs {
-  map<string, float> top_logprobs = 1;
-} 

@@ -32,7 +32,7 @@ python benchmark.py
 python benchmark.py --server 0.0.0.0:50050 --batch-sizes 1,4,16,64 --concurrency 64
 
 # Specify a different model
-python benchmark.py --model llama2-7b
+python benchmark.py --model "Snowflake/snowflake-arctic-embed-m-v1.5"
 
 # Use absolute path if needed
 python /path/to/arctic_inference/grpc/benchmark.py --server localhost:50050
@@ -122,7 +122,7 @@ First, start the vLLM server and the arctic_inference server:
 vllm serve BAAI/bge-base-en-v1.5
 
 # Start the arctic_inference server
-python -m arctic_inference.grpc.manager --model BAAI/bge-base-en-v1.5 --port 50050
+python -m arctic_inference.embedding.manager --model BAAI/bge-base-en-v1.5 --port 50050
 ```
 
 ```bash

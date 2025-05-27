@@ -21,7 +21,7 @@ When a request comes in:
 Usage example:
 
 ```bash
-python -m arctic_inference.grpc.replica_manager \
+python -m arctic_inference.embedding.replica_manager \
   --port 60050                         \
   --num-replicas 2                     \
   --model BAAI/bge-base-en-v1.5        
@@ -59,12 +59,12 @@ from vllm.engine.arg_utils import AsyncEngineArgs
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT_DIR))
 
-import arctic_inference.grpc.proto.python.inference_pb2 as inference_pb2
-import arctic_inference.grpc.proto.python.inference_pb2_grpc as inference_pb2_grpc
+import arctic_inference.embedding.proto.python.inference_pb2 as inference_pb2
+import arctic_inference.embedding.proto.python.inference_pb2_grpc as inference_pb2_grpc
 
 import contextlib
 
-logger = logging.getLogger("arctic_inference.grpc.manage4")
+logger = logging.getLogger("arctic_inference.embedding.manage4")
 
 
 class LoadBalancerType(str, Enum):
@@ -207,7 +207,7 @@ class ReplicaManager:
         cmd: List[str] = [
             sys.executable,
             "-m",
-            "arctic_inference.grpc.replica",
+            "arctic_inference.embedding.replica",
             "--host",
             host,
             "--port",
@@ -241,7 +241,7 @@ class ReplicaManager:
     ) -> Optional[ReplicaInfo]:
         """Start a replica process and wait until it reports healthy."""
         cmd = self._build_replica_cmd(host, port)
-        time.sleep(2)
+        time.sleep(4)
         logger.info("Starting replica on port %d: %s", port, " ".join(cmd))
 
         # Use line-buffered output so we can stream logs and avoid deadlocks.
@@ -359,9 +359,6 @@ class ManagerServicer(inference_pb2_grpc.InferenceServiceServicer):
     # ----------------------------------------------------------------------------
     async def Encode(self, request, context) -> inference_pb2.EncodeResponse:  # type: ignore
         return await self.replica_manager.route_request("Encode", request, context)
-
-    async def Generate(self, request, context) -> inference_pb2.GenerateResponse:  # type: ignore
-        return await self.replica_manager.route_request("Generate", request, context)
 
     async def HealthCheck(
         self, request, context

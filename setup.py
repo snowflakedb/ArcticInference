@@ -21,6 +21,7 @@ from pathlib import Path
 
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
+from setuptools.command.build_py import build_py as _build_py
 
 # Convert distutils Windows platform specifiers to CMake -A arguments
 PLAT_TO_CMAKE = {
@@ -135,7 +136,16 @@ class CMakeBuild(build_ext):
         )
 
 
+class CompileGrpc(_build_py):
+    """Custom build command to compile .proto files before building."""
+
+    def run(self):
+        from arctic_inference.embedding.generate_proto import generate_grpc_code
+        generate_grpc_code()
+        # Run the original build_py command
+        _build_py.run(self)
+
 setup(
     ext_modules=[CMakeExtension("arctic_inference.common.suffix_cache._C", "csrc/suffix_cache")],
-    cmdclass={"build_ext": CMakeBuild},
+    cmdclass={"build_ext": CMakeBuild, 'build_py': CompileGrpc},
 )

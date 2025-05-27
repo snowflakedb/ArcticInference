@@ -18,8 +18,8 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
 try:
-    import arctic_inference.grpc.proto.python.inference_pb2 as inference_pb2
-    import arctic_inference.grpc.proto.python.inference_pb2_grpc as inference_pb2_grpc
+    import arctic_inference.embedding.proto.python.inference_pb2 as inference_pb2
+    import arctic_inference.embedding.proto.python.inference_pb2_grpc as inference_pb2_grpc
 except ImportError:
     print("Error: Could not import gRPC modules. Make sure to run generate_proto.py first.")
     print("Run: python arctic_inference/grpc/generate_proto.py")

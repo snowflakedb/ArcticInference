@@ -30,7 +30,7 @@ function run_benchmark_vllm() {
 function run_benchmark_arctic() {
     echo "Running arctic_inference benchmark for $MODEL"
     pkill -f replica.py
-    python arctic_inference/grpc/replica_manager.py --model $MODEL --num-replicas $NUM_REPLICAS --port 50050 > arctic.log &
+    python -m arctic_inference.embedding.replica_manager --model $MODEL --num-replicas $NUM_REPLICAS --port 50050 > arctic.log &
     pid=$!
     sleep 20
     python ${FILE_DIR}/benchmark.py --model $MODEL \
@@ -46,14 +46,12 @@ function run_benchmark_arctic() {
 
 function setup() {
     echo "Install packages and generate gRPC code"
-    pip install -U grpcio grpcio-tools protobuf grpcio-reflection > benchmark.log 2>&1;
+    pip install -U grpcio grpcio-tools protobuf > benchmark.log 2>&1;
     cd ${FILE_DIR}/../;
-    python arctic_inference/grpc/generate_proto.py >> benchmark.log 2>&1;
+    python arctic_inference/embedding/generate_proto.py >> benchmark.log 2>&1;
     cd ${CURR_DIR};
 }
 
 
-setup
 run_benchmark_vllm
 run_benchmark_arctic
-

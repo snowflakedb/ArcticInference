@@ -31,16 +31,13 @@ from vllm.inputs import TokensPrompt
 from vllm.pooling_params import PoolingParams
 
 # Ensure we're using vLLM v0 for embedding support
-# assert os.environ.get("VLLM_USE_V1", "0") == "0", (
-#     "embedding is only supported for vLLM v0"
-# )
 os.environ["VLLM_USE_V1"] = "0"
 
 
 # Import the generated protobuf code
 try:
-    import arctic_inference.grpc.proto.python.inference_pb2 as inference_pb2
-    import arctic_inference.grpc.proto.python.inference_pb2_grpc as inference_pb2_grpc
+    import arctic_inference.embedding.proto.python.inference_pb2 as inference_pb2
+    import arctic_inference.embedding.proto.python.inference_pb2_grpc as inference_pb2_grpc
 except ImportError:
     print(
         "Error: Could not import gRPC modules. Make sure to run generate_proto.py first."
@@ -49,7 +46,7 @@ except ImportError:
     sys.exit(1)
 
 # Configure logger
-logger = logging.getLogger("arctic_inference.grpc.replica")
+logger = logging.getLogger("arctic_inference.embedding.replica")
 
 
 class InferenceServicer(inference_pb2_grpc.InferenceServiceServicer):
@@ -245,76 +242,6 @@ class InferenceServicer(inference_pb2_grpc.InferenceServiceServicer):
             embedding_bytes_fp32=embedding_bytes_fp32,
         )
 
-    # TODO: Implement the _convert_sampling_params and _convert_lora_request methods
-    # that are referenced in the Generate method
-
-    async def Generate(
-        self, request: inference_pb2.GenerateRequest, context: ServicerContext
-    ) -> inference_pb2.GenerateResponse:
-        """Handle a request to generate text completions.
-
-        Args:
-            request: The client request containing prompts and generation parameters.
-            context: gRPC service context.
-
-        Returns:
-            Iterator of responses with generated tokens.
-        """
-        # Check if the model is ready
-        if not self.ready:
-            yield inference_pb2.GenerateResponse(
-                request_id=request.request_id,
-                error="Model not ready",
-            )
-            return
-
-        # Ensure we have a request ID
-        request_id = request.request_id or str(uuid.uuid4())
-        logger.info(f"Received generation request: {request_id}")
-
-        # Convert proto SamplingParams to vLLM SamplingParams
-        sampling_params = self._convert_sampling_params(request)
-
-        # Convert proto LoRARequest to vLLM LoRARequest if provided
-        lora_request = None
-        if hasattr(request, "lora_request") and request.HasField("lora_request"):
-            lora_request = self._convert_lora_request(request.lora_request)
-
-        # Track the request for potential abortion
-        self._active_requests[request_id] = context
-
-        try:
-            # Generate completions
-            async for output in self.engine.generate(
-                prompt=request.prompt[0] if request.prompt else "",
-                sampling_params=sampling_params,
-                request_id=request_id,
-                lora_request=lora_request,
-                priority=request.priority,
-            ):
-                # Convert the output to a proto response
-                response = self._convert_output_to_response(output)
-                yield response
-
-                # Check if the client has cancelled the request
-                if await context.cancelled():
-                    logger.info(f"Request {request_id} was cancelled by client")
-                    await self.engine.abort(request_id)
-                    break
-
-        except Exception as e:
-            logger.exception(f"Error processing request {request_id}: {e}")
-            yield inference_pb2.GenerateResponse(
-                request_id=request_id,
-                text="",
-                finished=True,
-                token_ids=[],
-                error=f"Error processing request: {str(e)}",
-            )
-        finally:
-            # Remove the request from active requests
-            self._active_requests.pop(request_id, None)
-
     async def Abort(
         self, request: inference_pb2.AbortRequest, context: ServicerContext
     ) -> inference_pb2.AbortResponse:
@@ -409,28 +336,6 @@ class InferenceServicer(inference_pb2_grpc.InferenceServiceServicer):
             return inference_pb2.HealthCheckResponse(
                 healthy=False, message=f"Service is unhealthy: {str(e)}"
             )
-
-    def _convert_output_to_response(
-        self, output: RequestOutput
-    ) -> inference_pb2.GenerateResponse:
-        """Convert a vLLM RequestOutput to a proto GenerateResponse.
-
-        Args:
-            output: The vLLM output to convert.
-
-        Returns:
-            Converted gRPC response.
-        """
-        response = inference_pb2.GenerateResponse(
-            request_id=output.request_id,
-            text=output.text,
-            finished=output.finished,
-            token_ids=output.token_ids,
-            generated_tokens=len(output.token_ids) if output.token_ids else 0,
-        )
-
-        return response
-
 
 class InferenceServer:
     """gRPC server for the InferenceService.

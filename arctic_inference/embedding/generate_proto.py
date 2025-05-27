@@ -58,7 +58,7 @@ def generate_grpc_code():
         # Replace relative import with absolute import
         content = content.replace(
             "import inference_pb2 as inference__pb2",
-            "from arctic_inference.grpc.proto.python import inference_pb2 as inference__pb2",
+            "from arctic_inference.embedding.proto.python import inference_pb2 as inference__pb2",
         )
 
         with open(pb2_grpc_file, "w") as f:
@@ -74,7 +74,6 @@ def generate_grpc_code():
     else:
         print("Error: Generated files not found")
         return 1
-
 
 if __name__ == "__main__":
     sys.exit(generate_grpc_code())

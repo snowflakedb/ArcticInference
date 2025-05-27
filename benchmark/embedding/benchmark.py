@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import List, Tuple
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-import arctic_inference.grpc.proto.python.inference_pb2 as inference_pb2
-import arctic_inference.grpc.proto.python.inference_pb2_grpc as inference_pb2_grpc
+import arctic_inference.embedding.proto.python.inference_pb2 as inference_pb2
+import arctic_inference.embedding.proto.python.inference_pb2_grpc as inference_pb2_grpc
 
 
 def gen_random_num(param: int, count: int, distribution: str) -> np.ndarray:
@@ -131,9 +131,9 @@ class EncodeBenchmark:
 
                 if info_response.n_healthy_replicas < info_response.n_replicas:
                     print(
-                        "Waiting for server to be ready... {} / {}".format(
+                        "Waiting for replicas to be ready... {} / {}".format(
                             info_response.n_healthy_replicas, info_response.n_replicas
-                        )
+                        ), end="\r"
                     )
                     await asyncio.sleep(2)
                 else:

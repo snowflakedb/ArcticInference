@@ -22,30 +22,11 @@ This will generate the following files:
 - `inference_pb2.py`: Contains message classes
 - `inference_pb2_grpc.py`: Contains server and client classes
 
-## Running the Replica Server
-
-To run the gRPC Replica server:
-
-```bash
-python -m arctic_inference.grpc.replica --model <MODEL_NAME> [--host <HOST>] [--port <PORT>] [--workers <WORKERS>] [--disable-log-request]
-# e.g., 
-python -m arctic_inference.grpc.replica --model BAAI/bge-base-en-v1.5 --host 127.0.0.1 --port 50000
-```
-
-Options:
-- `--model`: Model name or path (required)
-- `--host`: Host to bind to (default: 0.0.0.0)
-- `--port`: Port to bind to (default: 50051)
-- `--workers`: Number of gRPC workers (default: 16)
-- `--disable-log-request`: Disable logging of request (default: False)
-
-You can also pass more vLLM engine arguments to the replica server.
-
-# Replica Manager
+## Replica Manager
 
 The replica manager (`replica_manager.py`) enables horizontal scaling of vLLM inference by managing multiple replica instances and load balancing requests between them.
 
-## Features
+### Features
 
 - **Multiple Model Replicas**: Launch and manage multiple vLLM model replicas
 - **Load Balancing**: Distribute requests across replicas using various strategies:
@@ -56,10 +37,10 @@ The replica manager (`replica_manager.py`) enables horizontal scaling of vLLM in
 - **Automatic Recovery**: Retry requests if replicas are unavailable
 - **Unified API**: Present a single API endpoint that handles distribution internally
 
-## Usage
+### Usage
 
 ```bash
-python -m arctic_inference.grpc.replica_manager [options]
+python -m arctic_inference.embedding.replica_manager [options]
 ```
 
 ### Options
@@ -80,18 +61,38 @@ python -m arctic_inference.grpc.replica_manager [options]
 
 ```bash
 # Start a manager with 3 replicas using a round-robin load balancing policy
-python -m arctic_inference.grpc.replica_manager --model BAAI/bge-base-en-v1.5 --num-replicas 4
+python -m arctic_inference.embedding.replica_manager --model Snowflake/snowflake-arctic-embed-m-v1.5 --num-replicas 4
 
 # Use a least-loaded policy for better handling of varying request complexities
-python -m arctic_inference.grpc.replica_manager --model BAAI/bge-base-en-v1.5 --num-replicas 4 --load-balancing least_loaded
+python -m arctic_inference.embedding.replica_manager --model Snowflake/snowflake-arctic-embed-m-v1.5 --num-replicas 4 --load-balancing least_loaded
 ```
+
+## Running the Replica Server
+You do not need to run the replica server. The replica manager will start the replicas for you.
+However, if you want to run the replica server manually, often for debugging purposes, you can do so with the following command:
+
+```bash
+python -m arctic_inference.embedding.replica --model <MODEL_NAME> [--host <HOST>] [--port <PORT>] [--workers <WORKERS>] [--disable-log-request]
+# e.g., 
+python -m arctic_inference.embedding.replica --model Snowflake/snowflake-arctic-embed-m-v1.5 --host 127.0.0.1 --port 50000
+```
+
+Options:
+- `--model`: Model name or path (required)
+- `--host`: Host to bind to (default: 0.0.0.0)
+- `--port`: Port to bind to (default: 50051)
+- `--workers`: Number of gRPC workers (default: 16)
+- `--disable-log-request`: Disable logging of request (default: False)
+
+You can also pass more vLLM engine arguments to the replica server.
+
 
 ## Using the Client
 
 To use the client:
 
 ```bash
-python -m arctic_inference.grpc.client --prompt "Your prompt here" [--host <HOST>] [--port <PORT>] [--temperature <TEMP>] [--top-p <TOP_P>] [--top-k <TOP_K>] [--max-tokens <MAX_TOKENS>] [--stream] [--lora-name <LORA_NAME>]
+python -m arctic_inference.embedding.client --prompt "Your prompt here" [--host <HOST>] [--port <PORT>] [--temperature <TEMP>] [--top-p <TOP_P>] [--top-k <TOP_K>] [--max-tokens <MAX_TOKENS>] [--stream] [--lora-name <LORA_NAME>]
 ```
 
 Options:
@@ -104,6 +105,25 @@ Options:
 - `--max-tokens`: Maximum number of tokens to generate (default: 512)
 - `--stream`: Stream the results (flag)
 - `--lora-name`: LoRA adapter name
+
+## Parameters
+When using H200, we use the following parameters and commands 
+
+```bash
+# long sequence, 1024 requests, 1024 concurrency, sequence length 512, and 4 replicas
+bash benchmark/embedding/run_benchmark.sh Snowflake/snowflake-arctic-embed-m-v1.5 1024 512 16 fixed 1,16,64 4
+# short sequence, 4096 requests, 1024 concurrency, sequence length 50, and 32 replicas
+bash benchmark/embedding/run_benchmark.sh Snowflake/snowflake-arctic-embed-m-v1.5 10240 50 1024 fixed 1,16,64 32
+```
+
+When using a weaker GPU such as A10g, we use the following parameters and commands
+
+```bash
+# long sequence
+bash benchmark/embedding/run_benchmark.sh Snowflake/snowflake-arctic-embed-m-v1.5 1024 512 16 fixed 1,16,64 2
+# short sequence
+bash benchmark/embedding/run_benchmark.sh Snowflake/snowflake-arctic-embed-m-v1.5 4096 50 256 fixed 1,16,64 8
+```
 
 ## Troubleshooting
 

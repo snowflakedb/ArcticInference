@@ -26,9 +26,16 @@ packages = [
     "arctic_inference.vllm",
     "arctic_inference.vllm.swiftkv",
     "arctic_inference.vllm.spec_dec",
+    "arctic_inference.embedding",
 ]
 
 [project.optional-dependencies]
 vllm = [
     'vllm==0.8.4',
+]
+embedding = [
+    "grpcio",
+    "grpcio-tools",
+    "protobuf",
+    "transformers",
 ]
