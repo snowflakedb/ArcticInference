@@ -27,7 +27,7 @@ from arctic_inference.patching import ArcticPatch
 @dataclass
 class ArcticArgs:
 
-    sequence_parallel_size: int = 1
+    ulysses_sequence_parallel_size: int = 1
     shift_parallel_threshold: int = 0
 
 
@@ -66,20 +66,17 @@ class EngineArgsPatch(ArcticPatch[EngineArgs]):
     def add_cli_args(parser: FlexibleArgumentParser) -> FlexibleArgumentParser:
         parser = EngineArgsPatch._orig_add_cli_args(parser)
         parser.add_argument(
-            "--sequence-parallel-size",
             "--ulysses-sequence-parallel-size",
-            "-sp",
             type=int,
-            default=ArcticEngineArgs.sequence_parallel_size,
-            help="Number of sequence parallel replicas",
+            default=ArcticEngineArgs.ulysses_sequence_parallel_size,
+            help="Number of Ulysses sequence parallel replicas",
         )
         parser.add_argument(
             "--shift-parallel-threshold",
-            "-sst",
             type=int,
             default=ArcticEngineArgs.shift_parallel_threshold,
-            help=("Sequence parallel if batch size > threshold, otherwise "
-                  "tensor parallel"),
+            help=("Ulysses sequence parallel if batch size > threshold, "
+                  "otherwise tensor parallel across the whole world size"),
         )
         return parser
 
