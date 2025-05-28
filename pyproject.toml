@@ -38,8 +38,8 @@ vllm = [
     'vllm==0.8.4',
 ]
 embedding = [
-    "grpcio",
-    "grpcio-tools",
-    "protobuf>=6.0.0",
+    "grpcio>=1.60.0",
+    "grpcio-tools>=1.60.0",
+    "protobuf>=4.0.0",
     "transformers",
 ]
