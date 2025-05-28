@@ -51,7 +51,6 @@ from vllm.sequence import IntermediateTensors
 
 from arctic_inference.patching import ArcticPatch
 
-
 def apply_shift_parallel_patches():
     UlyssesModelConfigPatch.apply_patch()
     UlyssesParallelStatePatch.apply_patch()
@@ -71,10 +70,11 @@ class ShiftParallelFP8LinearMethod(ArcticPatch[Fp8LinearMethod]):
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         self._orig_process_weights_after_loading(layer)
 
-        # if ParallelConfig.shift_parallel_threshold == 0:
+        from .model_runner import SP_TP_THRESHOLD
+        if SP_TP_THRESHOLD == 0:
             # If shift parallel threshold is 0, we skip the rest of the
             # processing and use the original weight.
-        #     return
+            return
 
         sp_size = parallel_state._SP.world_size
         sp_rank = parallel_state._SP.rank_in_group
@@ -100,6 +100,7 @@ class ShiftParallelFP8LinearMethod(ArcticPatch[Fp8LinearMethod]):
 
         # print (remove later)
         if parallel_state._SP.rank == 0:
+            print(f"shift_parallel_threshold {SP_TP_THRESHOLD}")
             if output_partition_sizes == [layer.weight.shape[1]]:
                 print(f"row parallel SP: {sp_size}.")
             else:
@@ -158,10 +159,11 @@ class ShiftParallelUnquantizedLinearMethod(ArcticPatch[UnquantizedLinearMethod])
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
 
-        # if ParallelConfig.shift_parallel_threshold == 0:
+        from .model_runner import SP_TP_THRESHOLD
+        if SP_TP_THRESHOLD == 0:
             # If shift parallel threshold is 0, we skip the rest of the
             # processing and use the original weight.
-        #     return
+            return
 
         if torch.distributed.get_rank() == 0:
             print(f"ShiftParallelUnquantizedLinearMethod: "
@@ -191,6 +193,7 @@ class ShiftParallelUnquantizedLinearMethod(ArcticPatch[UnquantizedLinearMethod])
 
         # print (remove later)
         if torch.distributed.get_rank() == 0:
+            print(f"shift_parallel_threshold {SP_TP_THRESHOLD}")
             if output_partition_sizes == [layer.weight.shape[0]]:
                 print("row parallel linear")
             else:
