@@ -37,16 +37,18 @@ class ArcticParallelConfig(ParallelConfig):
             arctic_args.ulysses_sequence_parallel_size)
         self.shift_parallel_threshold = arctic_args.shift_parallel_threshold
         if self.ulysses_sequence_parallel_size == 1:
-            logger.warning(
-                "ArcticParallelConfig: ulysses_sequence_parallel_size is set to 1, "
-                "which means sequence parallelism is disabled. Forcing shift_parallel_threshold to 0.")
-            self.shift_parallel_threshold = 0
+            if self.shift_parallel_threshold > 0:
+                logger.warning(
+                      "ArcticParallelConfig: ulysses_sequence_parallel_size is set to 1,\n"
+                      "                      which means sequence parallelism is disabled.\n"
+                      "                      Forcing shift_parallel_threshold to 0.")
+                self.shift_parallel_threshold = 0
         elif self.shift_parallel_threshold == 0:
             logger.warning(
-                "ArcticParallelConfig: shift_parallel_threshold is set to 0 by default, "
-                "which means shift parallelism is disabled, and the latency is sub-optimal. "
-                "Consider setting it to 256 to enable shift parallelism. "
-                "In this case, TP is is used rather than SP when batch size <= 256.")
+                "ArcticParallelConfig: shift_parallel_threshold is set to 0 by default,\n"
+                "                      which means shift parallelism is disabled, and the latency is sub-optimal.\n"
+                "                      Consider setting it to 256 to enable shift parallelism,\n"
+                "                      which shifts TP=tpxsp when batch size <= 256.")
 
     @property
     def world_size(self) -> int:
