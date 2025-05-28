@@ -47,6 +47,17 @@ def padding_size(size: int) -> int:
     return (size + mult - 1) //  mult * mult
 
 
+from contextlib import contextmanager
+@contextmanager
+def tppp_graph_capture(device: torch.device):
+    from vllm.distributed.parallel_state import GraphCaptureContext
+    context = GraphCaptureContext(torch.cuda.Stream(device=device))
+    import vllm.distributed.parallel_state as parallel_state
+    with parallel_state._TP.graph_capture(context), parallel_state._PP.graph_capture(
+            context):
+        yield context
+
+
 class MLPSpeculatorLayerNorm(nn.Module):
     """
     A L2 normalization implementation
@@ -354,10 +365,8 @@ class ArcticMLPSpeculator(nn.Module):
                 ]
 
             if g is None:
-                from vllm.distributed.parallel_state import graph_capture
-
                 device = torch.cuda.current_device()
-                with graph_capture(device=device) as capture_context:
+                with tppp_graph_capture(device=device) as capture_context:
                     g = torch.cuda.CUDAGraph()
                     with torch.cuda.graph(g, stream=capture_context.stream):
                         self.generate_token_ids(
@@ -830,10 +839,8 @@ class ArcticLSTMSpeculator(nn.Module):
                 ]
 
             if g is None:
-                from vllm.distributed.parallel_state import graph_capture
-
                 device = torch.cuda.current_device()
-                with graph_capture(device=device) as capture_context:
+                with tppp_graph_capture(device=device) as capture_context:
                     g = torch.cuda.CUDAGraph()
                     with torch.cuda.graph(g, stream=capture_context.stream):
                         if self.method == "sum_lstm":
