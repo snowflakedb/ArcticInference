@@ -241,7 +241,7 @@ class ReplicaManager:
     ) -> Optional[ReplicaInfo]:
         """Start a replica process and wait until it reports healthy."""
         cmd = self._build_replica_cmd(host, port)
-        time.sleep(4)
+        time.sleep(2)
         logger.info("Starting replica on port %d: %s", port, " ".join(cmd))
 
         # Use line-buffered output so we can stream logs and avoid deadlocks.
@@ -408,7 +408,7 @@ async def serve(args_list: List[str]):
         args_list=args_list,
         base_port=args.port,
         num_replicas=args.num_replicas,
-        lb=LoadBalancerType(args.load_balancer),
+        lb=LoadBalancerType(args.balancing),
         health_interval=args.health_interval,
     )
 
@@ -458,7 +458,7 @@ if __name__ == "__main__":
         "--num-replicas", type=int, default=2, help="Number of replicas to launch"
     )
     parser.add_argument(
-        "--load-balancer",
+        "--load-balancing",
         default="round_robin",
         choices=[e.value for e in LoadBalancerType],
         help="Load balancing strategy",
@@ -489,9 +489,10 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=50050,
         num_replicas=4,
-        health_interval=2,
-        forward_timeout=20,
+        health_interval=1,
+        forward_timeout=120,
         startup_timeout=120,
+        load_balancing="round_robin",
         model="Snowflake/snowflake-arctic-embed-m-v1.5",
     )
 

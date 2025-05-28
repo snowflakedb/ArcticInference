@@ -60,11 +60,14 @@ python -m arctic_inference.embedding.replica_manager [options]
 ### Example
 
 ```bash
-# Start a manager with 3 replicas using a round-robin load balancing policy
+# Start a manager with 4 replicas using a round-robin load balancing policy
 python -m arctic_inference.embedding.replica_manager --model Snowflake/snowflake-arctic-embed-m-v1.5 --num-replicas 4
 
 # Use a least-loaded policy for better handling of varying request complexities
 python -m arctic_inference.embedding.replica_manager --model Snowflake/snowflake-arctic-embed-m-v1.5 --num-replicas 4 --load-balancing least_loaded
+
+# this is the command we use in benchmark H200 using short sequence
+python -m arctic_inference.embedding.replica_manager --model Snowflake/snowflake-arctic-embed-m-v1.5 --num-replicas 32 --load-balancing round_robin
 ```
 
 ## Running the Replica Server
@@ -106,7 +109,32 @@ Options:
 - `--stream`: Stream the results (flag)
 - `--lora-name`: LoRA adapter name
 
-## Parameters
+## Running benchmarks 
+### Embedding benchmark
+
+We need to first start the replica manager and then run the benchmark. Here is an example of running the long sequence benchmark on H200. 
+
+```bash
+# starting the arctic inference gRPC server
+python -m arctic_inference.embedding.replica_manager \
+    --model Snowflake/snowflake-arctic-embed-m-v1.5 \
+    --num-replicas 4 \
+    --load-balancing round_robin
+
+# running the benchmark
+python -m benchmark.embedding.benchmark \
+    --model "Snowflake/snowflake-arctic-embed-m-v1.5" \
+    --server localhost:50050 \
+    --batch-sizes 1,16,64 \
+    --requests 1024 \
+    --concurrency 64 \
+    --prompt-length 512
+```
+
+
+
+### Parameters
+
 When using H200, we use the following parameters and commands 
 
 ```bash
