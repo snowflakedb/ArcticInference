@@ -6,7 +6,6 @@ requires = [
     "cmake>=3.12",
     "pybind11",
     "pybind11_global",
-    "tqdm",
 ]
 build-backend = "setuptools.build_meta"
 
