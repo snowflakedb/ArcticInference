@@ -94,6 +94,9 @@ def arctic_inference_plugin():
                                  ArcticMLPSpeculator)
     ModelRegistry.register_model("ArcticLSTMSpeculatorPreTrainedModel",
                                  ArcticLSTMSpeculator)
+    # This name is currently used in corvo
+    ModelRegistry.register_model("MLPVariantSpeculatorPreTrainedModel",
+                                 ArcticLSTMSpeculator)
 
     # Patches that make later patches work properly.
     EngineCoreProcPatch.apply_patch()
