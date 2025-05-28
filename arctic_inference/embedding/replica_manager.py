@@ -408,7 +408,7 @@ async def serve(args_list: List[str]):
         args_list=args_list,
         base_port=args.port,
         num_replicas=args.num_replicas,
-        lb=LoadBalancerType(args.balancing),
+        lb=LoadBalancerType(args.load_balancing),
         health_interval=args.health_interval,
     )
 
