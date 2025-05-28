@@ -58,12 +58,12 @@ def apply_shift_parallel_patches():
     UlyssesMultiprocExecutorPatch.apply_patch()
     UlyssesAttentionPatch.apply_patch()
     UlyssesFlashAttentionImplPatch.apply_patch()
-    ShiftParallelLlamaForCausalLM.apply_patch()
-    ShiftParallelLlamaAttention.apply_patch()
-    ShiftParallelRowParallelLinear.apply_patch()
-    ShiftParallelColumnParallelLinear.apply_patch()
-    ShiftParallelUnquantizedLinearMethod.apply_patch()
-    ShiftParallelFP8LinearMethod.apply_patch()
+    #ShiftParallelLlamaForCausalLM.apply_patch()
+    #ShiftParallelLlamaAttention.apply_patch()
+    #ShiftParallelRowParallelLinear.apply_patch()
+    #ShiftParallelColumnParallelLinear.apply_patch()
+    #ShiftParallelUnquantizedLinearMethod.apply_patch()
+    #ShiftParallelFP8LinearMethod.apply_patch()
 
 
 class ShiftParallelFP8LinearMethod(ArcticPatch[Fp8LinearMethod]):
