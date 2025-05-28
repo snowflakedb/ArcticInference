@@ -42,4 +42,5 @@ embedding = [
     "grpcio-tools>=1.60.0",
     "protobuf>=4.0.0",
     "transformers",
+    "vllm==0.8.4",
 ]

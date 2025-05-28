@@ -128,7 +128,7 @@ First, start the vLLM server and the arctic_inference server:
 vllm serve Snowflake/snowflake-arctic-embed-m-v1.5
 
 # Start the arctic_inference server
-python -m arctic_inference.embedding.manager --model Snowflake/snowflake-arctic-embed-m-v1.5 --port 50050
+python -m arctic_inference.embedding.replica_manager --model Snowflake/snowflake-arctic-embed-m-v1.5 --port 50050
 ```
 
 ```bash
