@@ -122,7 +122,7 @@ python -m arctic_inference.embedding.replica_manager \
     --load-balancing round_robin
 
 # running the benchmark
-python -m benchmark.embedding.benchmark \
+python -m benchmark/embedding/benchmark.py \
     --model "Snowflake/snowflake-arctic-embed-m-v1.5" \
     --server localhost:50050 \
     --batch-sizes 1,16,64 \
