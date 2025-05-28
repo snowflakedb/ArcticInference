@@ -23,11 +23,11 @@ deployments.
 For more details, refer to the `Snowflake blog post
 <https://www.snowflake.com/en/engineering-blog/ulysses-low-latency-llm-inference/>`_.
 
---------------------------
-Usage with ArcticInference
---------------------------
+---------------------------
+Usage with Arctic Inference
+---------------------------
 
-To utilize Arctic Ulysses with ArcticInference, :ref:`install <install>` the
+To utilize Ulysses with Arctic Inference, :ref:`install <install>` the
 ``arctic-inference`` package and select a compatible `Llama-3
 <https://huggingface.co/models?other=llama-3>`_ or or `Qwen-2
 <https://huggingface.co/models?other=qwen2>`_ model.
@@ -37,18 +37,18 @@ To utilize Arctic Ulysses with ArcticInference, :ref:`install <install>` the
     Currently, Arctic Ulysses works only with certain model architectures,
     namely Llama and Qwen. We are working on enabling Ulysses more broadly
     across any model architecture, which will be part of a later release of
-    ArcticInference.
+    Arctic Inference.
 
 Then when launching vLLM, specifying both ``tensor-parallel-size`` and
 ``sequence-parallel-size`` will automatically enable the Arctic Ulysses
 optimization.  Here's an example of how to run the
 `meta-llama/Llama-3.3-70B-Instruct
 <https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct>`_ model with both
-tensor and sequence parallelism across 8 GPUs (4 TP, 2 SP) with ArcticInference:
+tensor and sequence parallelism across 8 GPUs (4 TP, 2 SP) with Arctic Inference:
 
 .. code-block:: bash
 
     python -m vllm.entrypoints.openai.api_server \
         --model meta-llama/Llama-3.3-70B-Instruct \
         --tensor-parallel-size 4 \
-        --sequence-parallel-size 2
+        --ulysses-sequence-parallel-size 2

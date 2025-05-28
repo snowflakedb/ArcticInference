@@ -21,16 +21,16 @@ For more details, refer to the `Snowflake blog post
 <https://www.snowflake.com/en/engineering-blog/INSERT-LINK>`_.
 
 --------------------------
-Usage with ArcticInference
+Usage with Arctic Inference
 --------------------------
 
-To use Shift Parallelism with ArcticInference, :ref:`install <install>` the
+To use Shift Parallelism with Arctic Inference, :ref:`install <install>` the
 ``arctic-inference`` package, select a compatible `Llama-3
 <https://huggingface.co/models?other=llama-3>`_ model and launch vLLM with a
 tensor and sequence parallel configuration where `TP x SP` equals the number of
 GPUs.
 
-ArcticInference will automatically detect traffic conditions and activate the
+Arctic Inference will automatically detect traffic conditions and activate the
 most optimal mode at runtime.
 
 Here is an example of how run Shift Parallelism with the
@@ -46,5 +46,5 @@ Here is an example of how run Shift Parallelism with the
         --ulysses-sequence-parallel-size 2 \
         --shift-parallel-threshold 256
 
-This enables ArcticInference to dynamically balance latency and throughput
+This enables Arctic Inference to dynamically balance latency and throughput
 without manual intervention or separate deployments.

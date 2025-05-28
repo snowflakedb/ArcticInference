@@ -1,31 +1,35 @@
 
-ArcticInference documentation
-=============================
+Arctic Inference documentation
+==============================
 
-ArcticInference is a new library from Snowflake AI Research that contains
+Arctic Inference is a new library from Snowflake AI Research that contains
 current and future LLM inference optimizations developed at Snowflake. It is
 integrated with vLLM v0.8.4 using vLLM's custom plugin feature, allowing us to
 develop and integrate inference optimizations quickly into vLLM and make them
 available to the community.
 
-Once installed, ArcticInference automatically patches vLLM to use Arctic Ulysses
-and other optimizations implemented in ArcticInference, and users can continue
+Once installed, Arctic Inference automatically patches vLLM to use Arctic Ulysses
+and other optimizations implemented in Arctic Inference, and users can continue
 to use their familiar vLLM APIs and CLI. It's easy to get started!
 
 Key Features
 ------------
 
-🚀 :ref:`SwiftKV <swiftkv>`:
-   Reduce compute during prefill by reusing key-value pairs across transformer layers
+Optimized Generative AI
 
-🚀 :ref:`Arctic Ulysses <ulysses>`:
+🚀 :ref:`Shift Parallelism <shift>`:
+   Dynamically switches between tensor and sequence parallelism at runtime to optimize latency, throughput, and cost — all in one deployment
+
+🚀 :ref:`Arctic Ulysses (Sequence Parallelism) <ulysses>`:
    Improve long-context inference latency and throughput via sequence parallelism across GPUs
 
 🚀 :ref:`Speculative Decoding <spec-decode>`:
    Boosts LLM speed by drafting tokens with a small model and verifying them in bulk
 
-🚀 :ref:`Shift Parallelism <shift>`:
-   Dynamically switches between tensor and sequence parallelism at runtime to optimize latency, throughput, and cost — all in one deployment
+🚀 :ref:`SwiftKV <swiftkv>`:
+   Reduce compute during prefill by reusing key-value pairs across transformer layers
+
+Optimized Embeddings
 
 🚀 :ref:`Optimized Embeddings <embeddings>`:
    <add description of Optimized Embeddings here>
@@ -33,16 +37,28 @@ Key Features
 Quick Start
 -----------
 
-To get started with ArcticInference check out the :ref:`quick start guide <quickstart>`
+To get started with Arctic Inference check out the :ref:`quick start guide <quickstart>`
+
+Table of Contents
+=================
 
 .. toctree::
    :maxdepth: 1
-   :caption: Contents:
 
    quick-start
    install
-   swiftkv
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Optimized Generative AI
+
+   shift
    ulysses
    spec-decode
-   shift
+   swiftkv
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Optimized Embeddings
+
    embeddings

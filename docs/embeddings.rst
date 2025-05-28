@@ -5,6 +5,6 @@
 Optimized Embeddings
 ====================
 
---------------------------
-Usage with ArcticInference
---------------------------
+---------------------------
+Usage with Arctic Inference
+---------------------------

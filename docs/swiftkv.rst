@@ -20,11 +20,11 @@ You can read more about SwiftKV in the `Snowflake blog post
 <https://www.snowflake.com/en/engineering-blog/swiftkv-llm-compute-reduction/>`_
 and the `arXiv paper <https://arxiv.org/abs/2410.03960>`_.
 
---------------------------
-Usage with ArcticInference
---------------------------
+---------------------------
+Usage with Arctic Inference
+---------------------------
 
-To use SwiftKV with ArcticInference, you need to :ref:`install <install>` the
+To use SwiftKV with Arctic Inference, you need to :ref:`install <install>` the
 ``arctic-inference`` package and select a SwiftKV model that has been fine-tuned
 with `SwiftKV in ArcticTraining
 <https://github.com/snowflakedb/ArcticTraining/tree/main/projects/swiftkv>`_. We
