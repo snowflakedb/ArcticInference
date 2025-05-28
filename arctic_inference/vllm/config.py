@@ -43,10 +43,10 @@ class ArcticParallelConfig(ParallelConfig):
             self.shift_parallel_threshold = 0
         elif self.shift_parallel_threshold == 0:
             logger.warning(
-                "ArcticParallelConfig: shift_parallel_threshold is set to 0, "
+                "ArcticParallelConfig: shift_parallel_threshold is set to 0 by default, "
                 "which means shift parallelism is disabled, and the latency is sub-optimal. "
                 "Consider setting it to 256 to enable shift parallelism. "
-                "In this case, when batch size is smaller than 256, TP is is used rather than SP.")
+                "In this case, TP is is used rather than SP when batch size <= 256.")
 
     @property
     def world_size(self) -> int:
