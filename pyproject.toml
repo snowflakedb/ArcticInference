@@ -5,7 +5,7 @@ requires = [
     "ninja",
     "cmake>=3.12",
     "pybind11",
-    "pybind11_global"
+    "pybind11_global",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -23,6 +23,7 @@ packages = [
     "arctic_inference.common",
     "arctic_inference.common.suffix_cache",
     "arctic_inference.common.swiftkv",
+    "arctic_inference.dynasor",
     "arctic_inference.vllm",
     "arctic_inference.vllm.swiftkv",
     "arctic_inference.vllm.spec_dec",
@@ -37,4 +38,13 @@ docs = [
     "sphinx>=8.1.3",
     "sphinx-copybutton",
     "sphinx-rtd-theme",
+
+dynasor = [
+    "rich",
+    "prompt_toolkit",
+    "pydantic",
+    "datasets",
+    "latex2sympy2",
+    "transformers",
+    "word2number",
 ]
