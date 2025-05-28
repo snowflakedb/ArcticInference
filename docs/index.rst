@@ -25,7 +25,7 @@ Key Features
    Boosts LLM speed by drafting tokens with a small model and verifying them in bulk
 
 🚀 :ref:`Shift Parallelism <shift>`:
-   <add description of Shift Parallelism here>
+   Dynamically switches between tensor and sequence parallelism at runtime to optimize latency, throughput, and cost — all in one deployment
 
 🚀 :ref:`Optimized Embeddings <embeddings>`:
    <add description of Optimized Embeddings here>
