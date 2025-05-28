@@ -101,7 +101,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
             self.profile_run = shift_parallel_profile_run
 
-        monkeypatch_profile_run(self)
+        if self.parallel_config.shift_parallel_threshold > 0:
+            monkeypatch_profile_run(self)
 
     def _prepare_inputs(self, *args, **kwargs):
         attn_metadata, logits_indices, *rest = (
@@ -119,7 +120,6 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         model_forward = self.model.forward
 
         def ulysses_forward(*args, **kwargs):
-            assert SP_TP_PROFILE_RUN is not None
             # update inputs
             input_ids = kwargs['input_ids']
             positions = kwargs['positions']
