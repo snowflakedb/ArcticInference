@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replica manager and load-balancer that launches multiple replicas on a **single GPU**
+"""Replica manager and load-inger that launches multiple replicas on a **single GPU**
 (technically the same CUDA device) and forwards client requests to them.
 
 ## Architecture
@@ -8,7 +8,7 @@ The replica manager consists of:
 
 1. **Replica Manager**: Coordinates replica lifecycle and request routing
 2. **Replica State**: Tracks health and status of each replica
-3. **Load Balancer**: Selects replicas based on the configured policy
+3. **Load inger**: Selects replicas based on the configured policy
 4. **gRPC Server**: Provides the same API as a single replica but handles distribution
 
 When a request comes in:
@@ -67,7 +67,7 @@ import contextlib
 logger = logging.getLogger("arctic_inference.embedding.manage4")
 
 
-class LoadBalancerType(str, Enum):
+class LoadingerType(str, Enum):
     """Different policies for selecting the next replica."""
 
     ROUND_ROBIN = "round_robin"
@@ -111,7 +111,7 @@ class ReplicaManager:
         args_list: List[str],
         base_port: int,
         num_replicas: int,
-        lb: LoadBalancerType = LoadBalancerType.ROUND_ROBIN,
+        lb: LoadingerType = LoadingerType.ROUND_ROBIN,
         health_interval: float = 5.0,
     ) -> None:
         self.args = args
@@ -224,7 +224,7 @@ class ReplicaManager:
                 "--host",
                 "--port",
                 "--num-replicas",
-                "--load-balancer",
+                "--load-balancing",
                 "--health-interval",
                 "--forward-timeout",
                 "--startup-timeout",
@@ -331,12 +331,12 @@ class ReplicaManager:
         healthy = [r for r in self._replicas.values() if r.healthy]
         if not healthy:
             return None
-        if self.lb == LoadBalancerType.ROUND_ROBIN:
+        if self.lb == LoadingerType.ROUND_ROBIN:
             self._rr_index = (self._rr_index + 1) % len(healthy)
             return healthy[self._rr_index]
-        if self.lb == LoadBalancerType.LEAST_LOADED:
+        if self.lb == LoadingerType.LEAST_LOADED:
             return min(healthy, key=lambda r: r.current_load)
-        if self.lb == LoadBalancerType.RANDOM:
+        if self.lb == LoadingerType.RANDOM:
             return random.choice(healthy)
         # Fallback:
         return healthy[0]
@@ -408,7 +408,7 @@ async def serve(args_list: List[str]):
         args_list=args_list,
         base_port=args.port,
         num_replicas=args.num_replicas,
-        lb=LoadBalancerType(args.load_balancing),
+        lb=LoadingerType(args.load_balancing),
         health_interval=args.health_interval,
     )
 
@@ -446,7 +446,7 @@ if __name__ == "__main__":
         format=vllm_logger._FORMAT, datefmt=vllm_logger._DATE_FORMAT, level=logging.INFO
     )
 
-    parser = ArgumentParser(description="Replica manager / load balancer")
+    parser = ArgumentParser(description="Replica manager / load inger")
     parser.add_argument("--host", default="0.0.0.0", help="Bind host")
     parser.add_argument(
         "--port",
@@ -460,7 +460,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--load-balancing",
         default="round_robin",
-        choices=[e.value for e in LoadBalancerType],
+        choices=[e.value for e in LoadingerType],
         help="Load balancing strategy",
     )
     parser.add_argument(
