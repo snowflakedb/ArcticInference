@@ -42,6 +42,7 @@ from arctic_inference.common.suffix_cache import SuffixSpecResult
 
 SP_TP_MODE = None
 SP_TP_PROFILE_RUN = None
+SP_TP_THRESHOLD = None
 
 class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
@@ -127,8 +128,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             N = input_ids.shape[0]
 
             global SP_TP_MODE
-            sp_tp_threshold = self.parallel_config.shift_parallel_threshold
-            SP_TP_MODE = bool(sp_tp_threshold >= N)
+            SP_TP_MODE = bool(SP_TP_THRESHOLD >= N)
 
             if _SP.rank == 0:
                 print(f"SP_TP_PROFILE_RUN {SP_TP_PROFILE_RUN} ,"
@@ -168,6 +168,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         self.model.forward = ulysses_forward
 
     def load_model(self: GPUModelRunner, *args, **kwargs):
+        global SP_TP_THRESHOLD
+        SP_TP_THRESHOLD = self.parallel_config.shift_parallel_threshold
         self._orig_load_model(*args, **kwargs)
         if self.parallel_config.ulysses_sequence_parallel_size > 1:
             self.monkeypatch_forward()
