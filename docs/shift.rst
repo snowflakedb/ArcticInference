@@ -1,5 +1,5 @@
 
-.. _shift-parallelism:
+.. _shift:
 
 ===================
 Shift Parallelism
