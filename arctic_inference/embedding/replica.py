@@ -445,7 +445,26 @@ async def serve(args: Namespace) -> None:
     await server.start()
 
 
+def patch_embedding_performance():
+    from functools import lru_cache
+    import vllm.model_executor.model_loader.utils as vllm_utils
+
+    # Get the original function
+    original_function = vllm_utils.get_model_architecture
+
+    # Apply your decorator
+    decorated_function = lru_cache(maxsize=None)(original_function)
+
+    # Replace the original function in the module with the decorated one
+    vllm_utils.get_model_architecture = decorated_function
+
+    logger.debug("Patched get_model_architecture for embedding performance")
+    
+
 if __name__ == "__main__":
+    # patch the get_model_architecture for embedding performance
+    patch_embedding_performance()
+
     # Configure logging
     from vllm import logger as vllm_logger  # type: ignore
 
