@@ -57,9 +57,9 @@ outputs) and the current input. It utilizes a suffix tree data structure to
 maintain a cache of sequences, enabling rapid speculation of these recurring
 patterns.
 
---------------------------
+---------------------------
 Usage with Arctic Inference
---------------------------
+---------------------------
 
 To utilize these acceleration techniques with Arctic Inference in vLLM:
 
