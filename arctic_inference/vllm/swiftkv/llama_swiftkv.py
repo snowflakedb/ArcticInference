@@ -231,7 +231,7 @@ class LlamaSwiftKVDecoderLayer(nn.Module):
 
 
 @support_torch_compile
-class LlamaSwiftKVPrefillSPRunner(nn.Module):
+class LlamaSwiftKVPrefillRunner(nn.Module):
 
     def __init__(self, *, vllm_config: VllmConfig, model: "LlamaSwiftKVModel",
                  prefix: str = ""):
@@ -252,38 +252,7 @@ class LlamaSwiftKVPrefillSPRunner(nn.Module):
         hidden_states = self.model.get_input_embeddings(input_ids)
         residual = None
         prefill_layers = self.model.layers[:self.config.num_key_value_layers]
-        for layer in prefill_layers:
-            hidden_states, residual = layer(
-                positions,
-                hidden_states,
-                residual,
-            )
-        return hidden_states, residual
-
-
-@support_torch_compile
-class LlamaSwiftKVPrefillTPRunner(nn.Module):
-
-    def __init__(self, *, vllm_config: VllmConfig, model: "LlamaSwiftKVModel",
-                 prefix: str = ""):
-        super().__init__()
-        self.config = vllm_config.model_config.hf_config
-        self._model = [model]  # Box it to avoid recursive registration
-
-    @property
-    def model(self) -> "LlamaSwiftKVModel":
-        return self._model[0]
-
-    def forward(
-        self,
-        input_ids: Optional[torch.Tensor],
-        positions: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, IntermediateTensors,
-               IntermediateTensors]:
-        hidden_states = self.model.get_input_embeddings(input_ids)
-        residual = None
-        prefill_layers = self.model.layers[:self.config.num_key_value_layers]
-        for layer in prefill_layers:
+        for idx, layer in enumerate(prefill_layers):
             hidden_states, residual = layer(
                 positions,
                 hidden_states,
@@ -356,46 +325,46 @@ class LlamaSwiftKVModel(nn.Module):
                               cache_config=vllm_config.cache_config,
                               quant_config=vllm_config.quant_config,
                               prefix=f"{prefix}.layers.{idx}")
-            if idx < config.num_key_value_layers else
-            LlamaSwiftKVDecoderLayer(config=config,
-                                     cache_config=vllm_config.cache_config,
-                                     quant_config=vllm_config.quant_config,
-                                     prefix=f"{prefix}.layers.{idx}")
-            for idx in range(config.num_hidden_layers)
+            for idx in range(config.num_key_value_layers)
         ])
-        self.swiftkv_proj = SwiftKVLinear(
-            num_layers=(config.num_hidden_layers - config.num_key_value_layers) // config.key_value_group_size,
-            hidden_size=config.hidden_size,
-            head_size=self.layers[0].self_attn.head_dim,
-            total_num_kv_heads=self.layers[0].self_attn.total_num_kv_heads,
-            bias=(getattr(config, "bias", False) or
-                  getattr(config, "attention_bias", False)),
-            quant_config=vllm_config.quant_config,
-            prefix=f"{prefix}.swiftkv_proj",
-        )
-        self.norm_swiftkv = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        with model_runner.set_shift_parallel_mode(True):
+            self.layers.extend([
+                LlamaSwiftKVDecoderLayer(config=config,
+                                         cache_config=vllm_config.cache_config,
+                                         quant_config=vllm_config.quant_config,
+                                         prefix=f"{prefix}.layers.{idx}")
+                for idx in range(config.num_key_value_layers,
+                                 config.num_hidden_layers)
+            ])
+            self.swiftkv_proj = SwiftKVLinear(
+                num_layers=(config.num_hidden_layers - config.num_key_value_layers) // config.key_value_group_size,
+                hidden_size=config.hidden_size,
+                head_size=self.layers[0].self_attn.head_dim,
+                total_num_kv_heads=self.layers[0].self_attn.total_num_kv_heads,
+                bias=(getattr(config, "bias", False) or
+                    getattr(config, "attention_bias", False)),
+                quant_config=vllm_config.quant_config,
+                prefix=f"{prefix}.swiftkv_proj",
+            )
+            self.norm_swiftkv = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+            self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        for param in self.layers[config.num_key_value_layers:].parameters():
+            param.shift_parallel_mode = True
+        for param in self.swiftkv_proj.parameters():
+            param.shift_parallel_mode = True
 
-        self._init_prefill_runners(vllm_config)
+        self._init_prefill_runner(vllm_config)
         self._init_decode_runner(vllm_config)
 
         from arctic_inference.py_custom_ops import try_load_torch_library
         self.use_custom_ops = True if try_load_torch_library() else False
 
-    def _init_prefill_runners(self, vllm_config: VllmConfig):
-        # SP Prefill Runner
+    def _init_prefill_runner(self, vllm_config: VllmConfig):
         vllm_config.compilation_config = (
             vllm_config.compilation_config.model_copy())
         vllm_config.compilation_config.inductor_compile_config = (
             vllm_config.compilation_config.inductor_compile_config.copy())
-        self.prefill_runner_sp = LlamaSwiftKVPrefillSPRunner(
-            vllm_config=vllm_config, model=self)
-        # TP Prefill Runner
-        vllm_config.compilation_config = (
-            vllm_config.compilation_config.model_copy())
-        vllm_config.compilation_config.inductor_compile_config = (
-            vllm_config.compilation_config.inductor_compile_config.copy())
-        self.prefill_runner_tp = LlamaSwiftKVPrefillTPRunner(
+        self.prefill_runner = LlamaSwiftKVPrefillRunner(
             vllm_config=vllm_config, model=self)
 
     def _init_decode_runner(self, vllm_config: VllmConfig):
@@ -410,9 +379,8 @@ class LlamaSwiftKVModel(nn.Module):
         if vllm_config.compilation_config.cudagraph_capture_sizes:
             self.cuda_graph_max_batch_size = max(
                 vllm_config.compilation_config.cudagraph_capture_sizes)
-            sp_size = parallel_state._SP.world_size
-            kv_size = sum(self.swiftkv_proj.output_partition_sizes) // sp_size // 2
-            self.decode_runner_inputs = {
+            kv_size = sum(self.swiftkv_proj.output_partition_sizes) // 2
+            self.decode_runner.inputs = {
                 "hidden_states": torch.empty(self.cuda_graph_max_batch_size,
                                             config.hidden_size, device="cuda"),
                 "residual": torch.empty(self.cuda_graph_max_batch_size,
@@ -438,7 +406,7 @@ class LlamaSwiftKVModel(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         sp_size = parallel_state._SP.world_size
         device_group = parallel_state._SP.device_group
-        if sp_size > 1 and not model_runner.SP_TP_MODE:
+        if sp_size > 1 and not model_runner.is_shift_parallel_mode():
             # All-gather hidden_states
             hidden_states_ = hidden_states.new_empty(
                 hidden_states.size(0) * sp_size, hidden_states.size(1))
@@ -481,8 +449,8 @@ class LlamaSwiftKVModel(nn.Module):
             value_caches : List[torch.Tensor] = []
             k_scales : List[torch.Tensor] = []
             v_scales : List[torch.Tensor] = []
-            num_heads = self.layers[0].self_attn.attn.num_kv_heads
-            head_size = self.layers[0].self_attn.attn.head_size
+            num_heads = self.layers[-1].self_attn.attn.num_kv_heads
+            head_size = self.layers[-1].self_attn.attn.head_size
             for idx, layer in enumerate(
                     self.layers[self.config.num_key_value_layers:]):
                 attn = layer.self_attn.attn
@@ -548,12 +516,7 @@ class LlamaSwiftKVModel(nn.Module):
         positions: torch.Tensor,
     ) -> torch.Tensor:
 
-        if model_runner.SP_TP_MODE:
-            prefill_runner = self.prefill_runner_tp
-        else:
-            prefill_runner = self.prefill_runner_sp
-
-        hidden_states, residual = prefill_runner(
+        hidden_states, residual = self.prefill_runner(
             input_ids,
             positions,
         )
@@ -565,61 +528,58 @@ class LlamaSwiftKVModel(nn.Module):
             positions,
         )
 
-        orig_sp_tp_mode = model_runner.SP_TP_MODE
-        model_runner.SP_TP_MODE = True
+        with model_runner.set_shift_parallel_mode(True):
 
-        # KV projection of all the remaining layers
-        swiftkv_hidden_states = (
-            self.norm_swiftkv.forward_cuda(hidden_states + residual))
-        kv_states, _ = self.swiftkv_proj(swiftkv_hidden_states)
+            # KV projection of all the remaining layers
+            swiftkv_hidden_states = (
+                self.norm_swiftkv.forward_cuda(hidden_states + residual))
+            kv_states, _ = self.swiftkv_proj(swiftkv_hidden_states)
 
-        # Update the KV cache of all the remaining layers. We concatenate all
-        # the heads together to run it as a batch.
-        q_states = hidden_states.new_empty(  # Just temporary buffer
-            (hidden_states.size(0),
-             self.swiftkv_proj.num_layers * hidden_states.size(1)))
-        k_states, v_states = kv_states.split(kv_states.size(-1) // 2, dim=-1)
-        rotary_emb = self.layers[0].self_attn.rotary_emb
-        _, k_states = rotary_emb.forward_cuda(positions, q_states, k_states)
+            # Update the KV cache of all the remaining layers. We concatenate all
+            # the heads together to run it as a batch.
+            q_states = hidden_states.new_empty(  # Just temporary buffer
+                (hidden_states.size(0),
+                self.swiftkv_proj.num_layers * hidden_states.size(1)))
+            k_states, v_states = kv_states.split(kv_states.size(-1) // 2, dim=-1)
+            rotary_emb = self.layers[0].self_attn.rotary_emb
+            _, k_states = rotary_emb.forward_cuda(positions, q_states, k_states)
 
-        orig_hidden_states = hidden_states
-        hidden_states, residual, positions, k_states, v_states = (
-            self.swiftkv_select(
+            orig_hidden_states = hidden_states
+            hidden_states, residual, positions, k_states, v_states = (
+                self.swiftkv_select(
+                    hidden_states,
+                    residual,
+                    positions,
+                    k_states,
+                    v_states,
+                )
+            )
+
+            size = hidden_states.shape[0]
+            if size <= self.cuda_graph_max_batch_size:
+                self.decode_runner.inputs["hidden_states"][:size].copy_(hidden_states)
+                hidden_states = self.decode_runner.inputs["hidden_states"][:size]
+                self.decode_runner.inputs["residual"][:size].copy_(residual)
+                residual = self.decode_runner.inputs["residual"][:size]
+                self.decode_runner.inputs["positions"][:size].copy_(positions)
+                positions = self.decode_runner.inputs["positions"][:size]
+                self.decode_runner.inputs["k_states"][:size].copy_(k_states)
+                k_states = self.decode_runner.inputs["k_states"][:size]
+                self.decode_runner.inputs["v_states"][:size].copy_(v_states)
+                v_states = self.decode_runner.inputs["v_states"][:size]
+
+            hidden_states = self.decode_runner(
                 hidden_states,
                 residual,
                 positions,
                 k_states,
                 v_states,
             )
-        )
 
-        size = hidden_states.shape[0]
-        if size <= self.cuda_graph_max_batch_size:
-            self.decode_runner_inputs["hidden_states"][:size].copy_(hidden_states)
-            hidden_states = self.decode_runner_inputs["hidden_states"][:size]
-            self.decode_runner_inputs["residual"][:size].copy_(residual)
-            residual = self.decode_runner_inputs["residual"][:size]
-            self.decode_runner_inputs["positions"][:size].copy_(positions)
-            positions = self.decode_runner_inputs["positions"][:size]
-            self.decode_runner_inputs["k_states"][:size].copy_(k_states)
-            k_states = self.decode_runner_inputs["k_states"][:size]
-            self.decode_runner_inputs["v_states"][:size].copy_(v_states)
-            v_states = self.decode_runner_inputs["v_states"][:size]
-
-        hidden_states = self.decode_runner(
-            hidden_states,
-            residual,
-            positions,
-            k_states,
-            v_states,
-        )
-
-        attn_metadata = get_forward_context().attn_metadata
-        if attn_metadata is not None:
-            logits_indices = attn_metadata.swiftkv_logits_indices
-            orig_hidden_states[logits_indices] = hidden_states[:size]
-
-        model_runner.SP_TP_MODE = orig_sp_tp_mode
+            attn_metadata = get_forward_context().attn_metadata
+            if attn_metadata is not None:
+                logits_indices = attn_metadata.swiftkv_logits_indices
+                orig_hidden_states[logits_indices] = hidden_states[:size]
 
         return orig_hidden_states
 
@@ -664,7 +624,9 @@ class LlamaSwiftKVModel(nn.Module):
                 weight_loader = getattr(param, "weight_loader",
                                         default_weight_loader)
                 loaded_weight = loaded_weight[0]
-                weight_loader(param, loaded_weight)
+                use_shift_mode = getattr(param, "shift_parallel_mode", None)
+                with model_runner.set_shift_parallel_mode(use_shift_mode):
+                    weight_loader(param, loaded_weight)
                 continue
             for param_name, weight_name, shard_id in stacked_params_mapping:
                 if weight_name not in name:
@@ -683,7 +645,9 @@ class LlamaSwiftKVModel(nn.Module):
 
                 param = params_dict[name]
                 weight_loader = param.weight_loader
-                weight_loader(param, loaded_weight, shard_id)
+                use_shift_mode = getattr(param, "shift_parallel_mode", None)
+                with model_runner.set_shift_parallel_mode(use_shift_mode):
+                    weight_loader(param, loaded_weight, shard_id)
 
                 break
             else:
@@ -705,7 +669,9 @@ class LlamaSwiftKVModel(nn.Module):
                 param = params_dict[name]
                 weight_loader = getattr(param, "weight_loader",
                                         default_weight_loader)
-                weight_loader(param, loaded_weight)
+                use_shift_mode = getattr(param, "shift_parallel_mode", None)
+                with model_runner.set_shift_parallel_mode(use_shift_mode):
+                    weight_loader(param, loaded_weight)
 
 
 class LlamaSwiftKVForCausalLM(nn.Module):
@@ -815,3 +781,4 @@ class LlamaSwiftKVForCausalLM(nn.Module):
                            if self.config.tie_word_embeddings else None),
         )
         loader.load_weights(weights)
+
