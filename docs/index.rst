@@ -16,6 +16,7 @@ Key Features
 ------------
 
 Optimized Generative AI
+~~~~~~~~~~~~~~~~~~~~~~~
 
 🚀 :ref:`Shift Parallelism <shift>`:
    Dynamically switches between tensor and sequence parallelism at runtime to optimize latency, throughput, and cost — all in one deployment
@@ -30,6 +31,7 @@ Optimized Generative AI
    Reduce compute during prefill by reusing key-value pairs across transformer layers
 
 Optimized Embeddings
+~~~~~~~~~~~~~~~~~~~~
 
 🚀 :ref:`Optimized Embeddings <embeddings>`:
    Accelerate embedding performance with parallel tokenization, byte outputs, and GPU load-balanced replicas
