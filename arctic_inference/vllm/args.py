@@ -29,7 +29,7 @@ class ArcticArgs:
 
     ulysses_sequence_parallel_size: int = 1
     enable_shift_parallel: bool = False
-    shift_parallel_threshold: int = 256
+    shift_parallel_threshold: int = 512
 
 
 @dataclass
