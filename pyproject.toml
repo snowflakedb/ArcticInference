@@ -26,6 +26,7 @@ packages = [
     "arctic_inference.common",
     "arctic_inference.common.suffix_cache",
     "arctic_inference.common.swiftkv",
+    "arctic_inference.dynasor",
     "arctic_inference.vllm",
     "arctic_inference.vllm.swiftkv",
     "arctic_inference.vllm.spec_dec",
@@ -39,10 +40,21 @@ packages = [
 vllm = [
     'vllm==0.8.4',
 ]
+
 embedding = [
     "grpcio>=1.60",
     "grpcio-tools>=1.60",
     "protobuf==4.25.8",
     "transformers",
     "vllm==0.8.4",
+]
+
+dynasor = [
+    "rich",
+    "prompt_toolkit",
+    "pydantic",
+    "datasets",
+    "latex2sympy2",
+    "transformers",
+    "word2number",
 ]
