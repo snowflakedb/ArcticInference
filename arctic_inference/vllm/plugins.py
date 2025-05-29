@@ -75,11 +75,11 @@ def arctic_inference_plugin():
             f"ArcticInference requires the cuda platform. Ignoring plugin!")
         return
     
-    if os.environ.get("VLLM_USE_V1", "0") == "0":
+    if os.getenv("VLLM_USE_V1") == "0":
         logger.warning("ArcticInference only supports vLLM V1, but detected V0 engine. "
-                     "Ignoring plugin!\n"
-                     "Hint: To strictly enforce the V1 vLLM engine, please set "
-                     "VLLM_USE_V1=1.")
+                       "Ignoring plugin!\n"
+                       "Hint: To strictly enforce the V1 vLLM engine, please set "
+                       "VLLM_USE_V1=1.")
         return
 
     from transformers import AutoConfig
