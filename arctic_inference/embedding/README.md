@@ -4,23 +4,11 @@ This directory contains a gRPC server and client implementation for the vLLM Asy
 
 ## Installation
 
-First, ensure you have the required dependencies:
-
 ```bash
-pip install grpcio grpcio-tools protobuf vllm
+pip install arctic_inference[embedding]
 ```
+This will install the embedding package and all its dependencies. It will also compile the proto file into python code. 
 
-## Generating gRPC Code
-
-Before using the server or client, you need to generate the gRPC code from the proto file. There are two ways to do this:
-
-```bash
-python arctic_inference/grpc/generate_proto.py
-```
-
-This will generate the following files:
-- `inference_pb2.py`: Contains message classes
-- `inference_pb2_grpc.py`: Contains server and client classes
 
 ## Replica Manager
 
@@ -159,4 +147,23 @@ bash benchmark/embedding/run_benchmark.sh Snowflake/snowflake-arctic-embed-m-v1.
 
 If you encounter import errors related to `inference_pb2` or `inference_pb2_grpc`, make sure you've generated the gRPC code first using one of the methods above.
 
+### Compiling the proto file manually 
+
+First, ensure you have the required dependencies:
+
+```bash
+pip install grpcio grpcio-tools protobuf vllm
+```
+
+## Generating gRPC Code
+
+Before using the server or client, you need to generate the gRPC code from the proto file. 
+
+```bash
+python arctic_inference/embedding/generate_proto.py
+```
+
+This will generate the following files:
+- `inference_pb2.py`: Contains message classes
+- `inference_pb2_grpc.py`: Contains server and client classes
 
