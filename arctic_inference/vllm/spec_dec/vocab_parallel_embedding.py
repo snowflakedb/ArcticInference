@@ -6,9 +6,7 @@ from typing import List, Optional, Sequence, Tuple
 import torch
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter, UninitializedParameter
-
-from vllm.distributed import (divide, get_tensor_model_parallel_rank,
-                              get_tensor_model_parallel_world_size,
+from vllm.distributed import (divide,
                               tensor_model_parallel_all_reduce)
 from vllm.model_executor.layers.quantization.base_config import (
     QuantizationConfig, QuantizeMethodBase, method_has_implemented_embedding)
@@ -216,7 +214,7 @@ class VocabParallelEmbedding(torch.nn.Module):
         # Keep the input dimensions.
         tp_rank = _TP.rank
         self.tp_size = _TP.world_size * _SP.world_size
-                   
+
         self.num_embeddings = num_embeddings
         self.padding_size = padding_size
         self.org_vocab_size = org_num_embeddings or num_embeddings

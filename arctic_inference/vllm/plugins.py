@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import vllm
 from vllm.logger import init_logger
 from vllm.v1.engine.core import EngineCoreProc
@@ -72,6 +73,13 @@ def arctic_inference_plugin():
     if not vllm.platforms.current_platform.is_cuda():
         logger.warning(
             f"ArcticInference requires the cuda platform. Ignoring plugin!")
+        return
+    
+    if os.environ["VLLM_USE_V1"] == "0":
+        logger.warning("ArcticInference only supports vLLM V1, but detected V0 engine. "
+                     "Ignoring plugin!\n"
+                     "Hint: To strictly enforce the V1 vLLM engine, please set "
+                     "VLLM_USE_V1=1.")
         return
 
     from transformers import AutoConfig
