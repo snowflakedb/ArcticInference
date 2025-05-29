@@ -32,7 +32,7 @@ Optimized Generative AI
 Optimized Embeddings
 
 🚀 :ref:`Optimized Embeddings <embeddings>`:
-   <add description of Optimized Embeddings here>
+   Accelerate embedding performance with parallel tokenization, byte outputs, and GPU load-balanced replicas
 
 Quick Start
 -----------
