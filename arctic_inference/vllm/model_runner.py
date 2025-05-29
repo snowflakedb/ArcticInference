@@ -13,18 +13,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
+import copy
 import time
-from typing import List, Union, Optional, TYPE_CHECKING
+from typing import Union, Optional, TYPE_CHECKING
 
-import numpy as np
 import torch
-import torch.nn as nn
+import vllm.distributed.parallel_state as parallel_state
+from vllm.attention.layer import Attention
 from vllm.config import CompilationLevel
-from vllm.distributed.parallel_state import get_pp_group, graph_capture
+from vllm.distributed.parallel_state import get_pp_group
 from vllm.forward_context import set_forward_context
-from vllm.config import VllmConfig, SpeculativeConfig
+from vllm.config import VllmConfig
 from vllm.model_executor.model_loader import get_model
 from vllm.sequence import IntermediateTensors
+from vllm.v1.kv_cache_interface import KVCacheConfig
 from vllm.v1.outputs import EMPTY_MODEL_RUNNER_OUTPUT, ModelRunnerOutput
 from vllm.v1.sample.rejection_sampler import MAX_SPEC_LEN
 from vllm.v1.spec_decode.eagle import EagleProposer
@@ -39,10 +42,47 @@ from arctic_inference.patching import ArcticPatch
 from arctic_inference.vllm.spec_dec.arctic_proposer import ArcticProposer
 from arctic_inference.common.suffix_cache import SuffixSpecResult
 
+SP_TP_MODE = None
+
+
+@contextlib.contextmanager
+def set_shift_parallel_mode(mode: Optional[bool]):
+    if mode is None:
+        yield
+        return
+
+    global SP_TP_MODE
+
+    if not is_shift_parallel_mode():
+        assert not parallel_state._TP_STATE_PATCHED
+        parallel_state._ORIG_TP = parallel_state._TP
+
+    old_mode = SP_TP_MODE
+    old_tp_group = parallel_state.get_tp_group()
+    SP_TP_MODE = mode
+
+    parallel_state._TP = (parallel_state._SP_TP if mode
+                          else parallel_state._ORIG_TP)
+
+    try:
+        yield
+    finally:
+        # restore the original state
+        SP_TP_MODE = old_mode
+        parallel_state._TP = old_tp_group
+
+
+def is_shift_parallel_mode() -> bool:
+    """Check if the shift parallel mode is enabled."""
+    global SP_TP_MODE
+    return SP_TP_MODE is True
+
 
 class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
+    _orig_initialize_kv_cache = GPUModelRunner.initialize_kv_cache
     _orig_prepare_inputs = GPUModelRunner._prepare_inputs
+    _orig_profile_run = GPUModelRunner.profile_run
     _orig_load_model = GPUModelRunner.load_model
     _orig_init = GPUModelRunner.__init__
 
@@ -86,6 +126,17 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         vllm_config.speculative_config = speculative_config
 
+    def profile_run(self) -> None:
+        self._orig_profile_run()
+        if self.shift_model is not None:
+            # Run the shift model to trigger compilation.
+            orig_model, self.model = self.model, self.shift_model
+            try:
+                with set_shift_parallel_mode(True):
+                    self._dummy_run(self.max_num_tokens)
+            finally:
+                self.model = orig_model
+
     def _prepare_inputs(self, *args, **kwargs):
         attn_metadata, logits_indices, *rest = (
             self._orig_prepare_inputs(*args, **kwargs))
@@ -95,10 +146,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         return attn_metadata, logits_indices, *rest
 
     def monkeypatch_forward(self: GPUModelRunner):
-        from vllm.distributed.parallel_state import _SP
-        SP_size = _SP.world_size
-        SP_rank = _SP.rank_in_group
-        device_group = _SP.device_group
+        sp_size = parallel_state._SP.world_size
+        sp_rank = parallel_state._SP.rank_in_group
+        device_group = parallel_state._SP.device_group
         model_forward = self.model.forward
 
         def ulysses_forward(*args, **kwargs):
@@ -107,29 +157,75 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             positions = kwargs['positions']
             # Ulysses parameters
             N = input_ids.shape[0]
-            N_ulysses = N // SP_size
-            N_offset = N_ulysses * SP_rank
+
+            N_ulysses = N // sp_size
+            N_offset = N_ulysses * sp_rank
+
             # narrow the input
             kwargs['input_ids'] = input_ids[N_offset:N_offset + N_ulysses]
             kwargs['positions'] = positions[N_offset:N_offset + N_ulysses]
-            # original forward
-            output = model_forward(*args, **kwargs)
-            # all-gather model_output
-            model_output = torch.empty((N, self.model.config.hidden_size),
-                                       dtype=output.dtype,
-                                       device=output.device)
-            torch.distributed.all_gather_into_tensor(model_output,
-                                                     output,
-                                                     group=device_group)
+
+            with set_shift_parallel_mode(False):
+                output = model_forward(*args, **kwargs)
+
+            if output.size(0) == N_ulysses:
+                # all-gather model_output
+                model_output = torch.empty((N, self.model.config.hidden_size),
+                                        dtype=output.dtype,
+                                        device=output.device)
+                torch.distributed.all_gather_into_tensor(model_output,
+                                                        output,
+                                                        group=device_group)
+            else:
+                # SwiftKV models will already have all-gathered the output.
+                assert output.size(0) == N
+                model_output = output
             return model_output
 
         self.model.forward = ulysses_forward
 
     def load_model(self: GPUModelRunner, *args, **kwargs):
+        load_shift_model = (
+            self.vllm_config.parallel_config.enable_shift_parallel)
+
+        if load_shift_model:
+            # Make a deep copy of the config before loading the model.
+            shift_config = copy.deepcopy(self.vllm_config)
+
         self._orig_load_model(*args, **kwargs)
-        if self.parallel_config.sequence_parallel_size > 1:
+
+        if self.parallel_config.ulysses_sequence_parallel_size > 1:
             self.monkeypatch_forward()
-    
+
+        if load_shift_model:
+            shift_config.parallel_config.tensor_parallel_size *= (
+                shift_config.parallel_config.ulysses_sequence_parallel_size)
+            shift_config.parallel_config.ulysses_sequence_parallel_size = 1
+            with set_shift_parallel_mode(True):
+                self.shift_model = get_model(vllm_config=shift_config)
+            self.shift_parallel_threshold = (
+                shift_config.parallel_config.shift_parallel_threshold)
+            if "SwiftKV" in self.model.__class__.__name__:
+                # HACK: Replace the decode-runner since it always runs in full
+                # TP, but the original model is captured using SP * BATCH_SIZE,
+                # which does not cover all its cuda graph sizes. The shift-mode
+                # model should have all its cuda graphs captured correctly.
+                self.model.model.decode_runner = (
+                    self.shift_model.model.decode_runner)
+        else:
+            self.shift_parallel_threshold = 0
+
+    def initialize_kv_cache(self, kv_cache_config: "KVCacheConfig") -> None:
+        self._orig_initialize_kv_cache(kv_cache_config)
+
+        if self.shift_model is not None:
+            # Bind the KV caches to the shift parallel model.
+            forward_context = (
+                self.vllm_config.compilation_config.static_forward_context)
+            for mod in self.shift_model.modules():
+                if isinstance(mod, Attention):
+                    mod.kv_cache = forward_context[mod.layer_name].kv_cache
+
     @torch.inference_mode()
     def execute_model(
         self: GPUModelRunner,
@@ -152,18 +248,27 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         attn_metadata, logits_indices, spec_decode_metadata = (
             self._prepare_inputs(scheduler_output))
         num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
-        # add padding to the batch size to make it a multiple of SP
-        SP = self.parallel_config.sequence_parallel_size
-        num_input_tokens = (num_scheduled_tokens + SP - 1) // SP * SP
-        if (self.use_cuda_graph
-                and num_input_tokens // SP <= self.cudagraph_batch_sizes[-1]):
-            # Use piecewise CUDA graphs.
-            # Add padding to the batch size.
-            num_input_tokens = SP * self.vllm_config.pad_for_cudagraph(
-                num_input_tokens // SP)
+        use_shift_model = num_scheduled_tokens <= self.shift_parallel_threshold
+        if use_shift_model:
+            if (self.use_cuda_graph and num_scheduled_tokens
+                    <= self.cudagraph_batch_sizes[-1]):
+                # Use piecewise CUDA graphs.
+                # Add padding to the batch size.
+                num_input_tokens = self.vllm_config.pad_for_cudagraph(
+                    num_scheduled_tokens)
+            else:
+                # Eager mode.
+                num_input_tokens = num_scheduled_tokens
         else:
-            # Eager mode.
-            pass
+            # add padding to the batch size to make it a multiple of SP
+            SP = self.parallel_config.ulysses_sequence_parallel_size
+            num_input_tokens = (num_scheduled_tokens + SP - 1) // SP * SP
+            if (self.use_cuda_graph and num_input_tokens // SP
+                    <= self.cudagraph_batch_sizes[-1]):
+                num_input_tokens = SP * self.vllm_config.pad_for_cudagraph(
+                    num_input_tokens // SP)
+            else:
+                pass
         attn_metadata.num_input_tokens = num_input_tokens
 
         if self.is_multimodal_model:
@@ -207,13 +312,22 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         # Run the decoder.
         # Use persistent buffers for CUDA graphs.
-        with set_forward_context(attn_metadata, self.vllm_config):
-            hidden_states = self.model(
-                input_ids=input_ids,
-                positions=positions,
-                intermediate_tensors=intermediate_tensors,
-                inputs_embeds=inputs_embeds,
-            )
+        with (set_forward_context(attn_metadata, self.vllm_config),
+                set_shift_parallel_mode(use_shift_model)):
+            if use_shift_model:
+                hidden_states = self.shift_model(
+                    input_ids=input_ids,
+                    positions=positions,
+                    intermediate_tensors=intermediate_tensors,
+                    inputs_embeds=inputs_embeds,
+                )
+            else:
+                hidden_states = self.model(
+                    input_ids=input_ids,
+                    positions=positions,
+                    intermediate_tensors=intermediate_tensors,
+                    inputs_embeds=inputs_embeds,
+                )
         if not get_pp_group().is_last_rank:
             # For mid-pipeline stages, return the hidden states.
             return hidden_states
@@ -354,7 +468,6 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             spec_token_ids = self.generate_draft_token_ids_arctic(
                 valid_sampled_token_ids, 
                 previous_hidden_states=previous_hidden_states)
-            #print0(f"spec_token_ids: {spec_token_ids}")
         elif self.speculative_config.method == "eagle":
             assert isinstance(self.drafter, EagleProposer)
             # TODO(woosuk): Refactor the loop.
@@ -566,13 +679,24 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         # Trigger CUDA graph capture for specific shapes.
         # Capture the large shapes first so that the smaller shapes
         # can reuse the memory pool allocated for the large shapes.
-        sp_size = self.parallel_config.sequence_parallel_size
-        with graph_capture(device=self.device):
+        with parallel_state.graph_capture(device=self.device):
+            sp_size = self.parallel_config.ulysses_sequence_parallel_size
             for num_tokens in reversed(self.cudagraph_batch_sizes):
-                for _ in range(self.vllm_config.compilation_config.
-                               cudagraph_num_of_warmups):
+                if (num_tokens * sp_size > self.shift_parallel_threshold and
+                        num_tokens * sp_size <= self.max_num_tokens):
+                    for _ in range(self.vllm_config.compilation_config.
+                                   cudagraph_num_of_warmups):
+                        self._dummy_run(num_tokens * sp_size)
                     self._dummy_run(num_tokens * sp_size)
-                self._dummy_run(num_tokens * sp_size)
+
+            orig_model, self.model = self.model, self.shift_model
+            for num_tokens in reversed(self.cudagraph_batch_sizes):
+                with set_shift_parallel_mode(True):
+                    for _ in range(self.vllm_config.compilation_config.
+                                    cudagraph_num_of_warmups):
+                        self._dummy_run(num_tokens)
+                    self._dummy_run(num_tokens)
+            self.model = orig_model
 
         end_time = time.perf_counter()
         end_free_gpu_memory = torch.cuda.mem_get_info()[0]
@@ -581,3 +705,4 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         # This usually takes 5~20 seconds.
         logger.info("Graph capturing finished in %.0f secs, took %.2f GiB",
                     elapsed_time, cuda_graph_size / (1 << 30))
+

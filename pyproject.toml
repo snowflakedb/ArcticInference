@@ -8,7 +8,8 @@ requires = [
     # uv pip install vllm==0.8.4 --dry-run 2>&1 | grep protobuf | sed 's/^ + //'
     "protobuf==4.25.8",    
     "pybind11_global",
-    "grpcio-tools"
+    "grpcio-tools",
+    "torch == 2.6.0",
 ]
 build-backend = "setuptools.build_meta"
 

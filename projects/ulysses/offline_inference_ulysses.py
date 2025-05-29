@@ -21,8 +21,8 @@ vllm.plugins.load_general_plugins()
 
 llm = LLM(
     model="meta-llama/Llama-3.1-8B-Instruct",
-    tensor_parallel_size=2,
-    sequence_parallel_size=2,
+    tensor_parallel_size=1,
+    ulysses_sequence_parallel_size=4,
 )
 
 print("=" * 80)

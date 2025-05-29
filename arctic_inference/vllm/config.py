@@ -27,18 +27,30 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ArcticParallelConfig(ParallelConfig):
 
-    sequence_parallel_size: int = 1
+    ulysses_sequence_parallel_size: int = 1
+    enable_shift_parallel: bool = False
+    shift_parallel_threshold: int = 512
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         arctic_args = get_current_arctic_args()
-        self.sequence_parallel_size = arctic_args.sequence_parallel_size
+        self.ulysses_sequence_parallel_size = (
+            arctic_args.ulysses_sequence_parallel_size)
+        self.enable_shift_parallel = arctic_args.enable_shift_parallel
+        self.shift_parallel_threshold = arctic_args.shift_parallel_threshold
+        if (self.enable_shift_parallel and
+                self.ulysses_sequence_parallel_size == 1):
+            raise ValueError("ulysses_sequence_parallel_size must be > 1 "
+                             "when enable_shift_parallel is True.")
 
     @property
     def world_size(self) -> int:
+        args = get_current_arctic_args()
+        if args is None:
+            args = self
         return (self.pipeline_parallel_size *
                 self.tensor_parallel_size *
-                self.sequence_parallel_size)
+                args.ulysses_sequence_parallel_size)
 
     @world_size.setter
     def world_size(self, value: int) -> None:
@@ -126,5 +138,7 @@ class VllmConfigPatch(ArcticPatch[VllmConfig]):
 
     def __str__(self, *args, **kwargs):
         string = self._orig_str(*args, **kwargs)
-        string += f", sequence_parallel_size={self.parallel_config.sequence_parallel_size}"
+        string += f", ulysses_sequence_parallel_size={self.parallel_config.ulysses_sequence_parallel_size}"
+        string += f", enable_shift_parallel={self.parallel_config.enable_shift_parallel}"
+        string += f", shift_parallel_threshold={self.parallel_config.shift_parallel_threshold}"
         return string
