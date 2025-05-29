@@ -18,33 +18,15 @@ The optimized embedding is implemented in the ``arctic_inference.embedding`` mod
 Usage with Arctic Inference
 ---------------------------
 
-Arctic Inference gRPC Server
-=============================
-
-This directory contains a gRPC server and client implementation for the vLLM AsyncLLMEngine.
 
 Installation
 ------------
 
-First, ensure you have the required dependencies:
-
 .. code-block:: bash
 
-    pip install grpcio grpcio-tools protobuf vllm
+    pip install arctic-inference[embedding]
 
-Generating gRPC Code
---------------------
 
-Before using the server or client, you need to generate the gRPC code from the proto file. There are two ways to do this:
-
-.. code-block:: bash
-
-    python arctic_inference/grpc/generate_proto.py
-
-This will generate the following files:
-
-- ``inference_pb2.py``: Contains message classes
-- ``inference_pb2_grpc.py``: Contains server and client classes
 
 Replica Manager
 ---------------
@@ -190,4 +172,33 @@ When using a weaker GPU such as A10g, we use the following parameters and comman
     # short sequence
     bash benchmark/embedding/run_benchmark.sh Snowflake/snowflake-arctic-embed-m-v1.5 4096 50 256 fixed 1,16,64 8
 
+
+
+
+Compiling the gRPC code manually
+================================
+
+The embedding directory contains a gRPC server and client implementation for the vLLM AsyncLLMEngine.
+
+
+First, ensure you have the required dependencies:
+
+.. code-block:: bash
+
+    pip install grpcio grpcio-tools protobuf vllm
+
+
+Generating gRPC Code
+--------------------
+
+Before using the server or client, you need to generate the gRPC code from the proto file. 
+
+.. code-block:: bash
+
+    python arctic_inference/embedding/generate_proto.py
+
+This will generate the following files:
+
+- ``inference_pb2.py``: Contains message classes
+- ``inference_pb2_grpc.py``: Contains server and client classes
 
