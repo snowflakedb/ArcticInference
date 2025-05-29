@@ -31,5 +31,5 @@ To get started with Arctic Inference optimization in vLLM, follow the steps belo
 
       python -m vllm.entrypoints.openai.api_server \
           ${vLLM_kwargs} \
-          --ulysses-sequence-parallel size 8 \
+          --ulysses-sequence-parallel-size 8 \
           --enable-shift-parallel
