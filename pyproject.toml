@@ -5,7 +5,8 @@ requires = [
     "ninja",
     "cmake>=3.12",
     "pybind11",
-    "protobuf<5.0,>=3.20",    
+    # uv pip install vllm==0.8.4 --dry-run 2>&1 | grep protobuf | sed 's/^ + //'
+    "protobuf==4.25.8",    
     "pybind11_global",
     "grpcio-tools"
 ]
@@ -41,7 +42,7 @@ vllm = [
 embedding = [
     "grpcio>=1.60",
     "grpcio-tools>=1.60",
-    "protobuf<5.0,>=3.20",
+    "protobuf==4.25.8",
     "transformers",
     "vllm==0.8.4",
 ]
