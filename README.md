@@ -52,7 +52,8 @@ To better understand what features Arctic Inference supports please refer to the
 * [Arctic Ulysses](projects/ulysses)
 * [Arctic Speculator](projects/spec_dec/)
 * [SwiftKV](projects/swiftkv)
-* Embedding Optimizations
+* [Arctic Embedding](arctic_inference/embedding/)
+
 
 ## Running Arctic Inference for Generation with all the features
 By using the examples below, you are expected to get benefits from Shift Parallelism, Speculative Decoding and SwiftKV all at once!
