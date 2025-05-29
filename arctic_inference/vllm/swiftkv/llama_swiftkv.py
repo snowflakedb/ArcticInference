@@ -379,11 +379,8 @@ class LlamaSwiftKVModel(nn.Module):
         if vllm_config.compilation_config.cudagraph_capture_sizes:
             self.cuda_graph_max_batch_size = max(
                 vllm_config.compilation_config.cudagraph_capture_sizes)
-            #sp_size = (parallel_state._SP.world_size
-            #           if model_runner.is_shift_parallel_mode() else 1)
-            #kv_size = sum(self.swiftkv_proj.output_partition_sizes) // sp_size // 2
             kv_size = sum(self.swiftkv_proj.output_partition_sizes) // 2
-            self.decode_runner_inputs = {
+            self.decode_runner.inputs = {
                 "hidden_states": torch.empty(self.cuda_graph_max_batch_size,
                                             config.hidden_size, device="cuda"),
                 "residual": torch.empty(self.cuda_graph_max_batch_size,
@@ -560,16 +557,16 @@ class LlamaSwiftKVModel(nn.Module):
 
             size = hidden_states.shape[0]
             if size <= self.cuda_graph_max_batch_size:
-                self.decode_runner_inputs["hidden_states"][:size].copy_(hidden_states)
-                hidden_states = self.decode_runner_inputs["hidden_states"][:size]
-                self.decode_runner_inputs["residual"][:size].copy_(residual)
-                residual = self.decode_runner_inputs["residual"][:size]
-                self.decode_runner_inputs["positions"][:size].copy_(positions)
-                positions = self.decode_runner_inputs["positions"][:size]
-                self.decode_runner_inputs["k_states"][:size].copy_(k_states)
-                k_states = self.decode_runner_inputs["k_states"][:size]
-                self.decode_runner_inputs["v_states"][:size].copy_(v_states)
-                v_states = self.decode_runner_inputs["v_states"][:size]
+                self.decode_runner.inputs["hidden_states"][:size].copy_(hidden_states)
+                hidden_states = self.decode_runner.inputs["hidden_states"][:size]
+                self.decode_runner.inputs["residual"][:size].copy_(residual)
+                residual = self.decode_runner.inputs["residual"][:size]
+                self.decode_runner.inputs["positions"][:size].copy_(positions)
+                positions = self.decode_runner.inputs["positions"][:size]
+                self.decode_runner.inputs["k_states"][:size].copy_(k_states)
+                k_states = self.decode_runner.inputs["k_states"][:size]
+                self.decode_runner.inputs["v_states"][:size].copy_(v_states)
+                v_states = self.decode_runner.inputs["v_states"][:size]
 
             hidden_states = self.decode_runner(
                 hidden_states,
@@ -784,3 +781,4 @@ class LlamaSwiftKVForCausalLM(nn.Module):
                            if self.config.tie_word_embeddings else None),
         )
         loader.load_weights(weights)
+
