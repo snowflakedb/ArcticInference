@@ -13,10 +13,14 @@ Parallelism responds to real-world traffic by switching modes based on batch
 size: using TP for small batches (minimizing output token latency), and SP for
 large batches (maximizing throughput and minimizing time-to-first-token).
 
+To enable the shift parallelism, the user sets ``--enable-shift-parallel``.
 The shift is triggered by the ``--shift-parallel-threshold`` argument, which is 256 by default.
+In this case, when batch size is equal or smaller than 256, tensor parallelism is used with the degree ``SP x TP``, where
+tp is set with ``--tensor-parallel-size`` and sp is set with ``--ulysses-sequence-parallel-size``.
+Otherwise, a combination of of SP and TP is applied with respected degrees.
 
 This seamless switching is enabled by KV cache invariance — the cache layout
-remains consistent between TP and SP as long as `TP x SP = P` (total
+remains consistent between TP and SP as long as ``TP x SP = P`` (total
 parallelism), allowing the system to transition modes without disruption.
 
 For more details, refer to the `Snowflake blog post
