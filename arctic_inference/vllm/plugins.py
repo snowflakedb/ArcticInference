@@ -75,7 +75,7 @@ def arctic_inference_plugin():
             f"ArcticInference requires the cuda platform. Ignoring plugin!")
         return
     
-    if os.environ["VLLM_USE_V1"] == "0":
+    if os.environ.get("VLLM_USE_V1", "0") == "0":
         logger.warning("ArcticInference only supports vLLM V1, but detected V0 engine. "
                      "Ignoring plugin!\n"
                      "Hint: To strictly enforce the V1 vLLM engine, please set "
