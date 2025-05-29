@@ -1,0 +1,91 @@
+syntax = "proto3";
+
+package arctic_inference;
+
+service InferenceService {
+  // encode a given prompt
+  rpc Encode (EncodeRequest) returns (EncodeResponse) {}
+
+  // Abort an ongoing generation
+  rpc Abort (AbortRequest) returns (AbortResponse) {}
+  
+  // Get replica information
+  rpc GetReplicaInfo (ReplicaInfoRequest) returns (ReplicaInfoResponse) {}
+  
+  // Health check
+  rpc HealthCheck (HealthCheckRequest) returns (HealthCheckResponse) {}
+}
+
+
+message EncodeRequest {
+  string request_id = 1;
+  int32 n_prompts = 2;
+
+  // The prompt to encode, can be a string or a list of token ids
+  // use bytes to avoid serialization/deserialization overhead
+  repeated string prompts = 3;
+
+  repeated bytes token_id_bytes_i32 = 4;
+
+  string model_name = 5;
+  
+  int32 priority = 6;
+}
+
+message EncodeResponse {
+  string request_id = 1;
+  int32 n_prompts = 2;
+  int32 embedding_dim = 3;
+
+  // The embedding vector encoded as a sequence of 4-byte, little-endian float32.
+  // use bytes to avoid serialization/deserialization overhead
+  repeated bytes embedding_bytes_fp32 = 4;
+
+  // error message, empty if success
+  string error = 5;
+}
+
+// Request to abort a generation
+message AbortRequest {
+  string request_id = 1;
+}
+
+// Response for abort request
+message AbortResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// Request for replica information
+message ReplicaInfoRequest {}
+
+// Response with replica information
+message ReplicaInfoResponse {
+  repeated SingleReplicaInfoResponse replica_infos = 1;
+  int32 n_replicas = 2;
+  int32 n_healthy_replicas = 3;
+  // error message, empty if success
+  string message = 4;
+}
+
+// Response with replica information
+message SingleReplicaInfoResponse {
+  string model_name = 1;
+  string task = 2;
+  string dtype = 3;
+  bool ready = 4;
+  string parallel_config = 5;
+  string decoding_config = 6;
+  string scheduler_config = 7;
+  string lora_config = 8;
+}
+
+// Health check request
+message HealthCheckRequest {}
+
+// Health check response
+message HealthCheckResponse {
+  bool healthy = 1;
+  string message = 2;
+}
+
