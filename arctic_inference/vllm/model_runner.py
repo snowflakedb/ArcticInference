@@ -213,6 +213,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 self.model.model.decode_runner = (
                     self.shift_model.model.decode_runner)
         else:
+            self.shift_model = None
             self.shift_parallel_threshold = 0
 
     def initialize_kv_cache(self, kv_cache_config: "KVCacheConfig") -> None:
@@ -689,14 +690,15 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                         self._dummy_run(num_tokens * sp_size)
                     self._dummy_run(num_tokens * sp_size)
 
-            orig_model, self.model = self.model, self.shift_model
-            for num_tokens in reversed(self.cudagraph_batch_sizes):
-                with set_shift_parallel_mode(True):
-                    for _ in range(self.vllm_config.compilation_config.
-                                    cudagraph_num_of_warmups):
+            if self.shift_model is not None:
+                orig_model, self.model = self.model, self.shift_model
+                for num_tokens in reversed(self.cudagraph_batch_sizes):
+                    with set_shift_parallel_mode(True):
+                        for _ in range(self.vllm_config.compilation_config.
+                                        cudagraph_num_of_warmups):
+                            self._dummy_run(num_tokens)
                         self._dummy_run(num_tokens)
-                    self._dummy_run(num_tokens)
-            self.model = orig_model
+                self.model = orig_model
 
         end_time = time.perf_counter()
         end_free_gpu_memory = torch.cuda.mem_get_info()[0]
