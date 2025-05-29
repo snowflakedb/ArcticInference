@@ -35,6 +35,7 @@ from vllm.v1.executor.multiproc_executor import (MultiprocExecutor, WorkerProc,
 
 from arctic_inference.patching import ArcticPatch
 
+
 def apply_shift_parallel_patches():
     UlyssesModelConfigPatch.apply_patch()
     UlyssesParallelStatePatch.apply_patch()
@@ -339,57 +340,47 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
 
 class UlyssesFlashAttentionImplPatch(ArcticPatch[FlashAttentionImpl]):
 
-    _orig_init = FlashAttentionImpl.__init__
     _orig_forward = FlashAttentionImpl.forward
-
-    def __init__(self, *args, **kwargs):
-        self._orig_init(*args, **kwargs)
-
-        self.SP = vllm.distributed.parallel_state._SP.world_size
-        self.device_group = vllm.distributed.parallel_state._SP.device_group
 
     def forward(self, layer, query, key, value, kv_cache, attn_metadata, output):
         from .model_runner import is_shift_parallel_mode
-        if self.SP == 1 or is_shift_parallel_mode():
+
+        sp_size = parallel_state._SP.world_size
+        device_group = parallel_state._SP.device_group
+
+        if sp_size == 1 or is_shift_parallel_mode():
             return self._orig_forward(layer, query, key, value, kv_cache,
                                       attn_metadata, output)
-        from .model_runner import SP_TP_MODE
-        if SP_TP_MODE:
-            q_ = query.reshape(-1, self.num_heads, self.head_size)
-            k_ = key.reshape(-1, self.num_kv_heads, self.head_size)
-            v_ = value.reshape(-1, self.num_kv_heads, self.head_size)
-            c_ = output.reshape(-1, self.num_heads, self.head_size)
-        else:
-            qkv = torch.cat(
-                (query.view(-1, self.SP, self.num_heads * self.head_size),
-                 key.view(-1, self.SP, self.num_kv_heads * self.head_size),
-                 value.view(-1, self.SP, self.num_kv_heads * self.head_size)),
-                dim=-1).transpose(0, 1).reshape(-1,
-                    (self.num_heads + 2 * self.num_kv_heads) * self.head_size)
-            # all-to-all
-            qkv_ = torch.empty_like(qkv)
-            torch.distributed.all_to_all_single(qkv_,
-                                                qkv,
-                                                group=self.device_group)
-            # unpack
-            q_, k_, v_ = qkv_.split([
-                self.num_heads * self.head_size, self.num_kv_heads *
-                self.head_size, self.num_kv_heads * self.head_size
-            ], dim=-1)
-            # prepare
-            q_ = q_.reshape(-1, self.num_heads, self.head_size)
-            k_ = k_.reshape(-1, self.num_kv_heads, self.head_size)
-            v_ = v_.reshape(-1, self.num_kv_heads, self.head_size)
-            c_ = output.view(-1, self.num_heads, self.head_size)
+
+        qkv = torch.cat(
+            (query.view(-1, sp_size, self.num_heads * self.head_size),
+                key.view(-1, sp_size, self.num_kv_heads * self.head_size),
+                value.view(-1, sp_size, self.num_kv_heads * self.head_size)),
+            dim=-1).transpose(0, 1).reshape(-1,
+                (self.num_heads + 2 * self.num_kv_heads) * self.head_size)
+        # all-to-all
+        qkv_ = torch.empty_like(qkv)
+        torch.distributed.all_to_all_single(qkv_,
+                                            qkv,
+                                            group=device_group)
+        # unpack
+        q_, k_, v_ = qkv_.split([
+            self.num_heads * self.head_size, self.num_kv_heads *
+            self.head_size, self.num_kv_heads * self.head_size
+        ], dim=-1)
+        # prepare
+        q_ = q_.reshape(-1, self.num_heads, self.head_size)
+        k_ = k_.reshape(-1, self.num_kv_heads, self.head_size)
+        v_ = v_.reshape(-1, self.num_kv_heads, self.head_size)
+        c_ = output.view(-1, self.num_heads, self.head_size)
+
         # original attention
         self._orig_forward(layer, q_, k_, v_, kv_cache, attn_metadata, c_)
+
         # Ulysses all-to-all 2/2
-        if SP_TP_MODE:
-            output = c_.reshape(output.shape)
-        else:
-            c = torch.empty_like(c_)
-            torch.distributed.all_to_all_single(c, c_, group=self.device_group)
-            output.copy_(
-                torch.transpose(c.view(self.SP, -1, self.num_heads * self.head_size), 0, 1)
-                .reshape(-1, self.num_heads * self.SP * self.head_size))
+        c = torch.empty_like(c_)
+        torch.distributed.all_to_all_single(c, c_, group=device_group)
+        output.copy_(c.view(sp_size, -1, self.num_heads * self.head_size)
+                     .transpose(0, 1)
+                     .reshape(-1, self.num_heads * sp_size * self.head_size))
         return output

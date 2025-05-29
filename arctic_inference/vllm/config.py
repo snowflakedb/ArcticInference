@@ -28,27 +28,20 @@ logger = logging.getLogger(__name__)
 class ArcticParallelConfig(ParallelConfig):
 
     ulysses_sequence_parallel_size: int = 1
-    shift_parallel_threshold: int = 0
+    enable_shift_parallel: bool = False
+    shift_parallel_threshold: int = 256
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         arctic_args = get_current_arctic_args()
         self.ulysses_sequence_parallel_size = (
             arctic_args.ulysses_sequence_parallel_size)
+        self.enable_shift_parallel = arctic_args.enable_shift_parallel
         self.shift_parallel_threshold = arctic_args.shift_parallel_threshold
-        if self.ulysses_sequence_parallel_size == 1:
-            if self.shift_parallel_threshold > 0:
-                logger.warning(
-                      "ArcticParallelConfig: ulysses_sequence_parallel_size is set to 1,\n"
-                      "                      which means sequence parallelism is disabled.\n"
-                      "                      Forcing shift_parallel_threshold to 0.")
-                self.shift_parallel_threshold = 0
-        elif self.shift_parallel_threshold == 0:
-            logger.warning(
-                "ArcticParallelConfig: shift_parallel_threshold is set to 0 by default,\n"
-                "                      which means shift parallelism is disabled, and the latency is sub-optimal.\n"
-                "                      Consider setting it to 256 to enable shift parallelism,\n"
-                "                      which shifts TP=tpxsp when batch size <= 256.")
+        if (self.enable_shift_parallel and
+                self.ulysses_sequence_parallel_size == 1):
+            raise ValueError("ulysses_sequence_parallel_size must be > 1 "
+                             "when enable_shift_parallel is True.")
 
     @property
     def world_size(self) -> int:
@@ -146,5 +139,6 @@ class VllmConfigPatch(ArcticPatch[VllmConfig]):
     def __str__(self, *args, **kwargs):
         string = self._orig_str(*args, **kwargs)
         string += f", ulysses_sequence_parallel_size={self.parallel_config.ulysses_sequence_parallel_size}"
+        string += f", enable_shift_parallel={self.parallel_config.enable_shift_parallel}"
         string += f", shift_parallel_threshold={self.parallel_config.shift_parallel_threshold}"
         return string

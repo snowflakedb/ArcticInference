@@ -13,19 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import copy
 import time
-from typing import List, Union, Optional, TYPE_CHECKING
+from typing import Union, Optional, TYPE_CHECKING
 
-import numpy as np
 import torch
-import torch.nn as nn
 import vllm.distributed.parallel_state as parallel_state
 from vllm.attention.layer import Attention
 from vllm.config import CompilationLevel
-from vllm.distributed.parallel_state import get_pp_group, graph_capture
+from vllm.distributed.parallel_state import get_pp_group
 from vllm.forward_context import set_forward_context
-from vllm.config import VllmConfig, SpeculativeConfig
+from vllm.config import VllmConfig
 from vllm.model_executor.model_loader import get_model
 from vllm.sequence import IntermediateTensors
 from vllm.v1.kv_cache_interface import KVCacheConfig
@@ -44,10 +43,6 @@ from arctic_inference.vllm.spec_dec.arctic_proposer import ArcticProposer
 from arctic_inference.common.suffix_cache import SuffixSpecResult
 
 SP_TP_MODE = None
-SP_TP_PROFILE_RUN = None
-SP_TP_THRESHOLD = None
-
-import contextlib
 
 
 @contextlib.contextmanager
@@ -151,22 +146,20 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         return attn_metadata, logits_indices, *rest
 
     def monkeypatch_forward(self: GPUModelRunner):
-        from vllm.distributed.parallel_state import _SP
-        SP_size = _SP.world_size
-        SP_rank = _SP.rank_in_group
-        device_group = _SP.device_group
+        sp_size = parallel_state._SP.world_size
+        sp_rank = parallel_state._SP.rank_in_group
+        device_group = parallel_state._SP.device_group
         model_forward = self.model.forward
 
         def ulysses_forward(*args, **kwargs):
-            #assert SP_TP_PROFILE_RUN is not None
             # update inputs
             input_ids = kwargs['input_ids']
             positions = kwargs['positions']
             # Ulysses parameters
             N = input_ids.shape[0]
 
-            N_ulysses = N // SP_size
-            N_offset = N_ulysses * SP_rank
+            N_ulysses = N // sp_size
+            N_offset = N_ulysses * sp_rank
 
             # narrow the input
             kwargs['input_ids'] = input_ids[N_offset:N_offset + N_ulysses]
@@ -192,11 +185,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         self.model.forward = ulysses_forward
 
     def load_model(self: GPUModelRunner, *args, **kwargs):
-        global SP_TP_THRESHOLD
-        SP_TP_THRESHOLD = self.parallel_config.shift_parallel_threshold
         load_shift_model = (
-            self.vllm_config.parallel_config.ulysses_sequence_parallel_size > 1
-            and self.vllm_config.parallel_config.shift_parallel_threshold > 0)
+            self.vllm_config.parallel_config.enable_shift_parallel)
 
         if load_shift_model:
             # Make a deep copy of the config before loading the model.

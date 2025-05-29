@@ -28,7 +28,8 @@ from arctic_inference.patching import ArcticPatch
 class ArcticArgs:
 
     ulysses_sequence_parallel_size: int = 1
-    shift_parallel_threshold: int = 0
+    enable_shift_parallel: bool = False
+    shift_parallel_threshold: int = 256
 
 
 @dataclass
@@ -71,6 +72,10 @@ class EngineArgsPatch(ArcticPatch[EngineArgs]):
             default=ArcticEngineArgs.ulysses_sequence_parallel_size,
             help="Number of Ulysses sequence parallel replicas",
         )
+        parser.add_argument(
+            "--enable-shift-parallel",
+            action='store_true',
+            help='If True, enable shift parallelism.')
         parser.add_argument(
             "--shift-parallel-threshold",
             type=int,
