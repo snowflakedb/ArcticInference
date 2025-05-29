@@ -18,7 +18,7 @@ remains consistent between TP and SP as long as `TP x SP = P` (total
 parallelism), allowing the system to transition modes without disruption.
 
 For more details, refer to the `Snowflake blog post
-<https://www.snowflake.com/en/engineering-blog/INSERT-LINK>`_.
+<https://www.snowflake.com/en/engineering-blog/arctic-inference-shift-parallelism/>`_.
 
 --------------------------
 Usage with Arctic Inference
