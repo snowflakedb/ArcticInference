@@ -26,7 +26,7 @@ from arctic_inference.vllm.config import (ModelConfigPatch,
                                           ParallelConfigPatch,
                                           SpeculativeConfigPatch,
                                           VllmConfigPatch)
-from arctic_inference.vllm.ulysses import apply_ulysses_patches
+from arctic_inference.vllm.shift_parallel import apply_shift_parallel_patches
 from arctic_inference.vllm.spec_decoding import apply_spec_decoding_patches
 
 logger = init_logger(__name__)
@@ -75,7 +75,7 @@ def arctic_inference_plugin():
             f"ArcticInference requires the cuda platform. Ignoring plugin!")
         return
     
-    if os.environ["VLLM_USE_V1"] == "0":
+    if os.environ.get("VLLM_USE_V1", "0") == "0":
         logger.warning("ArcticInference only supports vLLM V1, but detected V0 engine. "
                      "Ignoring plugin!\n"
                      "Hint: To strictly enforce the V1 vLLM engine, please set "
@@ -102,6 +102,9 @@ def arctic_inference_plugin():
                                  ArcticMLPSpeculator)
     ModelRegistry.register_model("ArcticLSTMSpeculatorPreTrainedModel",
                                  ArcticLSTMSpeculator)
+    # This name is currently used in corvo
+    ModelRegistry.register_model("MLPVariantSpeculatorPreTrainedModel",
+                                 ArcticLSTMSpeculator)
 
     # Patches that make later patches work properly.
     EngineCoreProcPatch.apply_patch()
@@ -116,5 +119,5 @@ def arctic_inference_plugin():
     VllmConfigPatch.apply_patch()
 
     # Main optimization patches.
-    apply_ulysses_patches()
+    apply_shift_parallel_patches()
     apply_spec_decoding_patches()

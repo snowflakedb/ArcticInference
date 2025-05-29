@@ -36,7 +36,7 @@ from vllm.v1.executor.multiproc_executor import (MultiprocExecutor, WorkerProc,
 from arctic_inference.patching import ArcticPatch
 
 
-def apply_ulysses_patches():
+def apply_shift_parallel_patches():
     UlyssesModelConfigPatch.apply_patch()
     UlyssesParallelStatePatch.apply_patch()
     UlyssesMultiprocExecutorPatch.apply_patch()
@@ -58,14 +58,15 @@ class UlyssesModelConfigPatch(ArcticPatch[ModelConfig]):
         # case where the number of KV heads is smaller than the tensor
         # parallel size so each GPU has at least one KV head.
         return max(
-            1, total_num_kv_heads // (parallel_config.tensor_parallel_size *
-                                      parallel_config.sequence_parallel_size))
+            1, total_num_kv_heads // (
+                parallel_config.tensor_parallel_size *
+                parallel_config.ulysses_sequence_parallel_size))
 
     def get_num_attention_heads(self: ModelConfig,
                                 parallel_config: ParallelConfig) -> int:
         num_heads = getattr(self.hf_text_config, "num_attention_heads", 0)
         return num_heads // (parallel_config.tensor_parallel_size *
-                             parallel_config.sequence_parallel_size)
+                             parallel_config.ulysses_sequence_parallel_size)
     
     def get_layers_start_end_indices(self: ModelConfig,
                                      parallel_config: ParallelConfig,
@@ -80,7 +81,7 @@ class UlyssesModelConfigPatch(ArcticPatch[ModelConfig]):
         # the layout order is: DP x PP x SP x TP
         pp_rank = (parallel_config.rank //
                    (parallel_config.tensor_parallel_size *
-                    parallel_config.sequence_parallel_size)
+                    parallel_config.ulysses_sequence_parallel_size)
                    ) % parallel_config.pipeline_parallel_size
         pp_size = parallel_config.pipeline_parallel_size
         start, end = get_pp_indices(total_num_hidden_layers, pp_rank, pp_size)
@@ -90,6 +91,7 @@ class UlyssesModelConfigPatch(ArcticPatch[ModelConfig]):
 class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
 
     _SP = None
+    _SP_TP = None
 
     @staticmethod
     def initialize_model_parallel(
@@ -133,7 +135,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
             data_parallel_size = config.parallel_config.data_parallel_size
 
         sequence_parallel_size = \
-            config.parallel_config.sequence_parallel_size
+            config.parallel_config.ulysses_sequence_parallel_size
 
         # the layout order is: ExternalDP x DP x PP x SP x TP
         # ExternalDP is the data parallel group that is not part of the model,
@@ -177,22 +179,28 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                                         group_name="pp")
 
         # Build the sequence parallel groups.
-        ulysses_model_parallel_size = tensor_model_parallel_size \
-            * sequence_parallel_size
         assert parallel_state._SP is None, (
             "sequence parallel group is already initialized")
-        group_ranks = []
-        for i in range(pipeline_model_parallel_size):
-            for j in range(tensor_model_parallel_size):
-                ranks = list(
-                    range(i * ulysses_model_parallel_size + j,
-                        (i + 1) * ulysses_model_parallel_size + j,
-                        tensor_model_parallel_size))
-                group_ranks.append(ranks)
+        group_ranks = all_ranks.transpose(3, 4).reshape(
+            -1, sequence_parallel_size).unbind(0)
+        group_ranks = [x.tolist() for x in group_ranks]
         _SP = init_model_parallel_group(group_ranks,
                                         get_world_group().local_rank,
                                         backend,
                                         group_name="sp")
+
+        # Build full-TP groups for ShiftParallel
+        shift_parallel_size = (tensor_model_parallel_size *
+                               sequence_parallel_size)
+        assert parallel_state._SP_TP is None, (
+            "full-TP group is already initialized")
+        group_ranks = all_ranks.transpose(3, 4).reshape(
+            -1, shift_parallel_size).unbind(0)
+        group_ranks = [x.tolist() for x in group_ranks]
+        _SP_TP = init_model_parallel_group(group_ranks,
+                                           get_world_group().local_rank,
+                                           backend,
+                                           group_name="sp_tp")
 
         from vllm.distributed.parallel_state import _DP
         assert _DP is None, ("data parallel group is already initialized")
@@ -207,14 +215,37 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
 
         parallel_state.logger.info(
             "rank %s in world size %s is assigned as "
-            "DP rank %s, PP rank %s, SP rank %s, TP rank %s", rank,
-            world_size, _DP.rank_in_group, _PP.rank_in_group, _SP.rank_in_group,
-            _TP.rank_in_group)
+            "DP rank %s, PP rank %s, SP_TP rank %s, SP rank %s, TP rank %s", rank,
+            world_size, _DP.rank_in_group, _PP.rank_in_group, _SP_TP.rank_in_group,
+            _SP.rank_in_group, _TP.rank_in_group)
 
         parallel_state._TP = _TP
         parallel_state._PP = _PP
         parallel_state._SP = _SP
+        parallel_state._SP_TP = _SP_TP
         parallel_state._DP = _DP
+
+    from contextlib import contextmanager
+    @contextmanager
+    def graph_capture(device: torch.device):
+        """
+        `graph_capture` is a context manager which should surround the code that
+        is capturing the CUDA graph. Its main purpose is to ensure that the
+        some operations will be run after the graph is captured, before the graph
+        is replayed. It returns a `GraphCaptureContext` object which contains the
+        necessary data for the graph capture. Currently, it only contains the
+        stream that the graph capture is running on. This stream is set to the
+        current CUDA stream when the context manager is entered and reset to the
+        default stream when the context manager is exited. This is to ensure that
+        the graph capture is running on a separate stream from the default stream,
+        in order to explicitly distinguish the kernels to capture
+        from other kernels possibly launched on background in the default stream.
+        """
+        from vllm.distributed.parallel_state import GraphCaptureContext
+        context = GraphCaptureContext(torch.cuda.Stream(device=device))
+        with parallel_state._TP.graph_capture(context), parallel_state._PP.graph_capture(
+                context), parallel_state._SP_TP.graph_capture(context):
+            yield context
 
 
 class UlyssesMultiprocExecutorPatch(ArcticPatch[MultiprocExecutor]):
@@ -239,7 +270,7 @@ class UlyssesMultiprocExecutorPatch(ArcticPatch[MultiprocExecutor]):
 
         self.world_size = self.parallel_config.world_size
         tensor_parallel_size = self.parallel_config.tensor_parallel_size
-        sequence_parallel_size = self.parallel_config.sequence_parallel_size
+        sequence_parallel_size = self.parallel_config.ulysses_sequence_parallel_size
         assert self.world_size == tensor_parallel_size \
             * sequence_parallel_size, (
             f"world_size ({self.world_size}) must be equal to the "
@@ -282,14 +313,17 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
     _orig_init = Attention.__init__
     _orig_forward = Attention.forward
 
-    def __init__(self, num_heads, *args, **kwargs) -> None:
+    def __init__(self, num_heads, *args, **kwargs):
+        from .model_runner import is_shift_parallel_mode
         self.sp_size = parallel_state._SP.world_size
-        num_heads //= self.sp_size
-        kwargs["num_kv_heads"] //= self.sp_size
+        if not is_shift_parallel_mode():
+            num_heads //= self.sp_size
+            kwargs["num_kv_heads"] //= self.sp_size
         return self._orig_init(num_heads, *args, **kwargs)
 
     def forward(self, query, key, value, **kwargs):
-        if self.sp_size == 1:
+        from .model_runner import is_shift_parallel_mode
+        if self.sp_size == 1 or is_shift_parallel_mode():
             return self._orig_forward(query, key, value, **kwargs)
 
         from vllm.forward_context import get_forward_context
@@ -306,29 +340,29 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
 
 class UlyssesFlashAttentionImplPatch(ArcticPatch[FlashAttentionImpl]):
 
-    _orig_init = FlashAttentionImpl.__init__
     _orig_forward = FlashAttentionImpl.forward
 
-    def __init__(self, *args, **kwargs):
-        self._orig_init(*args, **kwargs)
-
-        self.sp_size = vllm.distributed.parallel_state._SP.world_size
-        self.device_group = vllm.distributed.parallel_state._SP.device_group
-
     def forward(self, layer, query, key, value, kv_cache, attn_metadata, output):
-        if self.sp_size == 1:
+        from .model_runner import is_shift_parallel_mode
+
+        sp_size = parallel_state._SP.world_size
+        device_group = parallel_state._SP.device_group
+
+        if sp_size == 1 or is_shift_parallel_mode():
             return self._orig_forward(layer, query, key, value, kv_cache,
                                       attn_metadata, output)
 
         qkv = torch.cat(
-            (query.view(-1, self.sp_size, self.num_heads * self.head_size),
-             key.view(-1, self.sp_size, self.num_kv_heads * self.head_size),
-             value.view(-1, self.sp_size, self.num_kv_heads * self.head_size)),
-            dim=-1).transpose(0, 1).reshape(
-                -1, (self.num_heads + 2 * self.num_kv_heads) * self.head_size)
+            (query.view(-1, sp_size, self.num_heads * self.head_size),
+                key.view(-1, sp_size, self.num_kv_heads * self.head_size),
+                value.view(-1, sp_size, self.num_kv_heads * self.head_size)),
+            dim=-1).transpose(0, 1).reshape(-1,
+                (self.num_heads + 2 * self.num_kv_heads) * self.head_size)
         # all-to-all
         qkv_ = torch.empty_like(qkv)
-        torch.distributed.all_to_all_single(qkv_, qkv, group=self.device_group)
+        torch.distributed.all_to_all_single(qkv_,
+                                            qkv,
+                                            group=device_group)
         # unpack
         q_, k_, v_ = qkv_.split([
             self.num_heads * self.head_size, self.num_kv_heads *
@@ -339,13 +373,14 @@ class UlyssesFlashAttentionImplPatch(ArcticPatch[FlashAttentionImpl]):
         k_ = k_.reshape(-1, self.num_kv_heads, self.head_size)
         v_ = v_.reshape(-1, self.num_kv_heads, self.head_size)
         c_ = output.view(-1, self.num_heads, self.head_size)
+
         # original attention
         self._orig_forward(layer, q_, k_, v_, kv_cache, attn_metadata, c_)
+
         # Ulysses all-to-all 2/2
         c = torch.empty_like(c_)
-        torch.distributed.all_to_all_single(c, c_, group=self.device_group)
-        output.copy_(
-            torch.transpose(
-                c.view(self.sp_size, -1, self.num_heads * self.head_size), 0,
-                1).reshape(-1, self.num_heads * self.sp_size * self.head_size))
+        torch.distributed.all_to_all_single(c, c_, group=device_group)
+        output.copy_(c.view(sp_size, -1, self.num_heads * self.head_size)
+                     .transpose(0, 1)
+                     .reshape(-1, self.num_heads * sp_size * self.head_size))
         return output
