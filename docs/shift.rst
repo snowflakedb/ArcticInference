@@ -13,6 +13,8 @@ Parallelism responds to real-world traffic by switching modes based on batch
 size: using TP for small batches (minimizing output token latency), and SP for
 large batches (maximizing throughput and minimizing time-to-first-token).
 
+The shift is triggered by the `--shift-parallel-threshold` argument, which is 256 by default.
+
 This seamless switching is enabled by KV cache invariance — the cache layout
 remains consistent between TP and SP as long as `TP x SP = P` (total
 parallelism), allowing the system to transition modes without disruption.
