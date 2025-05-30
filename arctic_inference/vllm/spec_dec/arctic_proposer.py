@@ -48,6 +48,27 @@ class ArcticProposer:
 
         draft_config_model_config = self.speculative_config.draft_model_config
 
+        spec_model_archs = draft_config_model_config.hf_config.architectures
+        if not isinstance(spec_model_archs, list):
+            logger.error(
+                f"Draft model architectures {spec_model_archs} is not a list. "
+            )
+            raise TypeError()
+        if len(spec_model_archs) != 1:
+            logger.error(
+                f"Draft model architectures {spec_model_archs} does not have exactly one architecture. "
+            )
+            raise ValueError()
+        if spec_model_archs[0] not in [
+                "ArcticMLPSpeculatorPreTrainedModel",
+                "ArcticLSTMSpeculatorPreTrainedModel",
+                "MLPVariantSpeculatorPreTrainedModel",
+        ]:
+            logger.error(
+                f"Draft model architecture {spec_model_archs} is not supported by Arctic Speculator. "
+            )
+            raise ValueError()
+
         if os.getenv("ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK", "0") != "1":
             draft_model_name = draft_config_model_config.hf_config.base_model_name_or_path
             base_model_name = self.vllm_config.model_config.model
