@@ -2,7 +2,7 @@
 [![PyPI version](https://badge.fury.io/py/arctic-inference.svg)](https://pypi.org/project/arctic-inference/)
 
 <h3 align="center">
-  <img src="docs/images/arctic_infereince_logo.svg" width=500px><br>
+  <img src="docs/images/arctic_inference_logo.svg" width=500px><br>
   | <a href="https://arcticinference.readthedocs.io/en/latest/"><b>Documentation</b></a> | <a href="https://www.snowflake.com/en/engineering-blog/arctic-inference-shift-parallelism/"><b>Blog</b></a> |
 </h3>
 
