@@ -67,6 +67,7 @@ class CMakeBuild(build_ext):
             f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extdir}{os.sep}",
             f"-DPYTHON_EXECUTABLE={sys.executable}",
             f"-DCMAKE_BUILD_TYPE={cfg}",  # not used on MSVC, but no harm
+            f"-DTORCH_CMAKE_PREFIX_PATH={torch.utils.cmake_prefix_path}",
         ]
         build_args = []
         # Adding CMake arguments set as environment variable
@@ -149,69 +150,6 @@ class CMakeBuild(build_ext):
                        check=True)
 
 
-def build_custom_kernels():
-    compiled_lib_filename = "libCustomOps.so"
-    c_source_base_subdir = "csrc"
-    custom_ops_module_subdir = "custom_ops"
-    build_artefacts_subdir = "build"
-    python_package_name = "arctic_inference"  # Your package directory name
-
-    try:
-        project_root_dir = Path(__file__).resolve().parent
-    except NameError:
-        project_root_dir = Path.cwd()
-
-    cpp_custom_ops_source_dir = project_root_dir / c_source_base_subdir / custom_ops_module_subdir
-    build_output_dir = cpp_custom_ops_source_dir / build_artefacts_subdir
-    target_so_path_in_package_source = project_root_dir / python_package_name / compiled_lib_filename
-
-    target_so_path_in_package_source.parent.mkdir(parents=True, exist_ok=True)
-    build_output_dir.mkdir(parents=True, exist_ok=True)
-
-    torch_cmake_prefix = torch.utils.cmake_prefix_path
-    cmake_configure_command = [
-        "cmake", f"-DTORCH_CMAKE_PREFIX_PATH={torch_cmake_prefix}", ".."
-    ]
-    subprocess.run(cmake_configure_command,
-                   cwd=build_output_dir,
-                   check=True,
-                   capture_output=True)
-
-    num_cpu_cores = os.cpu_count() or 1
-    make_build_command = ["make", f"-j{num_cpu_cores}"]
-    subprocess.run(make_build_command,
-                   cwd=build_output_dir,
-                   check=True,
-                   capture_output=True)
-
-    compiled_library_file_path = build_output_dir / compiled_lib_filename
-
-    if not compiled_library_file_path.exists():
-        raise FileNotFoundError(
-            f"Compiled library {compiled_library_file_path.resolve()} not found after build."
-        )
-
-    if target_so_path_in_package_source.exists(
-    ) or target_so_path_in_package_source.is_symlink():
-        try:
-            target_so_path_in_package_source.unlink(missing_ok=True)
-        except TypeError:
-            if target_so_path_in_package_source.exists(
-            ) or target_so_path_in_package_source.is_symlink():
-                target_so_path_in_package_source.unlink()
-        except OSError as e:
-            if target_so_path_in_package_source.is_dir():
-                shutil.rmtree(target_so_path_in_package_source)
-            else:
-                raise OSError(
-                    f"Error removing {target_so_path_in_package_source.resolve()}: {e}"
-                ) from e
-
-    shutil.copy2(compiled_library_file_path, target_so_path_in_package_source)
-
-    return compiled_lib_filename
-
-
 class CompileGrpc(_build_py):
     """Custom build command to compile .proto files before building."""
 
@@ -227,8 +165,9 @@ class CompileGrpc(_build_py):
 setup(
     ext_modules=[
         CMakeExtension("arctic_inference.common.suffix_cache._C",
-                       "csrc/suffix_cache")
+                       "csrc/suffix_cache"),
+        CMakeExtension("arctic_inference.custom_ops",
+                       "csrc/custom_ops"),
     ],
     cmdclass={"build_ext": CMakeBuild, 'build_py': CompileGrpc},
-    package_data={"arctic_inference": [build_custom_kernels()]},
 )
