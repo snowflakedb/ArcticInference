@@ -11,6 +11,7 @@
 
 Arctic Inference is an open-source vLLM plugin that brings Snowflake’s inference innovations to the community, delivering the fastest and most cost-effective open-source inference for LLMs and Embeddings.
 
+<br>
 <div align="center">
 <table>
     <thead>
@@ -48,6 +49,7 @@ Arctic Inference is an open-source vLLM plugin that brings Snowflake’s inferen
     </tbody>
 </table>
 </div>
+<br>
 
 ## Optimized LLM Inference
 
