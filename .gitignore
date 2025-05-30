@@ -3,4 +3,5 @@ csrc/custom_ops/build
 __pycache__
 *.egg-info
 *.so
+docs/_build
 .idea
