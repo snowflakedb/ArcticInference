@@ -8,56 +8,92 @@
 * [2025/04] - [Low-Latency and High-Throughput Inference for Long Context with Sequence Parallelism (aka Ulysses)](https://www.snowflake.com/en/engineering-blog/ulysses-low-latency-llm-inference/)
 
 # Arctic Inference
-<img src="projects/arctic_inference/imgs/figure1.png" alt="" width="900">
 
-\
-Inference is becoming the dominant workload in AI, but today’s systems force developers to make costly trade-offs between low latency, high throughput and affordable deployment. 
+Arctic Inference is an open-source vLLM plugin that brings Snowflake’s inference innovations to the community, delivering the fastest and most cost-effective open-source inference for LLMs and Embeddings.
 
-Arctic Inference changes that. Built by Snowflake AI Research, it’s an open source vLLM plugin that brings Snowflake’s inference innovations to the community, delivering the fastest, most cost-effective open source inference for enterprise AI. 
+<div align="center">
+<table>
+    <thead>
+        <tr>
+            <th align="center">Advanced Parallelism</th>
+            <th align="center">Speculative Decoding</th>
+            <th align="center">Model Optimization</th>
+            <th align="center">Other Optimizations</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td align="left">
+                Arctic Ulysses (<a href="https://www.snowflake.com/en/engineering-blog/ulysses-low-latency-llm-inference/">blog</a>)
+                <br>
+                Shift Parallelism (<a href="https://www.snowflake.com/en/engineering-blog/arctic-inference-shift-parallelism/">blog</a>)
+            </td>
+            <td align="left">
+                Arctic Speculator (<a href="https://www.snowflake.com/en/engineering-blog/fast-speculative-decoding-vllm-arctic/">blog</a>)
+                <br>
+                Suffix Decoding (<a href="https://www.snowflake.com/en/engineering-blog/fast-speculative-decoding-vllm-arctic/">blog</a>,
+                                 <a href="https://arxiv.org/abs/2411.04975">paper</a>)
+            </td>
+            <td align="left">
+                SwiftKV (<a href="https://www.snowflake.com/en/blog/up-to-75-lower-inference-cost-llama-meta-llm/">blog</a>,
+                         <a href="https://arxiv.org/abs/2410.03960">paper</a>)
+            </td>
+            <td align="left">
+                Embeddings (<a href="https://www.snowflake.com/en/engineering-blog/embedding-inference-arctic-16x-faster/">blog</a>)
+                <br>
+                Reasoning (<a href="https://hao-ai-lab.github.io/blogs/dynasor-cot/">blog</a>,
+                           <a href="https://arxiv.org/abs/2412.20993">paper</a>)
+            </td>
+        </tr>
+    </tbody>
+</table>
+</div>
 
-For real-world generative AI workloads, Arctic Inference + vLLM in a single deployment, achieves:
+## Optimized LLM Inference
 
-- 3.4x faster request completion and 1.06x higher throughput compared to SoTA throughput-optimized deployment (TP=1, DP=8)
-- 1.7x higher throughput and 1.28x faster request completion compared to SoTA latency-optimized deployment (TP=8, DP=1) 
+For real-world LLM workloads, a single deployment of Arctic Inference + vLLM achieves:
 
+- 3.4x faster request completion and 1.06x higher throughput compared to the best throughput-optimized deployment (TP=1, DP=8)
+- 1.7x higher throughput and 1.28x faster request completion compared to the best latency-optimized deployment (TP=8, DP=1) 
 
 <p align="middle">
-<img src="projects/arctic_inference/imgs/trifecta.png" alt="" width="322">
-<img src="projects/arctic_inference/imgs/embedding.png" alt="" width="410">
+<img src="projects/arctic_inference/imgs/figure1.png" alt="" width="570">
+<img src="projects/arctic_inference/imgs/trifecta.png" alt="" width="330">
+<br>
+See <a href="https://www.snowflake.com/en/engineering-blog/arctic-inference-shift-parallelism/">our blog</a> for evaluation details.
 </p>
 
-Arctic Inference + vLLM also achieves the elusive trifecta: Quicker response, higher throughput and faster generation:
+Arctic Inference + vLLM achieves the elusive "trifecta" of quicker response, higher throughput, and faster generation in a single deployment:
 - 2.25x faster response time (prefill throughput per request) 
 - 1.75x faster generation per request
-- on-par combined throughput
+- SOTA combined throughput
 
-For non-generative AI workloads, such as embeddings, Arctic Inference + vLLM delivers a whopping 1.4M toks/sec per GPU:
-- 16x faster than vLLM on short sequences and 4.2x faster on long sequences
+## Optimized Embeddings
+
+<p align="middle">
+<img src="projects/arctic_inference/imgs/embedding.png" alt="" width="410">
+<br>
+See <a href="https://www.snowflake.com/en/engineering-blog/embedding-inference-arctic-16x-faster/">our blog</a> for evaluation details.
+</p>
+
+For embeddings, Arctic Inference + vLLM delivers a whopping 1.4M toks/sec per GPU:
+- 16x faster than plain vLLM on short sequences and 4.2x faster on long sequences
 - 2.4x faster than Text Embeddings Inference (TEI) on short sequences and at parity for long sequences
 
-\
-The performance claims are supported with detailed evaluation results. To learn more check out our blog [Arctic Inference with Shift Parallelism: The Fastest Open Source Inference System for Enterprise AI](https://www.snowflake.com/en/engineering-blog/arctic-inference-shift-parallelism/)
-
-## Installation
+## Quick Start
 
 ```console
 $ pip install arctic-inference[vllm]
 ```
+
 Once installed, Arctic Inference automatically patches vLLM to use Arctic Inference with Shift Parallelism and other optimizations implemented in Arctic Inference, and users can continue to use their familiar vLLM APIs and CLI. It’s easy to get started!
 
-## Projects 
-To better understand what features Arctic Inference supports please refer to the following list of projects we have released under this framework:
+### Running Arctic Inference with vLLM
 
-* Shift Parallelism
-* [Arctic Ulysses](projects/ulysses)
-* [Arctic Speculator](projects/spec_dec/)
-* [SwiftKV](projects/swiftkv)
-* [Arctic Embedding](arctic_inference/embedding/)
+By using the examples below, you can get benefits from Shift Parallelism, Speculative Decoding, and SwiftKV all at once!
 
+#### Serving
 
-## Running Arctic Inference for Generation with all the features
-By using the examples below, you are expected to get benefits from Shift Parallelism, Speculative Decoding and SwiftKV all at once!
-### Serving
 ```console
 vllm serve \
 Snowflake/Llama-3.1-SwiftKV-70B-Instruct \
@@ -74,7 +110,9 @@ Snowflake/Llama-3.1-SwiftKV-70B-Instruct \
 }'
 
 ```
-### Offline
+
+#### Offline
+
 ```python
 import vllm
 from vllm import LLM, SamplingParams
