@@ -9,6 +9,10 @@
 
 # Arctic Inference
 
+<p align="middle">
+<img src="projects/arctic_inference/imgs/figure1.png" alt="" width="800">
+</p>
+
 Arctic Inference is an open-source vLLM plugin that brings Snowflake’s inference innovations to the community, delivering the fastest and most cost-effective open-source inference for LLMs and Embeddings.
 
 <div align="center">
@@ -51,22 +55,19 @@ Arctic Inference is an open-source vLLM plugin that brings Snowflake’s inferen
 
 ## Optimized LLM Inference
 
+<img src="projects/arctic_inference/imgs/trifecta.png" alt="" align="right" width="400">
+
 For real-world LLM workloads, a single deployment of Arctic Inference + vLLM achieves:
 
 - 3.4x faster request completion and 1.06x higher throughput compared to the best throughput-optimized deployment (TP=1, DP=8)
 - 1.7x higher throughput and 1.28x faster request completion compared to the best latency-optimized deployment (TP=8, DP=1) 
 
-<p align="middle">
-<img src="projects/arctic_inference/imgs/figure1.png" alt="" width="510">
-<img src="projects/arctic_inference/imgs/trifecta.png" alt="" width="290">
-<br>
-See <a href="https://www.snowflake.com/en/engineering-blog/arctic-inference-shift-parallelism/">our blog</a> for evaluation details.
-</p>
-
 Arctic Inference + vLLM achieves the elusive "trifecta" of quicker response, higher throughput, and faster generation in a single deployment:
 - 2.25x faster response time (prefill throughput per request) 
 - 1.75x faster generation per request
 - SOTA combined throughput
+
+<br clear="right"/>
 
 ## Optimized Embeddings
 
