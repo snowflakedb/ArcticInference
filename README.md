@@ -61,12 +61,12 @@ For real-world LLM workloads, a single deployment of Arctic Inference + vLLM ach
 - 3.4x faster request completion and 1.06x higher throughput compared to the best throughput-optimized deployment (TP=1, DP=8)
 - 1.7x higher throughput and 1.28x faster request completion compared to the best latency-optimized deployment (TP=8, DP=1) 
 
+<br clear="right"/>
+
 Arctic Inference + vLLM achieves the elusive "trifecta" of quicker response, higher throughput, and faster generation in a single deployment:
 - 2.25x faster response time (prefill throughput per request) 
 - 1.75x faster generation per request
 - SOTA combined throughput
-
-<br clear="right"/>
 
 ## Optimized Embeddings
 
