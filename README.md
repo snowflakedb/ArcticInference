@@ -10,7 +10,7 @@
 * [2025/05] - [Arctic Inference w. Shift Parallelism: The Fastest Open Source Inference System for Enterprise AI](https://www.snowflake.com/en/engineering-blog/arctic-inference-shift-parallelism/)
 * [2025/05] - [Scaling vLLM for Embeddings: 16x Throughput and Cost Reduction](https://www.snowflake.com/en/engineering-blog/embedding-inference-arctic-16x-faster/)
 * [2025/05] - [Fastest Speculative Decoding in vLLM with Arctic Inference and Arctic Training](https://www.snowflake.com/en/engineering-blog/fast-speculative-decoding-vllm-arctic/)
-* [2025/04] - [Low-Latency and High-Throughput Inference for Long Context with Sequence Parallelism (aka Ulysses)](https://www.snowflake.com/en/engineering-blog/ulysses-low-latency-llm-inference/)
+* [2025/04] - [Low-Latency and High-Throughput Inference for Long Context w. Sequence Parallelism (Ulysses)](https://www.snowflake.com/en/engineering-blog/ulysses-low-latency-llm-inference/)
 
 # Arctic Inference
 <img src="projects/arctic_inference/imgs/figure1.png" alt="" width="900">
