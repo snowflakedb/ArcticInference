@@ -18,22 +18,22 @@ Key Features
 Optimized Generative AI
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-🚀 :ref:`Shift Parallelism <shift>`:
+🚀 :ref:`shift`:
    Dynamically switches between tensor and sequence parallelism at runtime to optimize latency, throughput, and cost — all in one deployment
 
-🚀 :ref:`Arctic Ulysses (Sequence Parallelism) <ulysses>`:
+🚀 :ref:`ulysses`:
    Improve long-context inference latency and throughput via sequence parallelism across GPUs
 
-🚀 :ref:`Speculative Decoding <spec-decode>`:
+🚀 :ref:`spec-decode`:
    Boosts LLM speed by drafting tokens with a small model and verifying them in bulk
 
-🚀 :ref:`SwiftKV <swiftkv>`:
+🚀 :ref:`swiftkv`:
    Reduce compute during prefill by reusing key-value pairs across transformer layers
 
 Optimized Embeddings
 ~~~~~~~~~~~~~~~~~~~~
 
-🚀 :ref:`Optimized Embeddings <embeddings>`:
+🚀 :ref:`embeddings`:
    Accelerate embedding performance with parallel tokenization, byte outputs, and GPU load-balanced replicas
 
 Quick Start

@@ -17,12 +17,15 @@ To get started with Arctic Inference optimization in vLLM, follow the steps belo
    choose one (or mix and match) the following optimizations:
 
    - Optimized Generative AI:
-     - :ref:`Shift Parallelism <shift>`
-     - :ref:`Arctic Ulysses <ulysses>`
-     - :ref:`Speculative Decoding <spec-decode>`
-     - :ref:`SwiftKV <swiftkv>`
+
+     - :ref:`shift`
+     - :ref:`ulysses`
+     - :ref:`spec-decode`
+     - :ref:`swiftkv`
+
    - Optimized Embeddings:
-     - :ref:`Optimized Embeddings <embeddings>`
+
+     - :ref:`embeddings`
 
 3. Add any necessary command-line arguments to your vLLM command. For example, to use
    Shift Parallelism, you would run:
