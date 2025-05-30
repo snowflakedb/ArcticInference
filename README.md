@@ -1,6 +1,7 @@
 [![License Apache 2.0](https://badgen.net/badge/license/apache2.0/blue)](https://github.com/snowflakedb/ArcticInference/blob/main/LICENSE)
 [![PyPI version](https://badge.fury.io/py/arctic-inference.svg)](https://pypi.org/project/arctic-inference/)
-[![Documentation](https://img.shields.io/badge/Read%20The-Docs-blue?style=flat-square)](https://arcticinference.readthedocs.io/en/latest/)
+
+**📚 [View Full Documentation on ReadTheDocs](https://arcticinference.readthedocs.io/en/latest/)**
 
 ## Latest news
 * [2025/05] - [Arctic Inference with Shift Parallelism: The Fastest Open Source Inference System for Enterprise AI](https://www.snowflake.com/en/engineering-blog/arctic-inference-shift-parallelism/)
