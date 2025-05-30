@@ -1,0 +1,31 @@
+name: Build Docs
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        id: setup_python
+        with:
+          python-version: "3.10"
+      - name: Setup environment
+        run: |
+          python scripts/install_deps.py docs
+      - name: Environment print
+        run: pip list
+      - name: Build docs
+        run: |
+          sphinx-build -b html -W docs/ _build/html
