@@ -57,8 +57,8 @@ For real-world LLM workloads, a single deployment of Arctic Inference + vLLM ach
 - 1.7x higher throughput and 1.28x faster request completion compared to the best latency-optimized deployment (TP=8, DP=1) 
 
 <p align="middle">
-<img src="projects/arctic_inference/imgs/figure1.png" alt="" width="570">
-<img src="projects/arctic_inference/imgs/trifecta.png" alt="" width="330">
+<img src="projects/arctic_inference/imgs/figure1.png" alt="" width="510">
+<img src="projects/arctic_inference/imgs/trifecta.png" alt="" width="290">
 <br>
 See <a href="https://www.snowflake.com/en/engineering-blog/arctic-inference-shift-parallelism/">our blog</a> for evaluation details.
 </p>
