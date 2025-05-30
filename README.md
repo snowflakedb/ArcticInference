@@ -55,8 +55,7 @@ Arctic Inference is an open-source vLLM plugin that brings Snowflake’s inferen
 
 ## Optimized LLM Inference
 
-<img src="projects/arctic_inference/imgs/trifecta.png" alt="" align="right" width="400">
-
+<img src="projects/arctic_inference/imgs/trifecta.png" alt="" align="right" width="350">
 For real-world LLM workloads, a single deployment of Arctic Inference + vLLM achieves:
 
 - 3.4x faster request completion and 1.06x higher throughput compared to the best throughput-optimized deployment (TP=1, DP=8)
