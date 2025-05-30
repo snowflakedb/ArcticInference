@@ -63,7 +63,7 @@ For real-world LLM workloads, a single deployment of Arctic Inference + vLLM ach
 - 1.7x higher throughput and 1.28x faster request completion compared to the best latency-optimized deployment (TP=8, DP=1) 
 
 <p align="middle">
-<img src="projects/arctic_inference/imgs/trifecta.png" alt="" width="350">
+<img src="projects/arctic_inference/imgs/trifecta.png" alt="" width="400">
 </p>
 
 Arctic Inference + vLLM achieves the elusive "trifecta" of quicker response, higher throughput, and faster generation in a single deployment:
@@ -74,7 +74,7 @@ Arctic Inference + vLLM achieves the elusive "trifecta" of quicker response, hig
 ## Optimized Embeddings
 
 <p align="middle">
-<img src="projects/arctic_inference/imgs/embedding.png" alt="" width="410">
+<img src="projects/arctic_inference/imgs/embedding.png" alt="" width="500">
 <br>
 See <a href="https://www.snowflake.com/en/engineering-blog/embedding-inference-arctic-16x-faster/">our blog</a> for evaluation details.
 </p>
