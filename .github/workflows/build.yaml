@@ -15,11 +15,9 @@ concurrency:
 jobs:
   build-and-install:
     runs-on: ubuntu-latest
+    container:
+      image: deepspeed/gh-builder:py3.12
     steps:
-      - uses: actions/setup-python@v5
-        id: setup_python
-        with:
-          python-version: "3.10"
       - uses: actions/checkout@v4
       - name: Build Wheel
         run: |
@@ -27,6 +25,5 @@ jobs:
           python -m build --sdist
       - name: Install Wheel
         run: |
-          echo "Install requires CUDA - skipping for now"
-          #python -m pip install --upgrade pip
-          #python -m pip install --verbose dist/*.tar.gz
+          python -m pip install --upgrade pip
+          python -m pip install --verbose dist/*.tar.gz
