@@ -258,7 +258,37 @@ class LlamaSwiftKVPrefillRunner(nn.Module):
                 hidden_states,
                 residual,
             )
-        return hidden_states, residual
+
+        sp_size = parallel_state._SP.world_size
+        if sp_size > 1 and not model_runner.is_shift_parallel_mode():
+            # All-gather across ulysses sequence parallel ranks
+            hidden_states = parallel_state._SP.all_gather(hidden_states, dim=0)
+            residual = parallel_state._SP.all_gather(residual, dim=0)
+            positions = parallel_state._SP.all_gather(positions, dim=0)
+
+        old_mode = model_runner.SP_TP_MODE
+        old_tp_group = parallel_state.get_tp_group()
+        model_runner.SP_TP_MODE = True
+        parallel_state._TP = parallel_state._SP_TP
+
+        # KV projection of all the remaining layers
+        swiftkv_hidden_states = (
+            self.model.norm_swiftkv(hidden_states + residual))
+        kv_states, _ = self.model.swiftkv_proj(swiftkv_hidden_states)
+
+        # Update the KV cache of all the remaining layers. We concatenate all
+        # the heads together to run it as a batch.
+        q_states = hidden_states.new_empty(  # Just temporary buffer
+            (hidden_states.size(0),
+            self.model.swiftkv_proj.num_layers * hidden_states.size(1)))
+        k_states, v_states = kv_states.split(kv_states.size(-1) // 2, dim=-1)
+        rotary_emb = self.model.layers[0].self_attn.rotary_emb
+        _, k_states = rotary_emb.forward_cuda(positions, q_states, k_states)
+
+        model_runner.SP_TP_MODE = old_mode
+        parallel_state._TP = old_tp_group
+
+        return hidden_states, residual, positions, k_states, v_states
 
 
 @support_torch_compile
@@ -398,38 +428,6 @@ class LlamaSwiftKVModel(nn.Module):
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
 
-    def swiftkv_gather(
-        self,
-        hidden_states: torch.Tensor,
-        residual: torch.Tensor,
-        positions: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        sp_size = parallel_state._SP.world_size
-        device_group = parallel_state._SP.device_group
-        if sp_size > 1 and not model_runner.is_shift_parallel_mode():
-            # All-gather hidden_states
-            hidden_states_ = hidden_states.new_empty(
-                hidden_states.size(0) * sp_size, hidden_states.size(1))
-            op1 = torch.distributed.all_gather_into_tensor(
-                hidden_states_, hidden_states, group=device_group, async_op=True)
-            hidden_states = hidden_states_
-            # All-gather residual
-            residual_ = residual.new_empty(
-                residual.size(0) * sp_size, residual.size(1))
-            op2 = torch.distributed.all_gather_into_tensor(
-                residual_, residual, group=device_group, async_op=True)
-            residual = residual_
-            # All-gather positions
-            positions_ = positions.new_empty(positions.size(0) * sp_size)
-            op3 = torch.distributed.all_gather_into_tensor(
-                positions_, positions, group=device_group, async_op=True)
-            positions = positions_
-            # Wait for all-gathers to finish
-            op1.wait()
-            op2.wait()
-            op3.wait()
-        return hidden_states, residual, positions
-
     def swiftkv_select(
         self,
         hidden_states: torch.Tensor,
@@ -516,44 +514,19 @@ class LlamaSwiftKVModel(nn.Module):
         positions: torch.Tensor,
     ) -> torch.Tensor:
 
-        hidden_states, residual = self.prefill_runner(
-            input_ids,
-            positions,
-        )
+        hidden_states, residual, positions, k_states, v_states = (
+            self.prefill_runner(input_ids, positions))
 
-        # Gather hidden states, residuals and positions
-        hidden_states, residual, positions = self.swiftkv_gather(
-            hidden_states,
-            residual,
-            positions,
-        )
+        orig_hidden_states = hidden_states
+        hidden_states, residual, positions, k_states, v_states = (
+            self.swiftkv_select(
+                hidden_states,
+                residual,
+                positions,
+                k_states,
+                v_states))
 
         with model_runner.set_shift_parallel_mode(True):
-
-            # KV projection of all the remaining layers
-            swiftkv_hidden_states = (
-                self.norm_swiftkv.forward_cuda(hidden_states + residual))
-            kv_states, _ = self.swiftkv_proj(swiftkv_hidden_states)
-
-            # Update the KV cache of all the remaining layers. We concatenate all
-            # the heads together to run it as a batch.
-            q_states = hidden_states.new_empty(  # Just temporary buffer
-                (hidden_states.size(0),
-                self.swiftkv_proj.num_layers * hidden_states.size(1)))
-            k_states, v_states = kv_states.split(kv_states.size(-1) // 2, dim=-1)
-            rotary_emb = self.layers[0].self_attn.rotary_emb
-            _, k_states = rotary_emb.forward_cuda(positions, q_states, k_states)
-
-            orig_hidden_states = hidden_states
-            hidden_states, residual, positions, k_states, v_states = (
-                self.swiftkv_select(
-                    hidden_states,
-                    residual,
-                    positions,
-                    k_states,
-                    v_states,
-                )
-            )
 
             size = hidden_states.shape[0]
             if size <= self.cuda_graph_max_batch_size:
@@ -576,10 +549,10 @@ class LlamaSwiftKVModel(nn.Module):
                 v_states,
             )
 
-            attn_metadata = get_forward_context().attn_metadata
-            if attn_metadata is not None:
-                logits_indices = attn_metadata.swiftkv_logits_indices
-                orig_hidden_states[logits_indices] = hidden_states[:size]
+        attn_metadata = get_forward_context().attn_metadata
+        if attn_metadata is not None:
+            logits_indices = attn_metadata.swiftkv_logits_indices
+            orig_hidden_states[logits_indices] = hidden_states[:size]
 
         return orig_hidden_states
 
