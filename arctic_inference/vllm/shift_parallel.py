@@ -114,6 +114,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         with a total of 16 GPUs, rank 0 to 7 belong to the first box and
         ranks 8 to 15 belong to the second box.
         """
+        from vllm.distributed.parallel_state import _DP, _EP, _PP, _TP
         # Get world size and rank. Ensure some consistencies.
         assert torch.distributed.is_initialized()
         world_size: int = torch.distributed.get_world_size()
@@ -144,8 +145,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
             sequence_parallel_size, tensor_model_parallel_size)  # noqa
 
         # Build the tensor model-parallel groups.
-        assert parallel_state._TP is None, (
-            "tensor model parallel group is already initialized")
+        assert _TP is None, ("tensor model parallel group is already initialized")
         group_ranks = all_ranks.view(-1, tensor_model_parallel_size).unbind(0)
         group_ranks = [x.tolist() for x in group_ranks]
 
@@ -157,7 +157,6 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                                         group_name="tp")
 
         # Build the pipeline model-parallel groups.
-        from vllm.distributed.parallel_state import _PP
         assert _PP is None, (
             "pipeline model parallel group is already initialized")
         group_ranks = all_ranks.transpose(2, 4).reshape(
@@ -167,6 +166,25 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                                         get_world_group().local_rank,
                                         backend,
                                         group_name="pp")
+
+        assert _DP is None, ("data parallel group is already initialized")
+        group_ranks = all_ranks.transpose(1,
+                                          4).reshape(-1,
+                                                     data_parallel_size).unbind(0)
+        group_ranks = [x.tolist() for x in group_ranks]
+        _DP = init_model_parallel_group(group_ranks,
+                                        get_world_group().local_rank,
+                                        backend,
+                                        group_name="dp")
+
+        assert _EP is None, ("expert parallel group is already initialized")
+        group_ranks = all_ranks.transpose(1, 3).reshape(
+            -1, data_parallel_size * tensor_model_parallel_size).unbind(0)
+        group_ranks = [x.tolist() for x in group_ranks]
+        _EP = init_model_parallel_group(group_ranks,
+                                        get_world_group().local_rank,
+                                        backend,
+                                        group_name="ep")
 
         # Build the sequence parallel groups.
         assert parallel_state._SP is None, (
@@ -192,22 +210,12 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                                            backend,
                                            group_name="sp_tp")
 
-        from vllm.distributed.parallel_state import _DP
-        assert _DP is None, ("data parallel group is already initialized")
-        group_ranks = all_ranks.transpose(1,
-                                          4).reshape(-1,
-                                                     data_parallel_size).unbind(0)
-        group_ranks = [x.tolist() for x in group_ranks]
-        _DP = init_model_parallel_group(group_ranks,
-                                        get_world_group().local_rank,
-                                        backend,
-                                        group_name="dp")
-
         parallel_state.logger.info(
-            "rank %s in world size %s is assigned as "
-            "DP rank %s, PP rank %s, SP_TP rank %s, SP rank %s, TP rank %s", rank,
-            world_size, _DP.rank_in_group, _PP.rank_in_group, _SP_TP.rank_in_group,
-            _SP.rank_in_group, _TP.rank_in_group)
+            "rank %s in world size %s is assigned as DP rank %s, PP rank %s, "
+            "TP rank %s, EP rank %s, SP rank %s, SP_TP rank %s", rank,
+            world_size, _DP.rank_in_group, _PP.rank_in_group,
+            _TP.rank_in_group, _EP.rank_in_group, _SP.rank_in_group,
+            _SP_TP.rank_in_group)
 
         parallel_state._TP = _TP
         parallel_state._PP = _PP
