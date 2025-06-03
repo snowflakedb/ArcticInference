@@ -20,7 +20,7 @@ from importlib.metadata import requires
 def get_compatible_vllm_version():
     reqs = requires("arctic_inference")
     for req in reqs:
-        match = re.match("vllm==(\d+\.\d+\.\d+);", req)
+        match = re.match("vllm==(.*); extra == \"vllm\"", req)
         if match is not None:
             return match.groups()[0]
         
