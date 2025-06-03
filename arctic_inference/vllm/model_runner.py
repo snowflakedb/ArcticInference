@@ -86,6 +86,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     _orig_load_model = GPUModelRunner.load_model
     _orig_init = GPUModelRunner.__init__
     _orig_dummy_run = GPUModelRunner._dummy_run
+    _orig_dumm_sampler_run = GPUModelRunner._dummy_sampler_run
 
     def __init__(self: GPUModelRunner, vllm_config: VllmConfig,
                  *args, **kwargs):
@@ -147,8 +148,18 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         return attn_metadata, logits_indices, *rest
     
     @torch.inference_mode()
-    def _dummy_run(self: GPUModelRunner, num_tokens: int) -> torch.Tensor:
+    def _dummy_run(
+        self: GPUModelRunner,
+        num_tokens: int,
+    ) -> torch.Tensor:
         return self._orig_dummy_run(num_tokens)
+    
+    @torch.inference_mode()
+    def _dummy_sampler_run(
+        self: GPUModelRunner,
+        hidden_states: torch.Tensor,
+    ) -> torch.Tensor:
+        return self._orig_dummy_run(hidden_states)
 
 
     def monkeypatch_forward(self: GPUModelRunner):
