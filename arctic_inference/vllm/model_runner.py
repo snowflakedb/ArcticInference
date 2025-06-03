@@ -86,7 +86,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     _orig_load_model = GPUModelRunner.load_model
     _orig_init = GPUModelRunner.__init__
     _orig_dummy_run = GPUModelRunner._dummy_run
-    _orig_dumm_sampler_run = GPUModelRunner._dummy_sampler_run
+    _orig_dummy_sampler_run = GPUModelRunner._dummy_sampler_run
 
     def __init__(self: GPUModelRunner, vllm_config: VllmConfig,
                  *args, **kwargs):
