@@ -689,6 +689,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         with parallel_state.graph_capture(device=self.device):
             sp_size = self.parallel_config.ulysses_sequence_parallel_size
             for num_tokens in reversed(self.cudagraph_batch_sizes):
+                if torch.distributed.get_rank() == 0:
+                    print(f"capture {num_tokens} tokens for SP")
                 if (num_tokens * sp_size > self.shift_parallel_threshold and
                         num_tokens * sp_size <= self.max_num_tokens):
                     for _ in range(self.vllm_config.compilation_config.
@@ -699,6 +701,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             if self.shift_model is not None:
                 orig_model, self.model = self.model, self.shift_model
                 for num_tokens in reversed(self.cudagraph_batch_sizes):
+                    if torch.distributed.get_rank() == 0:
+                        print(f"capture {num_tokens} tokens for TP")
                     with set_shift_parallel_mode(True):
                         for _ in range(self.vllm_config.compilation_config.
                                         cudagraph_num_of_warmups):
