@@ -69,17 +69,6 @@ class ArcticProposer:
             )
             raise ValueError()
 
-        if os.getenv("ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK", "0") != "1":
-            draft_model_name = draft_config_model_config.hf_config.base_model_name_or_path
-            base_model_name = self.vllm_config.model_config.model
-            if draft_model_name != base_model_name:
-                logger.error(
-                    f"Draft model name {draft_model_name} does not match base model name {base_model_name}. "
-                    "Please ensure the draft model is compatible with the base model. "
-                    "Set ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK=1 to skip this assertion."
-                )
-                assert False
-
         draft_config_quant_config = VllmConfig._get_quantization_config(
             self.vllm_config.model_config,
             self.vllm_config.load_config,
