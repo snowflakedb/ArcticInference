@@ -140,7 +140,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
                 self.rejection_sampler = RejectionSampler()
 
-        if self.speculative_config.enable_suffix_decoding:
+        if (self.speculative_config is not None and
+                self.speculative_config.enable_suffix_decoding):
             if self.speculative_config.method not in (
                     "arctic", "suffix", "mlp_speculator"):
                 raise ValueError(

@@ -103,20 +103,18 @@ By using the examples below, you can get benefits from Shift Parallelism, Specul
 #### Serving
 
 ```console
-vllm serve \
-Snowflake/Llama-3.1-SwiftKV-70B-Instruct \
---quantization "fp8" \
---tensor-parallel-size 1 \
---ulysses-sequence-parallel-size 4 \
---enable-shift-parallel \
---speculative-config '{
-    "method": "arctic",
-    "model":"Snowflake/Arctic-LSTM-Speculator-Llama-3.1-70B-Instruct",
-    "num_speculative_tokens": 3,
-    "enable_suffix_decoding": true,
-    "disable_by_batch_size": 64,
-}'
-
+vllm serve Snowflake/Llama-3.1-SwiftKV-70B-Instruct \
+    --quantization "fp8" \
+    --tensor-parallel-size 1 \
+    --ulysses-sequence-parallel-size 4 \
+    --enable-shift-parallel \
+    --speculative-config '{
+        "method": "arctic",
+        "model":"Snowflake/Arctic-LSTM-Speculator-Llama-3.1-70B-Instruct",
+        "num_speculative_tokens": 3,
+        "enable_suffix_decoding": true,
+        "disable_by_batch_size": 64
+    }'
 ```
 
 #### Offline
