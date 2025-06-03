@@ -85,6 +85,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     _orig_profile_run = GPUModelRunner.profile_run
     _orig_load_model = GPUModelRunner.load_model
     _orig_init = GPUModelRunner.__init__
+    _orig_dummy_run = GPUModelRunner._dummy_run
 
     def __init__(self: GPUModelRunner, vllm_config: VllmConfig,
                  *args, **kwargs):
@@ -144,6 +145,11 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         # definition in order to early-stop the prefill tokens.
         attn_metadata.swiftkv_logits_indices = logits_indices
         return attn_metadata, logits_indices, *rest
+    
+    @torch.inference_mode()
+    def _dummy_run(self: GPUModelRunner, num_tokens: int) -> torch.Tensor:
+        return self._orig_dummy_run(num_tokens)
+
 
     def monkeypatch_forward(self: GPUModelRunner):
         sp_size = parallel_state._SP.world_size
