@@ -159,7 +159,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         self: GPUModelRunner,
         hidden_states: torch.Tensor,
     ) -> torch.Tensor:
-        return self._orig_dummy_run(hidden_states)
+        return self._orig_dummy_sampler_run(hidden_states)
 
 
     def monkeypatch_forward(self: GPUModelRunner):
