@@ -673,44 +673,44 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         return results
 
-    # def capture_model(self) -> None:
-    #     if not self.use_cuda_graph:
-    #         logger.warning(
-    #             "Skipping CUDA graph capture. Please add "
-    #             "-O %s to use CUDA graphs.", CompilationLevel.PIECEWISE)
-    #         return
+    def capture_model(self) -> None:
+        if not self.use_cuda_graph:
+            logger.warning(
+                "Skipping CUDA graph capture. Please add "
+                "-O %s to use CUDA graphs.", CompilationLevel.PIECEWISE)
+            return
 
-    #     start_time = time.perf_counter()
-    #     start_free_gpu_memory = torch.cuda.mem_get_info()[0]
+        start_time = time.perf_counter()
+        start_free_gpu_memory = torch.cuda.mem_get_info()[0]
 
-    #     # Trigger CUDA graph capture for specific shapes.
-    #     # Capture the large shapes first so that the smaller shapes
-    #     # can reuse the memory pool allocated for the large shapes.
-    #     with parallel_state.graph_capture(device=self.device):
-    #         sp_size = self.parallel_config.ulysses_sequence_parallel_size
-    #         for num_tokens in reversed(self.cudagraph_batch_sizes):
-    #             if (num_tokens * sp_size > self.shift_parallel_threshold and
-    #                     num_tokens * sp_size <= self.max_num_tokens):
-    #                 for _ in range(self.vllm_config.compilation_config.
-    #                                cudagraph_num_of_warmups):
-    #                     self._dummy_run(num_tokens * sp_size)
-    #                 self._dummy_run(num_tokens * sp_size)
+        # Trigger CUDA graph capture for specific shapes.
+        # Capture the large shapes first so that the smaller shapes
+        # can reuse the memory pool allocated for the large shapes.
+        with parallel_state.graph_capture(device=self.device):
+            sp_size = self.parallel_config.ulysses_sequence_parallel_size
+            for num_tokens in reversed(self.cudagraph_batch_sizes):
+                if (num_tokens * sp_size > self.shift_parallel_threshold and
+                        num_tokens * sp_size <= self.max_num_tokens):
+                    for _ in range(self.vllm_config.compilation_config.
+                                   cudagraph_num_of_warmups):
+                        self._dummy_run(num_tokens * sp_size)
+                    self._dummy_run(num_tokens * sp_size)
 
-    #         if self.shift_model is not None:
-    #             orig_model, self.model = self.model, self.shift_model
-    #             for num_tokens in reversed(self.cudagraph_batch_sizes):
-    #                 with set_shift_parallel_mode(True):
-    #                     for _ in range(self.vllm_config.compilation_config.
-    #                                     cudagraph_num_of_warmups):
-    #                         self._dummy_run(num_tokens)
-    #                     self._dummy_run(num_tokens)
-    #             self.model = orig_model
+            if self.shift_model is not None:
+                orig_model, self.model = self.model, self.shift_model
+                for num_tokens in reversed(self.cudagraph_batch_sizes):
+                    with set_shift_parallel_mode(True):
+                        for _ in range(self.vllm_config.compilation_config.
+                                        cudagraph_num_of_warmups):
+                            self._dummy_run(num_tokens)
+                        self._dummy_run(num_tokens)
+                self.model = orig_model
 
-    #     end_time = time.perf_counter()
-    #     end_free_gpu_memory = torch.cuda.mem_get_info()[0]
-    #     elapsed_time = end_time - start_time
-    #     cuda_graph_size = start_free_gpu_memory - end_free_gpu_memory
-    #     # This usually takes 5~20 seconds.
-    #     logger.info("Graph capturing finished in %.0f secs, took %.2f GiB",
-    #                 elapsed_time, cuda_graph_size / (1 << 30))
+        end_time = time.perf_counter()
+        end_free_gpu_memory = torch.cuda.mem_get_info()[0]
+        elapsed_time = end_time - start_time
+        cuda_graph_size = start_free_gpu_memory - end_free_gpu_memory
+        # This usually takes 5~20 seconds.
+        logger.info("Graph capturing finished in %.0f secs, took %.2f GiB",
+                    elapsed_time, cuda_graph_size / (1 << 30))
 
