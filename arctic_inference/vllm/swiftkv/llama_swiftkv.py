@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from copy import deepcopy
+import copy
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import torch
@@ -371,14 +371,18 @@ class LlamaSwiftKVModel(nn.Module):
         self.use_custom_ops = True if try_load_torch_library() else False
 
     def _init_prefill_runner(self, vllm_config: VllmConfig):
-        vllm_config.compilation_config = deepcopy(
+        vllm_config.compilation_config = copy.copy(
             vllm_config.compilation_config)
+        vllm_config.compilation_config.inductor_compile_config = (
+            vllm_config.compilation_config.inductor_compile_config.copy())
         self.prefill_runner = LlamaSwiftKVPrefillRunner(
             vllm_config=vllm_config, model=self)
 
     def _init_decode_runner(self, vllm_config: VllmConfig):
-        vllm_config.compilation_config = deepcopy(
+        vllm_config.compilation_config = copy.copy(
             vllm_config.compilation_config)
+        vllm_config.compilation_config.inductor_compile_config = (
+            vllm_config.compilation_config.inductor_compile_config.copy())
         self.decode_runner = LlamaSwiftKVDecodeRunner(
             vllm_config=vllm_config, model=self)
 
