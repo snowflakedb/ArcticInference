@@ -26,6 +26,7 @@ from arctic_inference.vllm.config import (ParallelConfigPatch,
                                           SpeculativeConfigPatch,
                                           VllmConfigPatch)
 from arctic_inference.vllm.shift_parallel import apply_shift_parallel_patches
+from arctic_inference.vllm.stats import SpecDecodingStatsPatch
 
 logger = init_logger(__name__)
 
@@ -113,6 +114,7 @@ def arctic_inference_plugin():
     AsyncEngineArgsPatch.apply_patch()
     ParallelConfigPatch.apply_patch()
     SpeculativeConfigPatch.apply_patch()
+    SpecDecodingStatsPatch.apply_patch()
     VllmConfigPatch.apply_patch()
 
     # Main optimization patches.
