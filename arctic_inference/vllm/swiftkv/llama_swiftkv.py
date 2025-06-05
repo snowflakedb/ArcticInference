@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import torch
@@ -52,6 +53,16 @@ from arctic_inference.common.swiftkv.configs import LlamaSwiftKVConfig
 from arctic_inference.vllm.swiftkv.linear import SwiftKVLinear
 
 logger = init_logger(__name__)
+
+
+def get_attn_metadata_for_swiftkv():
+    fwd_ctx = get_forward_context()
+    if fwd_ctx.attn_metadata is None:
+        return None
+    meta = next(iter(fwd_ctx.attn_metadata.values()))
+    assert all(m is meta for m in fwd_ctx.attn_metadata.values()), \
+        "All attention metadata should be the same for LlamaSwiftKV."
+    return meta
 
 
 class LlamaSwiftKVAttention(nn.Module):
@@ -360,16 +371,16 @@ class LlamaSwiftKVModel(nn.Module):
         self.use_custom_ops = True if try_load_torch_library() else False
 
     def _init_prefill_runner(self, vllm_config: VllmConfig):
-        vllm_config.compilation_config = (
-            vllm_config.compilation_config.model_copy())
+        vllm_config.compilation_config = copy.copy(
+            vllm_config.compilation_config)
         vllm_config.compilation_config.inductor_compile_config = (
             vllm_config.compilation_config.inductor_compile_config.copy())
         self.prefill_runner = LlamaSwiftKVPrefillRunner(
             vllm_config=vllm_config, model=self)
 
     def _init_decode_runner(self, vllm_config: VllmConfig):
-        vllm_config.compilation_config = (
-            vllm_config.compilation_config.model_copy())
+        vllm_config.compilation_config = copy.copy(
+            vllm_config.compilation_config)
         vllm_config.compilation_config.inductor_compile_config = (
             vllm_config.compilation_config.inductor_compile_config.copy())
         self.decode_runner = LlamaSwiftKVDecodeRunner(
@@ -440,7 +451,7 @@ class LlamaSwiftKVModel(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, IntermediateTensors,
                IntermediateTensors]:
         forward_context: ForwardContext = get_forward_context()
-        attn_metadata = forward_context.attn_metadata
+        attn_metadata = get_attn_metadata_for_swiftkv()
         if attn_metadata is None:
             return hidden_states, residual, positions, k_states, v_states
 
@@ -576,7 +587,7 @@ class LlamaSwiftKVModel(nn.Module):
                 v_states,
             )
 
-            attn_metadata = get_forward_context().attn_metadata
+            attn_metadata = get_attn_metadata_for_swiftkv()
             if attn_metadata is not None:
                 logits_indices = attn_metadata.swiftkv_logits_indices
                 orig_hidden_states[logits_indices] = hidden_states[:size]

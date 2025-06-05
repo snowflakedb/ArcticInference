@@ -16,11 +16,9 @@
 from dataclasses import dataclass
 import logging
 
-from vllm.config import (ParallelConfig, SpeculativeConfig, VllmConfig,
-                         ModelConfig)        
+from vllm.config import ParallelConfig, SpeculativeConfig, VllmConfig        
 
 from arctic_inference.patching import ArcticPatch
-from arctic_inference.vllm.args import get_current_arctic_args
 
 logger = logging.getLogger(__name__)
 
@@ -31,26 +29,18 @@ class ArcticParallelConfig(ParallelConfig):
     enable_shift_parallel: bool = False
     shift_parallel_threshold: int = 512
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        arctic_args = get_current_arctic_args()
-        self.ulysses_sequence_parallel_size = (
-            arctic_args.ulysses_sequence_parallel_size)
-        self.enable_shift_parallel = arctic_args.enable_shift_parallel
-        self.shift_parallel_threshold = arctic_args.shift_parallel_threshold
+    def __post_init__(self, *args, **kwargs):
         if (self.enable_shift_parallel and
                 self.ulysses_sequence_parallel_size == 1):
             raise ValueError("ulysses_sequence_parallel_size must be > 1 "
                              "when enable_shift_parallel is True.")
+        super().__post_init__(*args, **kwargs)
 
     @property
     def world_size(self) -> int:
-        args = get_current_arctic_args()
-        if args is None:
-            args = self
         return (self.pipeline_parallel_size *
                 self.tensor_parallel_size *
-                args.ulysses_sequence_parallel_size)
+                self.ulysses_sequence_parallel_size)
 
     @world_size.setter
     def world_size(self, value: int) -> None:
@@ -70,24 +60,6 @@ class ArcticSpeculativeConfig(SpeculativeConfig):
     suffix_max_spec_offset: float = 0.0
     suffix_min_token_prob: float = 0.1
 
-
-class ModelConfigPatch(ArcticPatch[ModelConfig]):
-
-    _orig_init = ModelConfig.__init__
-
-    def __init__(self, *args, **kwargs):
-        seed = kwargs.get("seed", None)
-
-        if seed is None:
-            # Set the seed to 0 if it is None
-            # This is to ensure each worker has the same seed
-            # and can produce the same sampling result.
-            logger.warning(
-                "ModelConfig: seed is None, setting it to 0.")
-            kwargs["seed"] = 0
-
-        self._orig_init(*args, **kwargs)
-     
 
 class ParallelConfigPatch(ArcticPatch[ParallelConfig]):
 

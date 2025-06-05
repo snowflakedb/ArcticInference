@@ -13,14 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import psutil
-import signal
+import threading
 import weakref
-from typing import List, Optional
+from concurrent.futures import ThreadPoolExecutor
+from typing import Optional
 
 import torch
 import vllm.distributed.parallel_state as parallel_state
-import vllm.v1.executor.multiproc_executor
 from vllm.attention.layer import Attention
 from vllm.config import ModelConfig, ParallelConfig
 from vllm.distributed.device_communicators.shm_broadcast import MessageQueue
@@ -30,8 +29,9 @@ from vllm.executor.multiproc_worker_utils import (
     set_multiprocessing_worker_envs)
 from vllm.utils import get_distributed_init_method, get_open_port
 from vllm.v1.attention.backends.flash_attn import FlashAttentionImpl
+from vllm.v1.executor.abstract import FailureCallback
 from vllm.v1.executor.multiproc_executor import (MultiprocExecutor, WorkerProc,
-                                                 WorkerProcHandle)
+                                                 UnreadyWorkerProcHandle)
 
 from arctic_inference.patching import ArcticPatch
 
@@ -46,33 +46,26 @@ def apply_shift_parallel_patches():
 
 class UlyssesModelConfigPatch(ArcticPatch[ModelConfig]):
 
+    _orig_get_num_kv_heads = ModelConfig.get_num_kv_heads
+    _orig_get_num_attention_heads = ModelConfig.get_num_attention_heads
+
     def get_num_kv_heads(self: ModelConfig,
                          parallel_config: ParallelConfig) -> int:
-        """Returns the number of KV heads per GPU."""
-        if self.use_mla:
-            # When using MLA during decode it becomes MQA
-            return 1
-        total_num_kv_heads = self.get_total_num_kv_heads()
-        # If tensor parallelism is used, we divide the number of KV heads by
-        # the tensor parallel size. We will replicate the KV heads in the
-        # case where the number of KV heads is smaller than the tensor
-        # parallel size so each GPU has at least one KV head.
-        return max(
-            1, total_num_kv_heads // (
-                parallel_config.tensor_parallel_size *
-                parallel_config.ulysses_sequence_parallel_size))
+        num_kv_heads = self._orig_get_num_kv_heads(parallel_config)
+        sp_size = parallel_config.ulysses_sequence_parallel_size
+        return max(1, num_kv_heads // sp_size)
 
     def get_num_attention_heads(self: ModelConfig,
                                 parallel_config: ParallelConfig) -> int:
-        num_heads = getattr(self.hf_text_config, "num_attention_heads", 0)
-        return num_heads // (parallel_config.tensor_parallel_size *
-                             parallel_config.ulysses_sequence_parallel_size)
-    
-    def get_layers_start_end_indices(self: ModelConfig,
-                                     parallel_config: ParallelConfig,
-                                     ) -> tuple[int, int]:
+        num_heads = self._orig_get_num_attention_heads(parallel_config)
+        sp_size = parallel_config.ulysses_sequence_parallel_size
+        return max(1, num_heads // sp_size)
+
+    def get_layers_start_end_indices(
+            self, parallel_config: "ParallelConfig") -> tuple[int, int]:
         from vllm.distributed.utils import get_pp_indices
-        if self.hf_text_config.model_type == "deepseek_mtp":
+        if (self.hf_text_config.model_type == "deepseek_mtp"
+                or self.hf_config.model_type == "mimo_mtp"):
             total_num_hidden_layers = getattr(self.hf_text_config,
                                               "num_nextn_predict_layers", 0)
         else:
@@ -121,6 +114,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         with a total of 16 GPUs, rank 0 to 7 belong to the first box and
         ranks 8 to 15 belong to the second box.
         """
+        from vllm.distributed.parallel_state import _DP, _EP, _PP, _TP
         # Get world size and rank. Ensure some consistencies.
         assert torch.distributed.is_initialized()
         world_size: int = torch.distributed.get_world_size()
@@ -151,14 +145,10 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
             sequence_parallel_size, tensor_model_parallel_size)  # noqa
 
         # Build the tensor model-parallel groups.
-        from vllm.distributed.parallel_state import _TP
         assert _TP is None, ("tensor model parallel group is already initialized")
-        group_ranks = []
-        for i in range(world_size // tensor_model_parallel_size):
-            ranks = list(
-                range(i * tensor_model_parallel_size,
-                    (i + 1) * tensor_model_parallel_size))
-            group_ranks.append(ranks)
+        group_ranks = all_ranks.view(-1, tensor_model_parallel_size).unbind(0)
+        group_ranks = [x.tolist() for x in group_ranks]
+
         # message queue broadcaster is only used in tensor model parallel group
         _TP = init_model_parallel_group(group_ranks,
                                         get_world_group().local_rank,
@@ -167,7 +157,6 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                                         group_name="tp")
 
         # Build the pipeline model-parallel groups.
-        from vllm.distributed.parallel_state import _PP
         assert _PP is None, (
             "pipeline model parallel group is already initialized")
         group_ranks = all_ranks.transpose(2, 4).reshape(
@@ -177,6 +166,25 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                                         get_world_group().local_rank,
                                         backend,
                                         group_name="pp")
+
+        assert _DP is None, ("data parallel group is already initialized")
+        group_ranks = all_ranks.transpose(1,
+                                          4).reshape(-1,
+                                                     data_parallel_size).unbind(0)
+        group_ranks = [x.tolist() for x in group_ranks]
+        _DP = init_model_parallel_group(group_ranks,
+                                        get_world_group().local_rank,
+                                        backend,
+                                        group_name="dp")
+
+        assert _EP is None, ("expert parallel group is already initialized")
+        group_ranks = all_ranks.transpose(1, 3).reshape(
+            -1, data_parallel_size * tensor_model_parallel_size).unbind(0)
+        group_ranks = [x.tolist() for x in group_ranks]
+        _EP = init_model_parallel_group(group_ranks,
+                                        get_world_group().local_rank,
+                                        backend,
+                                        group_name="ep")
 
         # Build the sequence parallel groups.
         assert parallel_state._SP is None, (
@@ -202,22 +210,12 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                                            backend,
                                            group_name="sp_tp")
 
-        from vllm.distributed.parallel_state import _DP
-        assert _DP is None, ("data parallel group is already initialized")
-        group_ranks = all_ranks.transpose(1,
-                                          4).reshape(-1,
-                                                     data_parallel_size).unbind(0)
-        group_ranks = [x.tolist() for x in group_ranks]
-        _DP = init_model_parallel_group(group_ranks,
-                                        get_world_group().local_rank,
-                                        backend,
-                                        group_name="dp")
-
         parallel_state.logger.info(
-            "rank %s in world size %s is assigned as "
-            "DP rank %s, PP rank %s, SP_TP rank %s, SP rank %s, TP rank %s", rank,
-            world_size, _DP.rank_in_group, _PP.rank_in_group, _SP_TP.rank_in_group,
-            _SP.rank_in_group, _TP.rank_in_group)
+            "rank %s in world size %s is assigned as DP rank %s, PP rank %s, "
+            "TP rank %s, EP rank %s, SP rank %s, SP_TP rank %s", rank,
+            world_size, _DP.rank_in_group, _PP.rank_in_group,
+            _TP.rank_in_group, _EP.rank_in_group, _SP.rank_in_group,
+            _SP_TP.rank_in_group)
 
         parallel_state._TP = _TP
         parallel_state._PP = _PP
@@ -254,29 +252,21 @@ class UlyssesMultiprocExecutorPatch(ArcticPatch[MultiprocExecutor]):
         # Call self.shutdown at exit to clean up
         # and ensure workers will be terminated.
         self._finalizer = weakref.finalize(self, self.shutdown)
-
-        # The child processes will send SIGUSR1 when unrecoverable
-        # errors happen.
-        def sigusr1_handler(signum, frame):
-            vllm.v1.executor.multiproc_executor.logger.fatal(
-                "MulitprocExecutor got fatal signal from worker processes, "
-                "shutting down. See stack trace above for root cause issue.")
-            # Propagate error up to parent process.
-            parent_process = psutil.Process().parent()
-            parent_process.send_signal(signal.SIGUSR1)
-            self.shutdown()
-
-        signal.signal(signal.SIGUSR1, sigusr1_handler)
+        self.is_failed = False
+        self.shutdown_event = threading.Event()
+        self.failure_callback: Optional[FailureCallback] = None
+        self.io_thread_pool: Optional[ThreadPoolExecutor] = None
 
         self.world_size = self.parallel_config.world_size
         tensor_parallel_size = self.parallel_config.tensor_parallel_size
-        sequence_parallel_size = self.parallel_config.ulysses_sequence_parallel_size
-        assert self.world_size == tensor_parallel_size \
-            * sequence_parallel_size, (
+        pp_parallel_size = self.parallel_config.pipeline_parallel_size
+        sp_parallel_size = self.parallel_config.ulysses_sequence_parallel_size
+        assert (self.world_size ==
+                tensor_parallel_size * pp_parallel_size * sp_parallel_size), (
             f"world_size ({self.world_size}) must be equal to the "
-            f"tensor_parallel_size * sequence_parallel_size "
-            f"({tensor_parallel_size * sequence_parallel_size}). "
-            f"Pipeline parallelism is not yet implemented in v1")
+            f"tensor_parallel_size ({tensor_parallel_size}) x pipeline"
+            f"_parallel_size ({pp_parallel_size}) x ulysses_sequence_parallel"
+            f"_size ({sp_parallel_size}).")
 
         # Set multiprocessing envs that are common to V0 and V1
         set_multiprocessing_worker_envs(self.parallel_config)
@@ -293,19 +283,46 @@ class UlyssesMultiprocExecutorPatch(ArcticPatch[MultiprocExecutor]):
         scheduler_output_handle = self.rpc_broadcast_mq.export_handle()
 
         # Create workers
-        self.workers: List[WorkerProcHandle] = []
-        for rank in range(self.world_size):
-            worker = WorkerProc.make_worker_process(self.vllm_config, rank,
-                                                    rank,
-                                                    distributed_init_method,
-                                                    scheduler_output_handle)
-            self.workers.append(worker)
+        unready_workers: list[UnreadyWorkerProcHandle] = []
+        success = False
+        try:
+            for rank in range(self.world_size):
+                unready_workers.append(
+                    WorkerProc.make_worker_process(
+                        vllm_config=self.vllm_config,
+                        local_rank=rank,
+                        rank=rank,
+                        distributed_init_method=distributed_init_method,
+                        input_shm_handle=scheduler_output_handle,
+                    ))
 
-        # Ensure message queues are ready. Will deadlock if re-ordered
-        # Must be kept consistent with the WorkerProc
-        self.rpc_broadcast_mq.wait_until_ready()
-        for w in self.workers:
-            w.worker_response_mq.wait_until_ready()
+            # Workers must be created before wait_for_ready to avoid
+            # deadlock, since worker.init_device() does a device sync.
+            self.workers = WorkerProc.wait_for_ready(unready_workers)
+
+            # Ensure message queues are ready. Will deadlock if re-ordered
+            # Must be kept consistent with the WorkerProc.
+            self.rpc_broadcast_mq.wait_until_ready()
+            for w in self.workers:
+                w.worker_response_mq.wait_until_ready()
+
+            self.start_worker_monitor()
+            success = True
+        finally:
+            if not success:
+                # Clean up the worker procs if there was a failure.
+                self._ensure_worker_termination(
+                    [w.proc for w in unready_workers])
+
+        # For pipeline parallel, we use a thread pool for asynchronous
+        # execute_model.
+        if self.max_concurrent_batches > 1:
+            # Note: must use only 1 IO thread to keep dequeue sequence
+            # from the response queue
+            self.io_thread_pool = ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="mp_exec_io")
+
+        self.output_rank = self._get_output_rank()
 
 
 class UlyssesAttentionPatch(ArcticPatch[Attention]):
