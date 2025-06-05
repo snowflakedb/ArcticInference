@@ -14,9 +14,12 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from vllm.v1.spec_decode.metrics import SpecDecodingStats
+from vllm.v1.spec_decode.metrics import SpecDecodingStats, SpecDecodingLogging
+from vllm.logger import init_logger
 
 from arctic_inference.patching import ArcticPatch
+
+logger = init_logger(__name__)
 
 
 @dataclass
@@ -44,3 +47,23 @@ class SpecDecodingStatsPatch(ArcticPatch[SpecDecodingStats]):
                 (num_draft_tokens - len(self.num_accepted_tokens_per_pos)))
 
         self._orig_observe_draft(num_draft_tokens, num_accepted_tokens)
+
+
+class SpecDecodingLoggingPatch(ArcticPatch[SpecDecodingLogging]):
+    """Patch for SpecDecodingLogging to handle additional logging."""
+
+    _orig_log = SpecDecodingLogging.log
+
+    def log(self, log_fn=logger.info):
+        if not self.num_drafts:
+            return
+
+        max_length = max(
+            len(lst) for lst in self.accepted_tokens_per_pos_lists)
+
+        for i in range(len(self.accepted_tokens_per_pos_lists)):
+            self.accepted_tokens_per_pos_lists[i].extend(
+                [0] *
+                (max_length - len(self.accepted_tokens_per_pos_lists[i])))
+
+        self._orig_log(log_fn)
