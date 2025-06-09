@@ -25,9 +25,9 @@ from arctic_inference.vllm.args import EngineArgsPatch, AsyncEngineArgsPatch
 from arctic_inference.vllm.config import (ParallelConfigPatch,
                                           SpeculativeConfigPatch,
                                           VllmConfigPatch)
-from arctic_inference.vllm.shift_parallel import apply_shift_parallel_patches
 from arctic_inference.vllm.stats import (SpecDecodingStatsPatch, 
                                          SpecDecodingLoggingPatch)
+from arctic_inference.vllm.ulysses import apply_shift_parallel_patches
 
 logger = init_logger(__name__)
 
