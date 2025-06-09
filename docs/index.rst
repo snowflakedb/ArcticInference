@@ -15,8 +15,8 @@ to use their familiar vLLM APIs and CLI. It's easy to get started!
 Key Features
 ------------
 
-Optimized Generative AI
-~~~~~~~~~~~~~~~~~~~~~~~
+Advanced Parallelism
+~~~~~~~~~~~~~~~~~~~~
 
 🚀 :ref:`shift`:
    Dynamically switches between tensor and sequence parallelism at runtime to optimize latency, throughput, and cost — all in one deployment
@@ -24,14 +24,20 @@ Optimized Generative AI
 🚀 :ref:`ulysses`:
    Improve long-context inference latency and throughput via sequence parallelism across GPUs
 
+Speculative Decoding
+~~~~~~~~~~~~~~~~~~~~
+
 🚀 :ref:`spec-decode`:
    Boosts LLM speed by drafting tokens with a small model and verifying them in bulk
+
+Model Optimization
+~~~~~~~~~~~~~~~~~~
 
 🚀 :ref:`swiftkv`:
    Reduce compute during prefill by reusing key-value pairs across transformer layers
 
-Optimized Embeddings
-~~~~~~~~~~~~~~~~~~~~
+Other Optimizations
+~~~~~~~~~~~~~~~~~~~
 
 🚀 :ref:`embeddings`:
    Accelerate embedding performance with parallel tokenization, byte outputs, and GPU load-balanced replicas
@@ -52,11 +58,21 @@ Table of Contents
 
 .. toctree::
    :maxdepth: 1
-   :caption: Optimized Generative AI
+   :caption: Advanced Parallelism
 
    shift
    ulysses
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Speculative Decoding
+
    spec-decode
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Model Optimization
+
    swiftkv
 
 .. toctree::
