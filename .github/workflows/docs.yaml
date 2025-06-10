@@ -28,4 +28,4 @@ jobs:
         run: pip list
       - name: Build docs
         run: |
-          sphinx-build -b html -W docs/ _build/html
+          sphinx-build --builder html --fail-on-warning docs/ _build/html
