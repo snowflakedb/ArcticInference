@@ -5,103 +5,170 @@
 Arctic Speculator
 =================
 
-Arctic Inference employs advanced techniques like Speculative Decoding and Suffix
-Decoding to significantly accelerate LLM inference. It enhances standard
-speculative decoding and uniquely integrates it with Suffix Decoding for optimal
-performance, reducing latency and improving throughput without altering the
-model's output distribution.
+Arctic Speculator provides highly efficient, lightweight draft models for
+speculative decoding in ArcticInference. Arctic Speculator delivers
+significant latency reductions by quickly generating high-quality
+speculative tokens for verification within vLLM's existing speculative
+decoding pipeline.
 
-Key advantages of Arctic Inference's approach include:
+Core Technique
+--------------
 
-* **Superior Draft Models:** Arctic Inference leverages specially trained draft
-  models (MLP/LSTM speculators via ArcticTraining) that achieve high acceptance
-  rates, making its speculative decoding component highly efficient.
-* **Integrated Suffix Decoding:** Arctic Inference can combine its advanced
-  speculative decoding with Suffix Decoding. This synergy allows the system to
-  benefit from both general-purpose short-sequence speculation and specialized
-  long-sequence speculation for repetitive text.
+Arctic Speculator supports two optimized, lightweight architectures as draft
+models for generating speculative token candidates:
 
-In benchmarks, combining these techniques with Arctic Inference and vLLM has
-achieved up to 4× faster end-to-end task completion for LLM agents and up to
-2.8× faster decoding for interactive workloads compared to standard
-autoregressive decoding. Arctic Inference's implementation has also shown to be
-up to 1.8x faster than other open-source speculative decoding alternatives in
-vLLM for certain workloads.
+1. **MLP-based Speculator**:
+   
+   This simple yet effective feed-forward neural network uses the final hidden
+   states and recent token IDs from the main LLM to propose multiple candidate
+   tokens simultaneously. By efficiently propagating hidden state information
+   across decoding steps, the MLP-based speculator achieves a strong balance
+   between model simplicity, low latency, and high acceptance rates.
 
-For more in-depth details, refer to the `Snowflake blog post
-<https://www.snowflake.com/en/engineering-blog/fast-speculative-decoding-vllm-arctic/>`_.
+   .. figure:: images/mlp_speculator.png
+      :alt: MLP Speculator architecture
+      :width: 50%
+      :align: center
 
-----------------------------
-Understanding the Techniques
-----------------------------
+      Illustration of the MLP-based Arctic Speculator.
 
-Speculative Decoding
-********************
+2. **LSTM-based Speculator**:
 
-Speculative Decoding is an inference acceleration technique that uses a smaller,
-faster "draft" model (e.g., an MLP speculator) to propose multiple candidate
-output tokens. These proposed tokens are then efficiently verified in parallel
-by the larger, more powerful target model. If the proposals are correct,
-multiple tokens are accepted at once, speeding up the generation process. The
-effectiveness of speculative decoding heavily relies on the quality and
-acceptance rate of the draft model's predictions.
+   Building on the MLP structure, the LSTM-based speculator incorporates the
+   LSTM gating mechanisms (forget, input, output, and cell gates) to capture
+   sequential token dependencies more effectively. This design provides
+   superior predictive accuracy and improved acceptance rates at only a minimal
+   additional computational cost.
 
-Suffix Decoding
-***************
+   .. figure:: images/lstm_speculator.png
+      :alt: LSTM Speculator architecture
+      :width: 50%
+      :align: center
 
-Suffix Decoding is a complementary technique particularly effective for text
-with repetitive structures, common in agentic workflows. Instead of predicting
-a fixed number of tokens, suffix decoding dynamically identifies and speculates
-longer sequences by matching patterns from previously generated text (historical
-outputs) and the current input. It utilizes a suffix tree data structure to
-maintain a cache of sequences, enabling rapid speculation of these recurring
-patterns.
+      Illustration of the LSTM-based Arctic Speculator.
 
----------------------------
-Usage with Arctic Inference
----------------------------
+Several pre-trained draft models are available in the
+`Snowflake speculators collection
+<https://huggingface.co/collections/Snowflake/speculators-6812b07f3186d13e243022e4>`_
+on Huggingface.
 
-To utilize these acceleration techniques with Arctic Inference in vLLM:
+The draft models provided by Arctic Speculator integrate seamlessly with vLLM's
+existing scorer and verifier components, which evaluate the proposed tokens and
+ensure correctness by verifying them using the main LLM. 
 
-1. :ref:`Install <install>` the ``arctic-inference`` package.
-2. Select a target model and a corresponding pre-trained draft model.
-   Arctic Inference provides public draft models for popular series like Llama-3 and
-   Qwen-2.5 `on Hugging Face
-   <https://huggingface.co/collections/Snowflake/speculators-6812b07f3186d13e243022e4>`_.
+To maximize throughput and reduce inference latency, Arctic Speculator employs
+the following key optimizations (benchmarked against vLLM v0.8.4):
 
-When launching vLLM, specify a ``speculative-config``:
+- **FP8 Quantization**: Lowers memory demand and significantly improves
+  speculation speed.
+- **Tensor Parallelism**: Distributes the workload across multiple GPUs using
+  tensor-parallelism.
+- **Communication Optimization**: Reduces cross-GPU communication overhead by
+  computing local Top-K logits before aggregation.
+- **CUDA Graphs**: Captures the full speculation loop into a single CUDA graph,
+  eliminating kernel launch overhead.
 
-* Set ``"method": "arctic"`` to enable Speculative Decoding via
-  Arctic Inference's advanced speculators.
-* Optionally, set ``"enable_suffix_decoding": true`` to activate Suffix Decoding
-  in conjunction with the speculative method. This is highly recommended for
-  workloads with potential textual repetition.
+Together, these optimizations achieve over **3× improvement** in draft model
+latency (from ~1.47 ms/token to ~0.47 ms/token) relative to vLLM v0.8.4.
 
-**Example:**
+Benchmark Results
+-----------------
 
-To load `meta-llama/Llama-3.3-70B-Instruct
-<https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct>`_ with the
-`Snowflake/Arctic-LSTM-Speculator-Llama-3.3-70B-Instruct
-<https://huggingface.co/Snowflake/Arctic-LSTM-Speculator-Llama-3.3-70B-Instruct>`_
-draft model, using both Arctic's speculative decoding and enabling Suffix
-Decoding:
+Arctic Speculator achieves significant performance improvements across key
+benchmarks when combined with vLLM v0.8.4:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Workload
+     - No Spec
+     - N-gram
+     - EAGLE
+     - Arctic
+     - Arctic + Suffix
+   * - ShareGPT
+     - 76.0 tok/s
+     - 91.2 tok/s
+     - 102 tok/s
+     - 172 tok/s
+     - 179 tok/s
+   * - HumanEval
+     - 77.2 tok/s
+     - 100 tok/s
+     - 112 tok/s
+     - 203 tok/s
+     - 217 tok/s
+   * - SWE-Bench
+     - 75.8 tok/s
+     - 175 tok/s
+     - Error
+     - 294 tok/s
+     - 302 tok/s
+   * - Mixed
+     - 82.9 tok/s
+     - 112 tok/s
+     - Error
+     - 184 tok/s
+     - 209 tok/s
+
+Combining with Suffix Decoding
+------------------------------
+
+Arctic Speculator can also integrate with :ref:`Suffix Decoding <suffix-decoding>`
+for additional performance benefits on workloads exhibiting repetition, such as
+agentic tasks, self-refinement loops, and multi-agent pipelines. The combined
+mode dynamically selects the speculative strategy (suffix-based or model-based)
+per inference step, achieving optimal performance across diverse scenarios.
+
+Usage Examples
+--------------
+
+Minimal configuration with Arctic Speculator (LSTM-based):
 
 .. code-block:: bash
 
-    python -m vllm.entrypoints.openai.api_server \
-        --model meta-llama/Llama-3.3-70B-Instruct \
-        --quantization "fp8" \
-        --tensor-parallel-size 2 \
-        --speculative-config '{
-            "method": "arctic",
-            "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.3-70B-Instruct",
-            "num_speculative_tokens": 3,
-            "enable_suffix_decoding": true
-        }'
+   vllm serve meta-llama/Llama-3.1-8B-Instruct \
+   --speculative-config '{
+       "method": "arctic",
+       "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.1-8B-Instruct",
+       "num_speculative_tokens": 3
+   }'
 
-This configuration instructs vLLM to use Arctic Inference's specific speculative
-decoding logic with the provided draft model and to also leverage Suffix
-Decoding for potential further speedups.
+Combined Arctic Speculator with Suffix Decoding:
+
+.. code-block:: bash
+
+   vllm serve meta-llama/Llama-3.1-8B-Instruct \
+   --speculative-config '{
+       "method": "arctic",
+       "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.1-8B-Instruct",
+       "num_speculative_tokens": 3,
+       "enable_suffix_decoding": true
+   }'
+
+Configuration Parameters
+------------------------
+
+The following parameters are available under ``speculative-config`` in vLLM for
+configuring Arctic Speculator:
+
+- **method** (*str, required*):
+
+  Must be set to `"arctic"` to enable the Arctic Speculator.
+
+- **model** (*str, required*):
+
+  Specifies the Hugging Face ID or path to the Arctic speculator model.
+
+- **num_speculative_tokens** (*int, default: 3*):
+
+  Defines the maximum number of speculative tokens generated per decoding step.
+  Higher numbers increase throughput but may reduce the token acceptance rate.
+  This is typically determined based on the draft model itself.
+
+- **enable_suffix_decoding** (*bool, default: false*):
+
+  Enables Suffix Decoding, recommended for tasks involving repetitive patterns.
 
 ------------------------------------------------
 Training Custom Draft Models with ArcticTraining
