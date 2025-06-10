@@ -1,5 +1,5 @@
 
-.. _shift:
+.. _shift-parallel:
 
 =================
 Shift Parallelism
@@ -42,8 +42,7 @@ For more details, refer to the `Snowflake blog post
 Usage with Arctic Inference
 ---------------------------
 
-To use Shift Parallelism with Arctic Inference, :ref:`install <install>` the
-``arctic-inference`` package, select a compatible `Llama-3
+To use Shift Parallelism with Arctic Inference, select a compatible `Llama-3
 <https://huggingface.co/models?other=llama-3>`_ model and launch vLLM with a
 tensor and sequence parallel configuration where `TP x SP` equals the number of
 GPUs.
