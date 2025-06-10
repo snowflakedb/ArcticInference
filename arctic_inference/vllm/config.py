@@ -16,7 +16,8 @@
 from dataclasses import dataclass
 import logging
 
-from vllm.config import ParallelConfig, SpeculativeConfig, VllmConfig        
+from vllm.config import ParallelConfig, SpeculativeConfig, VllmConfig  
+from vllm.transformers_utils.configs.mlp_speculator import MLPSpeculatorConfig
 
 from arctic_inference.patching import ArcticPatch
 
@@ -114,3 +115,12 @@ class VllmConfigPatch(ArcticPatch[VllmConfig]):
         string += f", enable_shift_parallel={self.parallel_config.enable_shift_parallel}"
         string += f", shift_parallel_threshold={self.parallel_config.shift_parallel_threshold}"
         return string
+    
+
+class MLPSpeculatorConfigPatch(ArcticPatch[MLPSpeculatorConfig]):
+
+    _orig_init = MLPSpeculatorConfig.__init__
+
+    def __post_init__(self, *args, **kwargs):
+        self.base_model_arch = kwargs.pop("base_model_arch", "")
+        self._orig_init(*args, **kwargs)
