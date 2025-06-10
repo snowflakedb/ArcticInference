@@ -27,7 +27,6 @@ from grpc import ServicerContext
 
 from vllm.engine.async_llm_engine import AsyncLLMEngine
 from vllm.engine.arg_utils import AsyncEngineArgs
-from vllm.outputs import RequestOutput
 from vllm.usage.usage_lib import UsageContext
 from vllm.inputs import TokensPrompt
 from vllm.pooling_params import PoolingParams
@@ -462,11 +461,21 @@ def patch_embedding_performance():
     vllm_utils.get_model_architecture = decorated_function
 
     logger.debug("Patched get_model_architecture for embedding performance")
-    
+
+def patch_model_config_hash():
+    from vllm.config import ModelConfig
+
+    # compute hash in int
+    def compute_hash_int(self):
+        return int(ModelConfig.compute_hash(self), 16)
+
+    ModelConfig.__hash__ = compute_hash_int
+
 
 if __name__ == "__main__":
     # patch the get_model_architecture for embedding performance
     patch_embedding_performance()
+    patch_model_config_hash()
 
     # Configure logging
     from vllm import logger as vllm_logger  # type: ignore
