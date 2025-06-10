@@ -16,7 +16,9 @@ import uuid
 import sys
 from concurrent import futures
 from typing import Optional
-from argparse import ArgumentParser, Namespace
+from argparse import Namespace
+
+os.environ["VLLM_PLUGINS"] = ""
 
 import grpc
 from grpc import aio
@@ -29,6 +31,7 @@ from vllm.outputs import RequestOutput
 from vllm.usage.usage_lib import UsageContext
 from vllm.inputs import TokensPrompt
 from vllm.pooling_params import PoolingParams
+from vllm.utils import FlexibleArgumentParser
 
 # Ensure we're using vLLM v0 for embedding support
 os.environ["VLLM_USE_V1"] = "0"
@@ -473,7 +476,7 @@ if __name__ == "__main__":
     )
 
     # Parse command line arguments
-    parser = ArgumentParser(description="gRPC replica for vLLM inference")
+    parser = FlexibleArgumentParser(description="gRPC replica for vLLM inference")
     parser = AsyncEngineArgs.add_cli_args(parser)
 
     # Replica-specific arguments
