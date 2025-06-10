@@ -24,9 +24,8 @@ and the `arXiv paper <https://arxiv.org/abs/2410.03960>`_.
 Usage with Arctic Inference
 ---------------------------
 
-To use SwiftKV with Arctic Inference, you need to :ref:`install <install>` the
-``arctic-inference`` package and select a SwiftKV model that has been fine-tuned
-with `SwiftKV in ArcticTraining
+To use SwiftKV with Arctic Inference, select a SwiftKV model that has been
+fine-tuned with `SwiftKV in ArcticTraining
 <https://github.com/snowflakedb/ArcticTraining/tree/main/projects/swiftkv>`_. We
 have publically released SwiftKV models for Meta's Llama-3 series of models `on
 Hugging Face

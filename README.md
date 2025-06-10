@@ -103,20 +103,18 @@ By using the examples below, you can get benefits from Shift Parallelism, Specul
 #### Serving
 
 ```console
-vllm serve \
-Snowflake/Llama-3.1-SwiftKV-70B-Instruct \
---quantization "fp8" \
---tensor-parallel-size 1 \
---ulysses-sequence-parallel-size 4 \
---enable-shift-parallel \
---speculative-config '{
-    "method": "arctic",
-    "model":"Snowflake/Arctic-LSTM-Speculator-Llama-3.1-70B-Instruct",
-    "num_speculative_tokens": 3,
-    "enable_suffix_decoding": true,
-    "disable_by_batch_size": 64,
-}'
-
+vllm serve Snowflake/Llama-3.1-SwiftKV-8B-Instruct \
+    --quantization "fp8" \
+    --tensor-parallel-size 1 \
+    --ulysses-sequence-parallel-size 2 \
+    --enable-shift-parallel \
+    --speculative-config '{
+        "method": "arctic",
+        "model":"Snowflake/Arctic-LSTM-Speculator-Llama-3.1-8B-Instruct",
+        "num_speculative_tokens": 3,
+        "enable_suffix_decoding": true,
+        "disable_by_batch_size": 64
+    }'
 ```
 
 #### Offline
@@ -128,17 +126,17 @@ from vllm import LLM, SamplingParams
 vllm.plugins.load_general_plugins()
 
 llm = LLM(
-    model="Snowflake/Llama-3.1-SwiftKV-70B-Instruct",
+    model="Snowflake/Llama-3.1-SwiftKV-8B-Instruct",
     quantization="fp8",
     tensor_parallel_size=1,
-    ulysses_sequence_parallel_size=4,
+    ulysses_sequence_parallel_size=2,
     enable_shift_parallel=True,
     speculative_config={
         "method": "arctic",
-        "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.1-70B-Instruct",
+        "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.1-8B-Instruct",
         "num_speculative_tokens": 3,
         "enable_suffix_decoding": True,
-        "disable_by_batch_size": 64
+        "disable_by_batch_size": 64,
     },
 )
 
@@ -149,7 +147,7 @@ conversation = [
     },
 ]
 
-sampling_params = SamplingParams(temperature=0.1, max_tokens=128)
+sampling_params = SamplingParams(temperature=0.0, max_tokens=800)
 
 outputs = llm.chat(conversation, sampling_params=sampling_params)
 ```

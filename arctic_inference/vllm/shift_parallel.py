@@ -345,6 +345,11 @@ class UlyssesFlashAttentionImplPatch(ArcticPatch[FlashAttentionImpl]):
     def forward(self, layer, query, key, value, kv_cache, attn_metadata, output):
         from .model_runner import is_shift_parallel_mode
 
+        assert output is not None, "Output tensor must be provided."
+        if attn_metadata is None:
+            # Profiling run.
+            return output
+
         sp_size = parallel_state._SP.world_size
         device_group = parallel_state._SP.device_group
 

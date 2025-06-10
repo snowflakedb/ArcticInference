@@ -25,7 +25,8 @@ from arctic_inference.vllm.args import EngineArgsPatch, AsyncEngineArgsPatch
 from arctic_inference.vllm.config import (ModelConfigPatch,
                                           ParallelConfigPatch,
                                           SpeculativeConfigPatch,
-                                          VllmConfigPatch)
+                                          VllmConfigPatch,
+                                          MLPSpeculatorConfigPatch)
 from arctic_inference.vllm.shift_parallel import apply_shift_parallel_patches
 from arctic_inference.vllm.spec_decoding import apply_spec_decoding_patches
 
@@ -117,6 +118,7 @@ def arctic_inference_plugin():
     ParallelConfigPatch.apply_patch()
     SpeculativeConfigPatch.apply_patch()
     VllmConfigPatch.apply_patch()
+    MLPSpeculatorConfigPatch.apply_patch()
 
     # Main optimization patches.
     apply_shift_parallel_patches()
