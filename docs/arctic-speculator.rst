@@ -1,9 +1,9 @@
 
-.. _spec-decode:
+.. _arctic-speculator:
 
-=============================
-Speculative & Suffix Decoding
-=============================
+=================
+Arctic Speculator
+=================
 
 Arctic Inference employs advanced techniques like Speculative Decoding and Suffix
 Decoding to significantly accelerate LLM inference. It enhances standard

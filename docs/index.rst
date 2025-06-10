@@ -27,8 +27,11 @@ Advanced Parallelism
 Speculative Decoding
 ~~~~~~~~~~~~~~~~~~~~
 
-🚀 :ref:`spec-decode`:
-   Boosts LLM speed by drafting tokens with a small model and verifying them in bulk
+🚀 :ref:`arctic-speculator`:
+   Lightweight yet effective draft models based on MLP and LSTM architectures, complete with training pipelines
+
+🚀 :ref:`suffix-decoding`:
+   Rapid speculation for long repeated sequences, effective for coding, agents, and other emerging applications
 
 Model Optimization
 ~~~~~~~~~~~~~~~~~~
@@ -67,7 +70,8 @@ Table of Contents
    :maxdepth: 1
    :caption: Speculative Decoding
 
-   spec-decode
+   arctic-speculator
+   suffix-decoding
 
 .. toctree::
    :maxdepth: 1
