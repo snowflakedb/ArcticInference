@@ -113,7 +113,7 @@ vllm serve Snowflake/Llama-3.1-SwiftKV-8B-Instruct \
         "model":"Snowflake/Arctic-LSTM-Speculator-Llama-3.1-8B-Instruct",
         "num_speculative_tokens": 3,
         "enable_suffix_decoding": true,
-        "disable_by_batch_size": 64,
+        "disable_by_batch_size": 64
     }'
 ```
 
@@ -136,7 +136,7 @@ llm = LLM(
         "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.1-8B-Instruct",
         "num_speculative_tokens": 3,
         "enable_suffix_decoding": True,
-        "disable_by_batch_size": 64
+        "disable_by_batch_size": 64,
     },
 )
 
