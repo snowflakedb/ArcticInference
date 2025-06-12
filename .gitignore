@@ -5,3 +5,4 @@ __pycache__
 *.so
 docs/_build
 .idea
+arctic_inference/embedding/proto/python/
