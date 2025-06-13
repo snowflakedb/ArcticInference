@@ -197,8 +197,6 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         group_ranks = all_ranks.transpose(3, 4).reshape(
             -1, shift_parallel_size).unbind(0)
         group_ranks = [x.tolist() for x in group_ranks]
-        group_ranks = [[0, 1, 2, 3, 4, 5, 6, 7]]
-        print(f"Shift parallel group ranks: {group_ranks} ******************************")
         _SP_TP = init_model_parallel_group(group_ranks,
                                            get_world_group().local_rank,
                                            backend,
