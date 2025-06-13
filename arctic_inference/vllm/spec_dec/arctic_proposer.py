@@ -26,10 +26,6 @@ import torch
 from arctic_inference.vllm.spec_dec.arctic_speculator import ArcticMLPSpeculator, ArcticLSTMSpeculator
 from arctic_inference.envs import ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK
 
-SPEC_BASE_ARCH_EXCEPTION_MAP = {
-    "LlamaSwiftKVForCausalLM": "LlamaForCausalLM",
-}
-
 
 class ArcticProposer:
 
@@ -74,12 +70,11 @@ class ArcticProposer:
             raise ValueError()
 
         if not ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK:
-            base_model_arch_in_spec_config = draft_config_model_config.hf_config.base_model_arch
+            base_model_archs_in_spec_config = draft_config_model_config.hf_config.base_model_archs
             base_model_arch = self.vllm_config.model_config.architectures[0]
-            if base_model_arch_in_spec_config != base_model_arch and \
-               SPEC_BASE_ARCH_EXCEPTION_MAP.get(base_model_arch) != base_model_arch_in_spec_config:
+            if base_model_arch not in base_model_archs_in_spec_config:
                 logger.error(
-                    f"Draft model trained with base model architecture {base_model_arch_in_spec_config} "
+                    f"Draft model trained with base model architectures {base_model_archs_in_spec_config} "
                     f"does not match the base model architecture {base_model_arch} in the vLLM config. "
                     "Set ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK=1 to skip this assertion."
                 )
