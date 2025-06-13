@@ -182,6 +182,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 model_output = output
             return model_output
 
+        print(f"monkeypatch ulysses SP {parallel_state._SP.world_size}/{parallel_state._SP.rank_in_group} "
+              f"TP {parallel_state._TP.world_size}/{parallel_state._TP.rank_in_group} "
+              f"SP_TP {parallel_state._SP_TP.world_size}/{parallel_state._SP_TP.rank_in_group} ")
+
         self.model.forward = ulysses_forward
 
     def load_model(self: GPUModelRunner, *args, **kwargs):
@@ -323,15 +327,19 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                     inputs_embeds=inputs_embeds,
                 )
             else:
+                # here
                 hidden_states = self.model(
                     input_ids=input_ids,
                     positions=positions,
                     intermediate_tensors=intermediate_tensors,
                     inputs_embeds=inputs_embeds,
                 )
+                # here
         if not get_pp_group().is_last_rank:
             # For mid-pipeline stages, return the hidden states.
             return hidden_states
+
+
 
         hidden_states = hidden_states[:num_scheduled_tokens]
         sample_hidden_states = hidden_states[logits_indices]
