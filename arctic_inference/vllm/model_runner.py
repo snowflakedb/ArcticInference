@@ -127,10 +127,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         vllm_config.speculative_config = speculative_config
 
     def profile_run(self) -> None:
+        self._orig_profile_run()
         torch.cuda.synchronize()
         parallel_state.get_world_group().barrier()
         exit()
-        self._orig_profile_run()
         if self.shift_model is not None:
             # Run the shift model to trigger compilation.
             orig_model, self.model = self.model, self.shift_model
