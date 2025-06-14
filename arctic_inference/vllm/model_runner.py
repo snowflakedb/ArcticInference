@@ -712,13 +712,14 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                         print(f"num_tokens: {num_tokens}, "
                               f"Capturing CUDA graph for (SP x TP) = ({sp_size} x {tp_size}) "
                               f"threshold: {self.shift_parallel_threshold}")
-                    with set_shift_parallel_mode(True):
-                        for _ in range(self.vllm_config.compilation_config.
-                                        cudagraph_num_of_warmups):
+                    if num_tokens <= self.shift_parallel_threshold:
+                        with set_shift_parallel_mode(True):
+                            for _ in range(self.vllm_config.compilation_config.
+                                            cudagraph_num_of_warmups):
+                                self._dummy_run(num_tokens)
+                            if torch.distributed.get_rank() == 0:
+                                print(f"shape {num_tokens} ")
                             self._dummy_run(num_tokens)
-                        if torch.distributed.get_rank() == 0:
-                            print(f"shape {num_tokens} ")
-                        self._dummy_run(num_tokens)
                 self.model = orig_model
 
         end_time = time.perf_counter()
