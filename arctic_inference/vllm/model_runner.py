@@ -136,9 +136,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                     self._dummy_run(self.max_num_tokens)
             finally:
                 self.model = orig_model
-        torch.cuda.synchronize()
-        parallel_state.get_world_group().barrier()
-        assert False, "passed"
+        # torch.cuda.synchronize()
+        # parallel_state.get_world_group().barrier()
+        # assert False, "passed"
 
     def _prepare_inputs(self, *args, **kwargs):
         attn_metadata, logits_indices, *rest = (
