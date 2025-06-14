@@ -138,7 +138,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 self.model = orig_model
         torch.cuda.synchronize()
         parallel_state.get_world_group().barrier()
-        exit()
+        assert False, "passed"
 
     def _prepare_inputs(self, *args, **kwargs):
         attn_metadata, logits_indices, *rest = (
