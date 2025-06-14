@@ -694,13 +694,12 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             for num_tokens in reversed(self.cudagraph_batch_sizes):
                 if torch.distributed.get_rank() == 0:
                     print(f"num_tokens: {num_tokens}, "
-                          f"SP: {sp_size}, TP: {tp_size}, "
+                          f"Capturing CUDA graph for (SP, TP) = ({sp_size}, {tp_size}) "
                           f"threshold: {self.shift_parallel_threshold}")
                 if (num_tokens * sp_size > self.shift_parallel_threshold and
                         num_tokens * sp_size <= self.max_num_tokens):
                     if torch.distributed.get_rank() == 0:
-                        print(f"Capturing CUDA graph for (SP, TP) = ({sp_size}, {tp_size}) "
-                              f"batch size {num_tokens * sp_size} ")
+                        print(f"shape {num_tokens * sp_size} ")
                     for _ in range(self.vllm_config.compilation_config.
                                    cudagraph_num_of_warmups):
                         self._dummy_run(num_tokens * sp_size)
@@ -710,12 +709,15 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 orig_model, self.model = self.model, self.shift_model
                 for num_tokens in reversed(self.cudagraph_batch_sizes):
                     if torch.distributed.get_rank() == 0:
-                        print(f"Capturing CUDA graph for (SP x TP) = ({sp_size} x {tp_size}) "
-                              f"batch size {num_tokens} ")
+                        print(f"num_tokens: {num_tokens}, "
+                              f"Capturing CUDA graph for (SP x TP) = ({sp_size} x {tp_size}) "
+                              f"threshold: {self.shift_parallel_threshold}")
                     with set_shift_parallel_mode(True):
                         for _ in range(self.vllm_config.compilation_config.
                                         cudagraph_num_of_warmups):
                             self._dummy_run(num_tokens)
+                        if torch.distributed.get_rank() == 0:
+                            print(f"shape {num_tokens} ")
                         self._dummy_run(num_tokens)
                 self.model = orig_model
 
