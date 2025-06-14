@@ -168,6 +168,11 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             kwargs['input_ids'] = input_ids[N_offset:N_offset + N_ulysses]
             kwargs['positions'] = positions[N_offset:N_offset + N_ulysses]
 
+            if torch.distributed.get_rank() == 0:
+                print(f"N {N}, "
+                      f"N_ulysses {N_ulysses}, "
+                      f"SP {sp_size}, SP_TP {parallel_state._SP_TP.world_size}")
+
             with set_shift_parallel_mode(False):
                 output = model_forward(*args, **kwargs)
 
