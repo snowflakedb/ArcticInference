@@ -128,9 +128,6 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
     def profile_run(self) -> None:
         self._orig_profile_run()
-        torch.cuda.synchronize()
-        parallel_state.get_world_group().barrier()
-        exit()
         if self.shift_model is not None:
             # Run the shift model to trigger compilation.
             orig_model, self.model = self.model, self.shift_model
@@ -139,6 +136,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                     self._dummy_run(self.max_num_tokens)
             finally:
                 self.model = orig_model
+        torch.cuda.synchronize()
+        parallel_state.get_world_group().barrier()
+        exit()
 
     def _prepare_inputs(self, *args, **kwargs):
         attn_metadata, logits_indices, *rest = (
