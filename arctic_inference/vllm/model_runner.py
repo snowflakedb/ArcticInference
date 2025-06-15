@@ -181,9 +181,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 model_output = torch.empty((N, self.model.config.hidden_size),
                                         dtype=output.dtype,
                                         device=output.device)
-                torch.distributed.all_gather_into_tensor(model_output,
-                                                        output,
-                                                        group=device_group)
+                # torch.distributed.all_gather_into_tensor(model_output,
+                #                                         output,
+                #                                         group=device_group)
             else:
                 # SwiftKV models will already have all-gathered the output.
                 assert output.size(0) == N
