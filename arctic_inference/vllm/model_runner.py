@@ -785,7 +785,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             sp_size = self.parallel_config.ulysses_sequence_parallel_size
             for num_tokens in reversed(self.cudagraph_batch_sizes):
                 if (num_tokens * sp_size > self.shift_parallel_threshold and
-                    num_tokens * sp_size <= self.max_num_tokens):
+                      num_tokens * sp_size <= self.max_num_tokens):
                     for _ in range(self.vllm_config.compilation_config.
                                    cudagraph_num_of_warmups):
                         self._dummy_run(num_tokens * sp_size,
@@ -796,7 +796,11 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 orig_model, self.model = self.model, self.shift_model
                 for num_tokens in reversed(self.cudagraph_batch_sizes):
                     if (num_tokens <= sp_tp_threshold or 
-                        "SwiftKV" in self.model.__class__.__name__):
+                          "SwiftKV" in self.model.__class__.__name__):
+                        # Note: We want to capture all shapes for the SwiftKV shift model.
+                        # This is necessary since SwiftKV always uses full TP for the decode runner.
+                        # For all other models, we only capture necessary shapes for the SP_TP mode,
+                        # yealding less setup time.
                         with set_shift_parallel_mode(True):
                             for _ in range(self.vllm_config.compilation_config.
                                             cudagraph_num_of_warmups):
