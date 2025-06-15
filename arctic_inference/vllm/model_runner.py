@@ -725,10 +725,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                         with set_shift_parallel_mode(True):
                             for _ in range(self.vllm_config.compilation_config.
                                             cudagraph_num_of_warmups):
-                                pass # self._dummy_run(num_tokens)
+                                self._dummy_run(num_tokens)
                             if torch.distributed.get_rank() == 0:
                                 print(f"shape {num_tokens} ")
-                            # self._dummy_run(num_tokens)
+                            self._dummy_run(num_tokens)
                 self.model = orig_model
 
         end_time = time.perf_counter()
