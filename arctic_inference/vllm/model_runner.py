@@ -795,7 +795,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             if self.shift_model is not None:
                 orig_model, self.model = self.model, self.shift_model
                 for num_tokens in reversed(self.cudagraph_batch_sizes):
-                    if (num_tokens <= sp_tp_threshold or 
+                    if (num_tokens <= self.shift_parallel_threshold or 
                           "SwiftKV" in self.model.__class__.__name__):
                         # Note: We want to capture all shapes for the SwiftKV shift model.
                         # This is necessary since SwiftKV always uses full TP for the decode runner.
