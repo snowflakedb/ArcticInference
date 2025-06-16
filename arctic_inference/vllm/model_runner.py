@@ -22,7 +22,7 @@ import torch
 import vllm.distributed.parallel_state as parallel_state
 from vllm.attention.layer import Attention
 from vllm.config import CompilationLevel
-from vllm.distributed.parallel_state import get_pp_group
+from vllm.distributed.parallel_state import get_pp_group, get_world_group
 from vllm.forward_context import set_forward_context
 from vllm.config import VllmConfig
 from vllm.model_executor.model_loader import get_model
@@ -716,6 +716,13 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             if self.shift_model is not None:
                 orig_model, self.model = self.model, self.shift_model
                 for num_tokens in reversed(self.cudagraph_batch_sizes):
+                    torch.cuda.synchronize()
+                    get_world_group().barrier()
+                    # for i in range(get_world_group().world_size):
+                    #     if torch.distributed.get_rank() == i:
+                    #         print(f"forward finish rank {i} shape: {input_ids.shape}")
+                    #     torch.cuda.synchronize()
+                    #     get_world_group().barrier()
                     if torch.distributed.get_rank() == 0:
                         print(f"num_tokens: {num_tokens}, "
                               f"Capturing CUDA graph for (SP x TP) = ({sp_size} x {tp_size}) "
