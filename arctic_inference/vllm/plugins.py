@@ -22,12 +22,14 @@ from vllm.v1.worker.worker_base import WorkerBase
 from arctic_inference.patching import ArcticPatch
 from arctic_inference.utils import get_compatible_vllm_version
 from arctic_inference.vllm.args import EngineArgsPatch, AsyncEngineArgsPatch
-from arctic_inference.vllm.config import (ModelConfigPatch,
-                                          ParallelConfigPatch,
+from arctic_inference.vllm.config import (ParallelConfigPatch,
                                           SpeculativeConfigPatch,
-                                          VllmConfigPatch)
-from arctic_inference.vllm.shift_parallel import apply_shift_parallel_patches
-from arctic_inference.vllm.spec_decoding import apply_spec_decoding_patches
+                                          VllmConfigPatch,
+                                          MLPSpeculatorConfigPatch)
+from arctic_inference.vllm.stats import (SpecDecodingStatsPatch, 
+                                         SpecDecodingLoggingPatch)
+from arctic_inference.vllm.ulysses import apply_shift_parallel_patches
+
 
 logger = init_logger(__name__)
 
@@ -113,11 +115,12 @@ def arctic_inference_plugin():
     # Patches to vLLM arguments and configuration objects.
     EngineArgsPatch.apply_patch()
     AsyncEngineArgsPatch.apply_patch()
-    ModelConfigPatch.apply_patch()
     ParallelConfigPatch.apply_patch()
     SpeculativeConfigPatch.apply_patch()
+    SpecDecodingStatsPatch.apply_patch()
+    SpecDecodingLoggingPatch.apply_patch()
     VllmConfigPatch.apply_patch()
+    MLPSpeculatorConfigPatch.apply_patch()
 
     # Main optimization patches.
     apply_shift_parallel_patches()
-    apply_spec_decoding_patches()

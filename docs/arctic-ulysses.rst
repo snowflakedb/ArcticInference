@@ -1,5 +1,5 @@
 
-.. _ulysses:
+.. _arctic-ulysses:
 
 ==============
 Arctic Ulysses
@@ -16,7 +16,7 @@ retrieval-augmented generation (RAG), summarization, and code generation.
 By leveraging all-to-all communication for attention computation, Arctic Ulysses
 minimizes communication overhead and maintains a favorable
 communication-to-compute ratio as the number of GPUs scales. In evaluations,
-Arctic Ulysses achieved up to 6.8× lower latency and 1.5× higher throughput
+Arctic Ulysses achieved up to 6.8x lower latency and 1.5x higher throughput
 compared to TP-only configurations, without requiring multiple specialized
 deployments.
 
@@ -27,20 +27,8 @@ For more details, refer to the `Snowflake blog post
 Usage with Arctic Inference
 ---------------------------
 
-To utilize Ulysses with Arctic Inference, :ref:`install <install>` the
-``arctic-inference`` package and select a compatible `Llama-3
-<https://huggingface.co/models?other=llama-3>`_ or or `Qwen-2
-<https://huggingface.co/models?other=qwen2>`_ model.
-
-.. note::
-
-    Currently, Arctic Ulysses works only with certain model architectures,
-    namely Llama and Qwen. We are working on enabling Ulysses more broadly
-    across any model architecture, which will be part of a later release of
-    Arctic Inference.
-
-Then when launching vLLM, specifying both ``tensor-parallel-size`` and
-``sequence-parallel-size`` will automatically enable the Arctic Ulysses
+When launching vLLM, specifying both ``tensor-parallel-size`` and
+``ulysses-sequence-parallel-size`` will automatically enable the Arctic Ulysses
 optimization.  Here's an example of how to run the
 `meta-llama/Llama-3.3-70B-Instruct
 <https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct>`_ model with both

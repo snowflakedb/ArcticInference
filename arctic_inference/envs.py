@@ -13,20 +13,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import re
-from importlib.metadata import requires
+import os
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK: bool = False
+
+environment_variables: dict[str, Callable[[], Any]] = {
+    "ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK":
+    lambda: os.getenv("ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK", "0") == "1",
+}
 
 
-def get_compatible_vllm_version():
-    reqs = requires("arctic_inference")
-    for req in reqs:
-        match = re.match("vllm==(.*); extra == \"vllm\"", req)
-        if match is not None:
-            return match.groups()[0]
-        
-
-# For debugging
-def print0(*args, **kwargs):
-    from vllm.distributed.parallel_state import get_tp_group
-    if get_tp_group().is_first_rank:
-        print(*args, **kwargs)
+def __getattr__(name: str) -> Any:
+    if name in environment_variables:
+        return environment_variables[name]()
+    raise AttributeError(f"Environment variable '{name}' not found.")

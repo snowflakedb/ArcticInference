@@ -5,11 +5,11 @@ requires = [
     "ninja",
     "cmake>=3.12",
     "pybind11",
-    # uv pip install vllm==0.8.4 --dry-run 2>&1 | grep protobuf | sed 's/^ + //'
-    "protobuf==4.25.8",
+    # uv pip install vllm==0.9.0 --dry-run 2>&1 | grep protobuf | sed 's/^ + //'
+    "protobuf==5.29.5",
     "pybind11_global",
     "grpcio-tools",
-    "torch == 2.6.0",
+    "torch == 2.7.0",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -39,7 +39,7 @@ packages = [
 
 [project.optional-dependencies]
 vllm = [
-    'vllm==0.8.4',
+    'vllm==0.9.0.1',
 ]
 
 docs = [
@@ -49,9 +49,9 @@ docs = [
 ]
 
 embedding = [
-    "vllm==0.8.4",
-    # uv pip install vllm==0.8.4 --dry-run 2>&1 | grep protobuf | sed 's/^ + //'
-    "protobuf==4.25.8",
+    "vllm==0.9.0.1",
+    # uv pip install vllm==0.9.0 --dry-run 2>&1 | grep protobuf | sed 's/^ + //'
+    "protobuf==5.29.5",
 ]
 
 dynasor = [

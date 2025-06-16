@@ -43,7 +43,7 @@ import subprocess
 import sys
 import time
 import uuid
-from argparse import ArgumentParser, Namespace
+from argparse import Namespace
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -52,8 +52,11 @@ from typing import Dict, List, Optional
 import grpc
 import grpc.aio
 
+os.environ["VLLM_PLUGINS"] = ""
+
 # vLLM imports – *lazy* import inference protos to avoid import-time failures.
 from vllm.engine.arg_utils import AsyncEngineArgs
+from vllm.utils import FlexibleArgumentParser
 
 # Ensure repo root is on the path so ``python -m`` works from anywhere.
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
@@ -135,7 +138,7 @@ class ReplicaManager:
     async def start(self) -> None:
         """Launch all replicas concurrently and start background health loop."""
         ports = [self.base_port + 1 + i for i in range(self.num_replicas)]
-        
+
         # check if the ports are available
         for p in ports:
             if not self._check_port_available(p):
@@ -200,8 +203,9 @@ class ReplicaManager:
         return True if the port is available, False otherwise.
         """
         import socket
+
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            return s.connect_ex(('localhost', port)) != 0
+            return s.connect_ex(("localhost", port)) != 0
 
     def _build_replica_cmd(self, host: str, port: int) -> List[str]:
         cmd: List[str] = [
@@ -382,11 +386,15 @@ class ManagerServicer(inference_pb2_grpc.InferenceServiceServicer):
                 n_healthy_replicas += 1
             except grpc.RpcError as e:
                 # Mark replica unhealthy and fall through to default response.
-                logger.warning(f"grpc Error: {e} getting info from replica {replica.id} mark unhealthy")
+                logger.warning(
+                    f"grpc Error: {e} getting info from replica {replica.id} mark unhealthy"
+                )
                 await self.replica_manager._mark_unhealthy(replica)
             except (AttributeError, IndexError) as e:
                 # Handle case where replica_infos is missing or empty
-                logger.warning(f"Failed to get replica info from {replica.id}: {e}, mark unhealthy")
+                logger.warning(
+                    f"Failed to get replica info from {replica.id}: {e}, mark unhealthy"
+                )
                 await self.replica_manager._mark_unhealthy(replica)
 
         # Fallback minimal info when no replica is healthy.
@@ -446,7 +454,9 @@ if __name__ == "__main__":
         format=vllm_logger._FORMAT, datefmt=vllm_logger._DATE_FORMAT, level=logging.INFO
     )
 
-    parser = ArgumentParser(description="Replica manager / load inger")
+    parser = FlexibleArgumentParser(
+        description="Replica manager that manages and load balances between multiple replicas on a single GPU"
+    )
     parser.add_argument("--host", default="0.0.0.0", help="Bind host")
     parser.add_argument(
         "--port",
