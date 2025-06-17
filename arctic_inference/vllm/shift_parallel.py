@@ -19,7 +19,7 @@ import weakref
 from typing import List, Optional
 
 import torch
-import vllm.distributed.parallel_state as parallel_state
+import vllm.distributed.parallel_state as parallel_state, get_world_group
 import vllm.v1.executor.multiproc_executor
 from vllm.attention.layer import Attention
 from vllm.config import ModelConfig, ParallelConfig
@@ -353,7 +353,9 @@ class UlyssesFlashAttentionImplPatch(ArcticPatch[FlashAttentionImpl]):
                   f"sp_size: {parallel_state._SP.world_size}, "
                   f"sp_tp_size: {parallel_state._SP_TP.world_size}, "
                   f"is_shift_parallel_mode: {is_shift_parallel_mode()}")
-
+            
+        torch.cuda.synchronize()
+        get_world_group().barrier()       
 
         sp_size = parallel_state._SP.world_size
         device_group = parallel_state._SP.device_group
