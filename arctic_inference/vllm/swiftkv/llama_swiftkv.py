@@ -221,8 +221,8 @@ class LlamaSwiftKVPrefillRunner(nn.Module):
         self,
         input_ids: Optional[torch.Tensor],
         positions: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, IntermediateTensors,
-               IntermediateTensors]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+               torch.Tensor]:
         hidden_states = self.model.get_input_embeddings(input_ids)
         residual = None
         prefill_layers = self.model.layers[:self.config.num_key_value_layers]
@@ -359,15 +359,6 @@ class LlamaSwiftKVModel(nn.Module):
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
 
-    def make_empty_intermediate_tensors(
-        self,
-        batch_size: int,
-        dtype: torch.dtype,
-        device: torch.device,
-    ) -> IntermediateTensors:
-        raise NotImplementedError(
-            f"{self.__class__.__name__} does not support pipeline parallel.")
-
     def _init_prefill_runner(self, vllm_config: VllmConfig):
         vllm_config.compilation_config = copy.copy(
             vllm_config.compilation_config)
@@ -417,8 +408,8 @@ class LlamaSwiftKVModel(nn.Module):
         positions: torch.Tensor,
         k_states: torch.Tensor,
         v_states: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, IntermediateTensors,
-               IntermediateTensors]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+               torch.Tensor]:
         forward_context: ForwardContext = get_forward_context()
         attn_metadata = get_attn_metadata_for_swiftkv()
         if attn_metadata is None:
@@ -508,23 +499,22 @@ class LlamaSwiftKVModel(nn.Module):
                 k_states,
                 v_states))
 
+        batch_size = hidden_states.size(0)
+        if hidden_states.shape[0] <= self.cuda_graph_max_batch_size:
+            padded_size = self.vllm_config.pad_for_cudagraph(batch_size)
+            inputs = self.decode_runner.inputs
+            inputs["hidden_states"][:batch_size].copy_(hidden_states)
+            hidden_states = inputs["hidden_states"][:padded_size]
+            inputs["residual"][:batch_size].copy_(residual)
+            residual = inputs["residual"][:padded_size]
+            inputs["positions"][:batch_size].copy_(positions)
+            positions = inputs["positions"][:padded_size]
+            inputs["k_states"][:batch_size].copy_(k_states)
+            k_states = inputs["k_states"][:padded_size]
+            inputs["v_states"][:batch_size].copy_(v_states)
+            v_states = inputs["v_states"][:padded_size]
+
         with model_runner.set_shift_parallel_mode(True):
-
-            batch_size = hidden_states.size(0)
-            if hidden_states.shape[0] <= self.cuda_graph_max_batch_size:
-                padded_size = self.vllm_config.pad_for_cudagraph(batch_size)
-                inputs = self.decode_runner.inputs
-                inputs["hidden_states"][:batch_size].copy_(hidden_states)
-                hidden_states = inputs["hidden_states"][:padded_size]
-                inputs["residual"][:batch_size].copy_(residual)
-                residual = inputs["residual"][:padded_size]
-                inputs["positions"][:batch_size].copy_(positions)
-                positions = inputs["positions"][:padded_size]
-                inputs["k_states"][:batch_size].copy_(k_states)
-                k_states = inputs["k_states"][:padded_size]
-                inputs["v_states"][:batch_size].copy_(v_states)
-                v_states = inputs["v_states"][:padded_size]
-
             hidden_states = self.decode_runner(
                 hidden_states,
                 residual,
@@ -533,10 +523,10 @@ class LlamaSwiftKVModel(nn.Module):
                 v_states,
             )
 
-            attn_metadata = get_attn_metadata_for_swiftkv()
-            if attn_metadata is not None:
-                logits_indices = attn_metadata.swiftkv_logits_indices
-                orig_hidden_states[logits_indices] = hidden_states[:batch_size]
+        attn_metadata = get_attn_metadata_for_swiftkv()
+        if attn_metadata is not None:
+            logits_indices = attn_metadata.swiftkv_logits_indices
+            orig_hidden_states[logits_indices] = hidden_states[:batch_size]
 
         return orig_hidden_states
 
@@ -609,7 +599,7 @@ class LlamaSwiftKVModel(nn.Module):
         return loaded_params
 
 
-class LlamaForCausalLM(nn.Module):
+class LlamaSwiftKVForCausalLM(nn.Module):
     packed_modules_mapping = {
         "qkv_proj": ["q_proj", "k_proj", "v_proj"],
         "gate_up_proj": ["gate_proj", "up_proj"],
@@ -662,6 +652,7 @@ class LlamaForCausalLM(nn.Module):
         intermediate_tensors: Optional[IntermediateTensors] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, IntermediateTensors]:
+        assert intermediate_tensors is None and inputs_embeds is None
         model_output = self.model(input_ids, positions)
         return model_output
 
