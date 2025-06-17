@@ -294,7 +294,7 @@ class LlamaSwiftKVPrefillRunner(nn.Module):
             self.model.swiftkv_proj.num_layers * hidden_states.size(1)))
         k_states, v_states = kv_states.split(kv_states.size(-1) // 2, dim=-1)
         rotary_emb = self.model.layers[0].self_attn.rotary_emb
-        _, k_states = rotary_emb.forward_cuda(positions, q_states, k_states)
+        _, k_states = rotary_emb(positions, q_states, k_states)
 
         model_runner.SP_TP_MODE = old_mode
         parallel_state._TP = old_tp_group
