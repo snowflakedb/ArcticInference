@@ -713,6 +713,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                         self._dummy_run(num_tokens * sp_size)
                     self._dummy_run(num_tokens * sp_size)
 
+            torch.cuda.synchronize()
+            get_world_group().barrier()
+
             if self.shift_model is not None:
                 orig_model, self.model = self.model, self.shift_model
                 for num_tokens in reversed(self.cudagraph_batch_sizes):
