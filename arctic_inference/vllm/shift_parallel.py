@@ -349,8 +349,10 @@ class UlyssesFlashAttentionImplPatch(ArcticPatch[FlashAttentionImpl]):
 
         if torch.distributed.get_rank() == 0:
             print(f"attention forward output shape: {output.shape if output is not None else 'None'}"
+                  f"tp_size: {parallel_state._TP.world_size}, "
                   f"sp_size: {parallel_state._SP.world_size}, "
-                  f"sp_tp_size: {parallel_state._SP_TP.world_size}")
+                  f"sp_tp_size: {parallel_state._SP_TP.world_size}, "
+                  f"is_shift_parallel_mode: {is_shift_parallel_mode()}")
 
         assert output is not None, "Output tensor must be provided."
         if attn_metadata is None:
