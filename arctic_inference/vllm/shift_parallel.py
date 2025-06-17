@@ -352,7 +352,12 @@ class UlyssesFlashAttentionImplPatch(ArcticPatch[FlashAttentionImpl]):
         assert output is not None, "Output tensor must be provided."
         if attn_metadata is None:
             # Profiling run.
+            if torch.distributed.get_rank() == 0:
+                print(f"profiling run, skipping attention forward")
             return output
+        else:
+            if torch.distributed.get_rank() == 0:
+                print(f"moving on with attention forward")
 
         sp_size = parallel_state._SP.world_size
         device_group = parallel_state._SP.device_group
