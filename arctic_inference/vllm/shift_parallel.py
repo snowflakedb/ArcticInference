@@ -324,6 +324,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
 
     def forward(self, query, key, value, **kwargs):
         from .model_runner import is_shift_parallel_mode
+
         if self.sp_size == 1 or is_shift_parallel_mode():
             return self._orig_forward(query, key, value, **kwargs)
 
@@ -347,7 +348,9 @@ class UlyssesFlashAttentionImplPatch(ArcticPatch[FlashAttentionImpl]):
         from .model_runner import is_shift_parallel_mode
 
         if torch.distributed.get_rank() == 0:
-            print(f"attention forward output shape: {output.shape if output is not None else 'None'}")
+            print(f"attention forward output shape: {output.shape if output is not None else 'None'}"
+                  f"sp_size: {parallel_state._SP.world_size}, "
+                  f"sp_tp_size: {parallel_state._SP_TP.world_size}")
 
         assert output is not None, "Output tensor must be provided."
         if attn_metadata is None:
