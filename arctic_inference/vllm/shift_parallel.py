@@ -354,6 +354,14 @@ class UlyssesFlashAttentionImplPatch(ArcticPatch[FlashAttentionImpl]):
                   f"sp_tp_size: {parallel_state._SP_TP.world_size}, "
                   f"is_shift_parallel_mode: {is_shift_parallel_mode()}")
 
+
+        sp_size = parallel_state._SP.world_size
+        device_group = parallel_state._SP.device_group
+
+        if sp_size == 1 or is_shift_parallel_mode():
+            return self._orig_forward(layer, query, key, value, kv_cache,
+                                      attn_metadata, output)
+        
         assert output is not None, "Output tensor must be provided."
         if attn_metadata is None:
             # Profiling run.
@@ -363,13 +371,6 @@ class UlyssesFlashAttentionImplPatch(ArcticPatch[FlashAttentionImpl]):
         else:
             if torch.distributed.get_rank() == 0:
                 print(f"moving on with attention forward")
-
-        sp_size = parallel_state._SP.world_size
-        device_group = parallel_state._SP.device_group
-
-        if sp_size == 1 or is_shift_parallel_mode():
-            return self._orig_forward(layer, query, key, value, kv_cache,
-                                      attn_metadata, output)
 
         qkv = torch.cat(
             (query.view(-1, sp_size, self.num_heads * self.head_size),
