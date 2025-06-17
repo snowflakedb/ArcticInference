@@ -745,4 +745,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         # This usually takes 5~20 seconds.
         logger.info("Graph capturing finished in %.0f secs, took %.2f GiB",
                     elapsed_time, cuda_graph_size / (1 << 30))
+        
+        torch.cuda.synchronize()
+        get_world_group().barrier()
 
