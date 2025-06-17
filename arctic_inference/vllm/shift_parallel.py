@@ -19,7 +19,7 @@ import weakref
 from typing import List, Optional
 
 import torch
-import vllm.distributed.parallel_state as parallel_state, get_world_group
+import vllm.distributed.parallel_state as parallel_state
 import vllm.v1.executor.multiproc_executor
 from vllm.attention.layer import Attention
 from vllm.config import ModelConfig, ParallelConfig
