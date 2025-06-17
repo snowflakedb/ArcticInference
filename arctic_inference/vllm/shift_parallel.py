@@ -346,6 +346,9 @@ class UlyssesFlashAttentionImplPatch(ArcticPatch[FlashAttentionImpl]):
     def forward(self, layer, query, key, value, kv_cache, attn_metadata, output):
         from .model_runner import is_shift_parallel_mode
 
+        if torch.distributed.get_rank() == 0:
+            print(f"attention forward output shape: {output.shape if output is not None else 'None'}")
+
         assert output is not None, "Output tensor must be provided."
         if attn_metadata is None:
             # Profiling run.
