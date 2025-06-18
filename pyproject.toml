@@ -48,6 +48,10 @@ docs = [
     "sphinx-rtd-theme",
 ]
 
+test = [
+    "lm_eval[api]==0.4.8",
+]
+
 embedding = [
     "vllm==0.9.0.1",
     # uv pip install vllm==0.9.0 --dry-run 2>&1 | grep protobuf | sed 's/^ + //'
