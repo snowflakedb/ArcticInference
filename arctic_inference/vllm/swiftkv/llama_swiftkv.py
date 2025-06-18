@@ -413,6 +413,18 @@ class LlamaSwiftKVModel(nn.Module):
         forward_context: ForwardContext = get_forward_context()
         attn_metadata = get_attn_metadata_for_swiftkv()
         if attn_metadata is None:
+            # Graph capture or profiling mode.
+            if hidden_states.shape[0] <= self.cuda_graph_max_batch_size:
+                # Return the preallocated buffers so cuda graph is captured
+                # correctly.
+                inputs = self.decode_runner.inputs
+                batch_size = hidden_states.shape[0]
+                padded_size = self.vllm_config.pad_for_cudagraph(batch_size)
+                return (inputs["hidden_states"][:padded_size],
+                        inputs["residual"][:padded_size],
+                        inputs["positions"][:padded_size],
+                        inputs["k_states"][:padded_size],
+                        inputs["v_states"][:padded_size])
             return hidden_states, residual, positions, k_states, v_states
 
         if self.use_custom_ops:
@@ -463,7 +475,6 @@ class LlamaSwiftKVModel(nn.Module):
         logits_indices = attn_metadata.swiftkv_logits_indices
 
         attn_metadata.num_actual_tokens = logits_indices.numel()
-        attn_metadata.num_input_tokens = logits_indices.numel()
         attn_metadata.query_start_loc = torch.searchsorted(
             logits_indices, attn_metadata.query_start_loc, out_int32=True)
         attn_metadata.slot_mapping = attn_metadata.slot_mapping[logits_indices]
@@ -474,12 +485,23 @@ class LlamaSwiftKVModel(nn.Module):
         attn_metadata.prefix_kv_lens = None
         attn_metadata.suffix_kv_lens = None
 
-        hidden_states = hidden_states[logits_indices]
-        residual = residual[logits_indices]
-        positions = positions[logits_indices]
-        k_states = k_states[logits_indices]
-        v_states = v_states[logits_indices]
-        return hidden_states, residual, positions, k_states, v_states
+        def index_fn(buffer_name: str, tensor: torch.Tensor,
+                     indices: torch.LongTensor) -> torch.Tensor:
+            # If the batch size is smaller than the maximum batch size
+            # for cuda graph, we can use the preallocated buffer.
+            batch_size = indices.numel()
+            if batch_size <= self.cuda_graph_max_batch_size:
+                buffer = self.decode_runner.inputs[buffer_name]
+                torch.index_select(tensor, 0, indices, out=buffer[:batch_size])
+                padded_size = self.vllm_config.pad_for_cudagraph(batch_size)
+                return buffer[:padded_size]
+            return tensor.index_select(0, indices)
+
+        return (index_fn("hidden_states", hidden_states, logits_indices),
+                index_fn("residual", residual, logits_indices),
+                index_fn("positions", positions, logits_indices),
+                index_fn("k_states", k_states, logits_indices),
+                index_fn("v_states", v_states, logits_indices))
 
     def forward(
         self,
@@ -499,21 +521,6 @@ class LlamaSwiftKVModel(nn.Module):
                 k_states,
                 v_states))
 
-        batch_size = hidden_states.size(0)
-        if hidden_states.shape[0] <= self.cuda_graph_max_batch_size:
-            padded_size = self.vllm_config.pad_for_cudagraph(batch_size)
-            inputs = self.decode_runner.inputs
-            inputs["hidden_states"][:batch_size].copy_(hidden_states)
-            hidden_states = inputs["hidden_states"][:padded_size]
-            inputs["residual"][:batch_size].copy_(residual)
-            residual = inputs["residual"][:padded_size]
-            inputs["positions"][:batch_size].copy_(positions)
-            positions = inputs["positions"][:padded_size]
-            inputs["k_states"][:batch_size].copy_(k_states)
-            k_states = inputs["k_states"][:padded_size]
-            inputs["v_states"][:batch_size].copy_(v_states)
-            v_states = inputs["v_states"][:padded_size]
-
         with model_runner.set_shift_parallel_mode(True):
             hidden_states = self.decode_runner(
                 hidden_states,
@@ -526,6 +533,7 @@ class LlamaSwiftKVModel(nn.Module):
         attn_metadata = get_attn_metadata_for_swiftkv()
         if attn_metadata is not None:
             logits_indices = attn_metadata.swiftkv_logits_indices
+            batch_size = logits_indices.numel()
             orig_hidden_states[logits_indices] = hidden_states[:batch_size]
 
         return orig_hidden_states
