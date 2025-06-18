@@ -693,12 +693,14 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         start_time = time.perf_counter()
         start_free_gpu_memory = torch.cuda.mem_get_info()[0]
 
+
+        sp_size = self.parallel_config.ulysses_sequence_parallel_size
+        tp_size = self.parallel_config.tensor_parallel_size
+
         # Trigger CUDA graph capture for specific shapes.
         # Capture the large shapes first so that the smaller shapes
         # can reuse the memory pool allocated for the large shapes.
         with parallel_state.graph_capture(device=self.device):
-            sp_size = self.parallel_config.ulysses_sequence_parallel_size
-            tp_size = self.parallel_config.tensor_parallel_size
             for num_tokens in reversed(self.cudagraph_batch_sizes):
                 if torch.distributed.get_rank() == 0:
                     print(f"num_tokens: {num_tokens}, "
@@ -713,10 +715,11 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                         self._dummy_run(num_tokens * sp_size)
                     self._dummy_run(num_tokens * sp_size)
 
-            torch.cuda.synchronize()
-            get_world_group().barrier()
+        torch.cuda.synchronize()
+        get_world_group().barrier()
 
-            if self.shift_model is not None:
+        if self.shift_model is not None:
+            with parallel_state.graph_capture(device=self.device):
                 orig_model, self.model = self.model, self.shift_model
                 for num_tokens in reversed(self.cudagraph_batch_sizes):
                     torch.cuda.synchronize()
@@ -740,6 +743,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                                 print(f"shape {num_tokens} ")
                             self._dummy_run(num_tokens)
                 self.model = orig_model
+          
 
         end_time = time.perf_counter()
         end_free_gpu_memory = torch.cuda.mem_get_info()[0]
