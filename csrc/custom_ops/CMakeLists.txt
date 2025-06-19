@@ -1,11 +1,12 @@
 cmake_minimum_required(VERSION 3.14)
+include(FetchContent)
 
 project(CustomOps CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(TORCH_CUDA_ARCH_LIST "9.0+PTX 10.0a")
+set(TORCH_CUDA_ARCH_LIST "10.0a")
 
 message(STATUS "TORCH_CMAKE_PREFIX_PATH: ${TORCH_CMAKE_PREFIX_PATH}")
 
@@ -15,6 +16,7 @@ find_package(CUDA REQUIRED)
 find_package(pybind11 REQUIRED)
 find_package(Torch REQUIRED)
 
+SET(CUTLASS_ENABLE_HEADERS_ONLY ON CACHE BOOL "Enable only the header library")
 set(CUTLASS_REVISION "v3.9.2" CACHE STRING "CUTLASS revision to use")
 
 FetchContent_Declare(
