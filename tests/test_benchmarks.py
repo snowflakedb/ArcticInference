@@ -1,5 +1,4 @@
 import argparse
-import json
 import multiprocessing
 import time
 
@@ -24,6 +23,13 @@ CONFIGS = {
         "model": "Snowflake/Llama-3.1-SwiftKV-8B-Instruct",
         "tensor_parallel_size": 2,
     },
+    "llama-8b-suffix": {
+        "model": "meta-llama/Llama-3.1-8B-Instruct",
+        "tensor_parallel_size": 2,
+        "speculative_config": {
+            "method": "suffix",
+        },
+    },
     "llama-8b-spec": {
         "model": "meta-llama/Llama-3.1-8B-Instruct",
         "tensor_parallel_size": 2,
@@ -31,8 +37,6 @@ CONFIGS = {
             "method": "arctic",
             "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.1-8B-Instruct",
             "num_speculative_tokens": 3,
-            "enable_suffix_decoding": True,
-            "disable_by_batch_size": 64,
         },
     },
     "llama-8b-all": {
@@ -44,7 +48,6 @@ CONFIGS = {
             "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.1-8B-Instruct",
             "num_speculative_tokens": 3,
             "enable_suffix_decoding": True,
-            "disable_by_batch_size": 64,
         },
     },
 }
