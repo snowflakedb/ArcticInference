@@ -52,3 +52,15 @@ def reshape_and_cache_flash_bulk(
     torch.ops.arctic_inference.reshape_and_cache_flash_bulk(
         keys, values, key_caches, value_caches, slot_mapping, kv_cache_dtype,
         k_scales, v_scales, num_heads, head_size)
+
+
+def cutlass_scaled_fp4_mm_sm100a(a: torch.Tensor, b: torch.Tensor,
+                                 block_scale_a: torch.Tensor,
+                                 block_scale_b: torch.Tensor, alpha: torch.Tensor,
+                                 out_dtype: torch.dtype) -> torch.Tensor:
+    assert a.ndim == 2 and b.ndim == 2
+    m, n = a.shape[0], b.shape[0]
+    out = torch.empty((m, n), dtype=out_dtype, device=a.device)
+    torch.ops.arctic_inference.cutlass_scaled_fp4_mm_sm100a(out, a, b, block_scale_a, block_scale_b,
+                                                            alpha)
+    return out
