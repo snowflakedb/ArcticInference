@@ -19,7 +19,10 @@ void reshape_and_cache_flash_bulk(
     int64_t head_size
 );
 
-void cutlass_scaled_fp4_mm_sm100a(torch::Tensor& D, torch::Tensor const& A,
-                                  torch::Tensor const& B, torch::Tensor const& A_sf,
-                                  torch::Tensor const& B_sf,
-                                  torch::Tensor const& alpha);
+void cutlass_scaled_fp4_mm_sm100a(
+    torch::Tensor& D, 
+    torch::Tensor const& A,
+    torch::Tensor const& B, 
+    torch::Tensor const& A_sf,
+    torch::Tensor const& B_sf,
+    torch::Tensor const& alpha);

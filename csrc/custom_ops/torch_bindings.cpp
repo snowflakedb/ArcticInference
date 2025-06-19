@@ -20,7 +20,6 @@ TORCH_LIBRARY(arctic_inference, ops) {
   ops.def(
       "cutlass_scaled_fp4_mm_sm100a(Tensor! out, Tensor a, Tensor b,"
       "                             Tensor block_scale_a, Tensor block_scale_b,"
-      "                             Tensor alpha) -> ()",
-      {stride_tag});
+      "                             Tensor alpha) -> ()");
   ops.impl("cutlass_scaled_fp4_mm_sm100a", torch::kCUDA, &cutlass_scaled_fp4_mm_sm100a);
 }
