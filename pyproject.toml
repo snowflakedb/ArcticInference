@@ -50,6 +50,7 @@ docs = [
 
 test = [
     "lm_eval[api]==0.4.8",
+    "pandas",
     "pytest",
 ]
 
