@@ -31,11 +31,7 @@ from arctic_inference.vllm.spec_dec.vocab_parallel_embedding import (
     VocabParallelEmbedding,
 )
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
-from vllm.distributed import (
-    tensor_model_parallel_all_gather,
-    get_tensor_model_parallel_world_size,
-    get_tensor_model_parallel_rank,
-)
+from vllm.distributed import tensor_model_parallel_all_gather
 
 SQRT2 = 2**0.5
 
@@ -116,6 +112,11 @@ class ArcticMLPSpeculator(nn.Module):
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
         super().__init__()
+
+        from vllm.distributed.parallel_state import (_TP, _SP, _SP_TP)
+        self.rank = _TP.rank
+        self.world_size = _TP.world_size * _SP.world_size
+        self.TP_GROUP = _SP_TP
 
         config = vllm_config.model_config.hf_config
 
@@ -302,15 +303,18 @@ class ArcticMLPSpeculator(nn.Module):
                            and batch_size <= 32 else self.head[head_index])
             logits = self.logits_processor(head_weight, states)
 
-            if get_tensor_model_parallel_world_size() == 1:
+            if self.world_size == 1:
                 last_tokens = torch.argmax(logits,
                                            dim=-1).reshape(batch_size, -1)
             else:
                 vals, indices = torch.topk(logits, 1, dim=-1)
-                indices = indices + get_tensor_model_parallel_rank(
-                ) * logits.shape[-1]
-                vals = tensor_model_parallel_all_gather(vals)
-                indices = tensor_model_parallel_all_gather(indices)
+                indices = indices + self.rank * logits.shape[-1]
+
+                packed_data = torch.cat([vals.to(torch.float64).view(torch.int64), indices], dim=0)
+                packed_data = self.TP_GROUP.all_gather(packed_data)
+                vals, indices = packed_data.split(batch_size, dim=0)
+                vals = vals.view(torch.float64)
+
                 argidx = torch.argmax(vals, -1).reshape(batch_size, -1)
                 last_tokens = torch.gather(indices, -1, argidx)
 
@@ -412,6 +416,11 @@ class ArcticLSTMSpeculator(nn.Module):
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
         super().__init__()
+
+        from vllm.distributed.parallel_state import (_TP, _SP, _SP_TP)
+        self.rank = _TP.rank
+        self.world_size = _TP.world_size * _SP.world_size
+        self.TP_GROUP = _SP_TP
 
         config = vllm_config.model_config.hf_config
 
@@ -724,15 +733,18 @@ class ArcticLSTMSpeculator(nn.Module):
                            and batch_size <= 32 else self.head[head_index])
             logits = self.logits_processor(head_weight, states)
 
-            if get_tensor_model_parallel_world_size() == 1:
+            if self.world_size == 1:
                 last_tokens = torch.argmax(logits,
                                            dim=-1).reshape(batch_size, -1)
             else:
                 vals, indices = torch.topk(logits, 1, dim=-1)
-                indices = indices + get_tensor_model_parallel_rank(
-                ) * logits.shape[-1]
-                vals = tensor_model_parallel_all_gather(vals)
-                indices = tensor_model_parallel_all_gather(indices)
+                indices = indices + self.rank * logits.shape[-1]
+
+                packed_data = torch.cat([vals.to(torch.float64).view(torch.int64), indices], dim=0)
+                packed_data = self.TP_GROUP.all_gather(packed_data)
+                vals, indices = packed_data.split(batch_size, dim=0)
+                vals = vals.view(torch.float64)
+
                 argidx = torch.argmax(vals, -1).reshape(batch_size, -1)
                 last_tokens = torch.gather(indices, -1, argidx)
 
