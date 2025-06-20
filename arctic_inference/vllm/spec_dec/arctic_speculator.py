@@ -31,7 +31,6 @@ from arctic_inference.vllm.spec_dec.vocab_parallel_embedding import (
     VocabParallelEmbedding,
 )
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
-from vllm.distributed import tensor_model_parallel_all_gather
 
 SQRT2 = 2**0.5
 
@@ -310,7 +309,8 @@ class ArcticMLPSpeculator(nn.Module):
                 vals, indices = torch.topk(logits, 1, dim=-1)
                 indices = indices + self.rank * logits.shape[-1]
 
-                packed_data = torch.cat([vals.to(torch.float64).view(torch.int64), indices], dim=0)
+                packed_data = torch.cat(
+                    [vals.to(torch.float64).view(torch.int64), indices], dim=0)
                 packed_data = self.TP_GROUP.all_gather(packed_data)
                 vals, indices = packed_data.split(batch_size, dim=0)
                 vals = vals.view(torch.float64)
@@ -740,7 +740,8 @@ class ArcticLSTMSpeculator(nn.Module):
                 vals, indices = torch.topk(logits, 1, dim=-1)
                 indices = indices + self.rank * logits.shape[-1]
 
-                packed_data = torch.cat([vals.to(torch.float64).view(torch.int64), indices], dim=0)
+                packed_data = torch.cat(
+                    [vals.to(torch.float64).view(torch.int64), indices], dim=0)
                 packed_data = self.TP_GROUP.all_gather(packed_data)
                 vals, indices = packed_data.split(batch_size, dim=0)
                 vals = vals.view(torch.float64)
