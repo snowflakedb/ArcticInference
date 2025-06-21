@@ -47,12 +47,11 @@ from contextlib import contextmanager
 
 
 @contextmanager
-def tppp_graph_capture(device: torch.device):
+def graph_capture(device: torch.device):
     from vllm.distributed.parallel_state import GraphCaptureContext
     context = GraphCaptureContext(torch.cuda.Stream(device=device))
     import vllm.distributed.parallel_state as parallel_state
-    with parallel_state._TP.graph_capture(
-            context), parallel_state._PP.graph_capture(context):
+    with parallel_state._TP.graph_capture(context):
         yield context
 
 
@@ -112,10 +111,11 @@ class ArcticMLPSpeculator(nn.Module):
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
         super().__init__()
 
-        from vllm.distributed.parallel_state import (_TP, _SP, _SP_TP)
+        from vllm.distributed.parallel_state import (_TP, _SP)
         self.rank = _TP.rank
         self.world_size = _TP.world_size * _SP.world_size
-        self.TP_GROUP = _SP_TP
+
+        self.TP_GROUP = _SP if _SP.world_size > 1 else _TP
 
         config = vllm_config.model_config.hf_config
 
@@ -229,7 +229,8 @@ class ArcticMLPSpeculator(nn.Module):
 
         self.cuda_graph_max_batch_size = 0
         self.cuda_graph_mode = False
-        if not vllm_config.model_config.enforce_eager:
+        #if not vllm_config.model_config.enforce_eager:
+        if True:
             self.cuda_graph_mode = True
             self.cuda_graphs = {}
             self.cuda_graph_max_batch_size = padding_size(
@@ -357,7 +358,7 @@ class ArcticMLPSpeculator(nn.Module):
 
             if g is None:
                 device = torch.cuda.current_device()
-                with tppp_graph_capture(device=device) as capture_context:
+                with graph_capture(device=device) as capture_context:
                     g = torch.cuda.CUDAGraph()
                     with torch.cuda.graph(g, stream=capture_context.stream):
                         self.generate_token_ids(
@@ -417,10 +418,11 @@ class ArcticLSTMSpeculator(nn.Module):
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
         super().__init__()
 
-        from vllm.distributed.parallel_state import (_TP, _SP, _SP_TP)
+        from vllm.distributed.parallel_state import (_TP, _SP)
         self.rank = _TP.rank
         self.world_size = _TP.world_size * _SP.world_size
-        self.TP_GROUP = _SP_TP
+
+        self.TP_GROUP = _SP if _SP.world_size > 1 else _TP
 
         config = vllm_config.model_config.hf_config
 
@@ -615,7 +617,8 @@ class ArcticLSTMSpeculator(nn.Module):
                 "next_previous_hidden_states"] = torch.empty(
                     self.cuda_graph_max_batch_size, 1, self.inner_dim[-1])
 
-        if not vllm_config.model_config.enforce_eager:
+        #if not vllm_config.model_config.enforce_eager:
+        if True:
             self.cuda_graph_mode = True
             self.cuda_graphs = {}
 
@@ -823,7 +826,7 @@ class ArcticLSTMSpeculator(nn.Module):
 
             if g is None:
                 device = torch.cuda.current_device()
-                with tppp_graph_capture(device=device) as capture_context:
+                with graph_capture(device=device) as capture_context:
                     g = torch.cuda.CUDAGraph()
                     with torch.cuda.graph(g, stream=capture_context.stream):
                         if self.method == "sum_lstm":
