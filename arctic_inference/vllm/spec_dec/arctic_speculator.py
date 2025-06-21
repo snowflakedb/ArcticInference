@@ -31,11 +31,6 @@ from arctic_inference.vllm.spec_dec.vocab_parallel_embedding import (
     VocabParallelEmbedding,
 )
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
-from vllm.distributed import (
-    tensor_model_parallel_all_gather,
-    get_tensor_model_parallel_world_size,
-    get_tensor_model_parallel_rank,
-)
 
 SQRT2 = 2**0.5
 
@@ -52,12 +47,11 @@ from contextlib import contextmanager
 
 
 @contextmanager
-def tppp_graph_capture(device: torch.device):
+def graph_capture(device: torch.device):
     from vllm.distributed.parallel_state import GraphCaptureContext
     context = GraphCaptureContext(torch.cuda.Stream(device=device))
     import vllm.distributed.parallel_state as parallel_state
-    with parallel_state._TP.graph_capture(
-            context), parallel_state._PP.graph_capture(context):
+    with parallel_state._TP.graph_capture(context):
         yield context
 
 
@@ -116,6 +110,12 @@ class ArcticMLPSpeculator(nn.Module):
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
         super().__init__()
+
+        from vllm.distributed.parallel_state import (_TP, _SP)
+        self.rank = _TP.rank
+        self.world_size = _TP.world_size * _SP.world_size
+
+        self.TP_GROUP = _SP if _SP.world_size > 1 else _TP
 
         config = vllm_config.model_config.hf_config
 
@@ -302,15 +302,19 @@ class ArcticMLPSpeculator(nn.Module):
                            and batch_size <= 32 else self.head[head_index])
             logits = self.logits_processor(head_weight, states)
 
-            if get_tensor_model_parallel_world_size() == 1:
+            if self.world_size == 1:
                 last_tokens = torch.argmax(logits,
                                            dim=-1).reshape(batch_size, -1)
             else:
                 vals, indices = torch.topk(logits, 1, dim=-1)
-                indices = indices + get_tensor_model_parallel_rank(
-                ) * logits.shape[-1]
-                vals = tensor_model_parallel_all_gather(vals)
-                indices = tensor_model_parallel_all_gather(indices)
+                indices = indices + self.rank * logits.shape[-1]
+
+                packed_data = torch.cat(
+                    [vals.to(torch.float64).view(torch.int64), indices], dim=0)
+                packed_data = self.TP_GROUP.all_gather(packed_data)
+                vals, indices = packed_data.split(batch_size, dim=0)
+                vals = vals.view(torch.float64)
+
                 argidx = torch.argmax(vals, -1).reshape(batch_size, -1)
                 last_tokens = torch.gather(indices, -1, argidx)
 
@@ -353,7 +357,7 @@ class ArcticMLPSpeculator(nn.Module):
 
             if g is None:
                 device = torch.cuda.current_device()
-                with tppp_graph_capture(device=device) as capture_context:
+                with graph_capture(device=device) as capture_context:
                     g = torch.cuda.CUDAGraph()
                     with torch.cuda.graph(g, stream=capture_context.stream):
                         self.generate_token_ids(
@@ -412,6 +416,12 @@ class ArcticLSTMSpeculator(nn.Module):
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
         super().__init__()
+
+        from vllm.distributed.parallel_state import (_TP, _SP)
+        self.rank = _TP.rank
+        self.world_size = _TP.world_size * _SP.world_size
+
+        self.TP_GROUP = _SP if _SP.world_size > 1 else _TP
 
         config = vllm_config.model_config.hf_config
 
@@ -724,15 +734,19 @@ class ArcticLSTMSpeculator(nn.Module):
                            and batch_size <= 32 else self.head[head_index])
             logits = self.logits_processor(head_weight, states)
 
-            if get_tensor_model_parallel_world_size() == 1:
+            if self.world_size == 1:
                 last_tokens = torch.argmax(logits,
                                            dim=-1).reshape(batch_size, -1)
             else:
                 vals, indices = torch.topk(logits, 1, dim=-1)
-                indices = indices + get_tensor_model_parallel_rank(
-                ) * logits.shape[-1]
-                vals = tensor_model_parallel_all_gather(vals)
-                indices = tensor_model_parallel_all_gather(indices)
+                indices = indices + self.rank * logits.shape[-1]
+
+                packed_data = torch.cat(
+                    [vals.to(torch.float64).view(torch.int64), indices], dim=0)
+                packed_data = self.TP_GROUP.all_gather(packed_data)
+                vals, indices = packed_data.split(batch_size, dim=0)
+                vals = vals.view(torch.float64)
+
                 argidx = torch.argmax(vals, -1).reshape(batch_size, -1)
                 last_tokens = torch.gather(indices, -1, argidx)
 
@@ -810,7 +824,7 @@ class ArcticLSTMSpeculator(nn.Module):
 
             if g is None:
                 device = torch.cuda.current_device()
-                with tppp_graph_capture(device=device) as capture_context:
+                with graph_capture(device=device) as capture_context:
                     g = torch.cuda.CUDAGraph()
                     with torch.cuda.graph(g, stream=capture_context.stream):
                         if self.method == "sum_lstm":
