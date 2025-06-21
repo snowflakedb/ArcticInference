@@ -229,8 +229,7 @@ class ArcticMLPSpeculator(nn.Module):
 
         self.cuda_graph_max_batch_size = 0
         self.cuda_graph_mode = False
-        #if not vllm_config.model_config.enforce_eager:
-        if True:
+        if not vllm_config.model_config.enforce_eager:
             self.cuda_graph_mode = True
             self.cuda_graphs = {}
             self.cuda_graph_max_batch_size = padding_size(
@@ -617,8 +616,7 @@ class ArcticLSTMSpeculator(nn.Module):
                 "next_previous_hidden_states"] = torch.empty(
                     self.cuda_graph_max_batch_size, 1, self.inner_dim[-1])
 
-        #if not vllm_config.model_config.enforce_eager:
-        if True:
+        if not vllm_config.model_config.enforce_eager:
             self.cuda_graph_mode = True
             self.cuda_graphs = {}
 
