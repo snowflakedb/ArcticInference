@@ -27,6 +27,7 @@ from vllm.model_executor.layers.sampler import SamplerOutput, get_sampler
 from arctic_inference.vllm.spec_dec.fp8 import (Fp8ConfigWithEmbedding,
                                                 OriginalFp8LinearMethod)
 from arctic_inference.vllm.spec_dec.vocab_parallel_embedding import (
+    SpeculatorTPInit,
     ParallelLMHead,
     VocabParallelEmbedding,
 )
@@ -53,6 +54,9 @@ def graph_capture(device: torch.device):
     import vllm.distributed.parallel_state as parallel_state
     with parallel_state._TP.graph_capture(context):
         yield context
+    # with parallel_state._TP.graph_capture(context), parallel_state._PP.graph_capture(
+    #         context), parallel_state._SP_TP.graph_capture(context):
+    #     yield context
 
 
 class MLPSpeculatorLayerNorm(nn.Module):
@@ -98,7 +102,7 @@ def _generate_cg_key(padding_size: int, head_index: int):
     return (padding_size << 16) + head_index
 
 
-class ArcticMLPSpeculator(nn.Module):
+class ArcticMLPSpeculator(nn.Module, SpeculatorTPInit):
     """
     An implementation of the speculative models introduced in
     "Accelerating Production LLMs with Combined Token/Embedding
@@ -111,11 +115,7 @@ class ArcticMLPSpeculator(nn.Module):
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
         super().__init__()
 
-        from vllm.distributed.parallel_state import (_TP, _SP)
-        self.rank = _TP.rank
-        self.world_size = _TP.world_size * _SP.world_size
-
-        self.TP_GROUP = _SP if _SP.world_size > 1 else _TP
+        SpeculatorTPInit.__init__(self)
 
         config = vllm_config.model_config.hf_config
 
@@ -302,12 +302,12 @@ class ArcticMLPSpeculator(nn.Module):
                            and batch_size <= 32 else self.head[head_index])
             logits = self.logits_processor(head_weight, states)
 
-            if self.world_size == 1:
+            if self.tp_size == 1:
                 last_tokens = torch.argmax(logits,
                                            dim=-1).reshape(batch_size, -1)
             else:
                 vals, indices = torch.topk(logits, 1, dim=-1)
-                indices = indices + self.rank * logits.shape[-1]
+                indices = indices + self.tp_rank * logits.shape[-1]
 
                 packed_data = torch.cat(
                     [vals.to(torch.float64).view(torch.int64), indices], dim=0)
@@ -404,7 +404,7 @@ class ArcticMLPSpeculator(nn.Module):
                 self.maybe_load_weight(param, loaded_weight)
 
 
-class ArcticLSTMSpeculator(nn.Module):
+class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
     """
     An implementation of the speculative models introduced in
     "Accelerating Production LLMs with Combined Token/Embedding
@@ -417,11 +417,7 @@ class ArcticLSTMSpeculator(nn.Module):
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
         super().__init__()
 
-        from vllm.distributed.parallel_state import (_TP, _SP)
-        self.rank = _TP.rank
-        self.world_size = _TP.world_size * _SP.world_size
-
-        self.TP_GROUP = _SP if _SP.world_size > 1 else _TP
+        SpeculatorTPInit.__init__(self)
 
         config = vllm_config.model_config.hf_config
 
@@ -734,12 +730,12 @@ class ArcticLSTMSpeculator(nn.Module):
                            and batch_size <= 32 else self.head[head_index])
             logits = self.logits_processor(head_weight, states)
 
-            if self.world_size == 1:
+            if self.tp_size == 1:
                 last_tokens = torch.argmax(logits,
                                            dim=-1).reshape(batch_size, -1)
             else:
                 vals, indices = torch.topk(logits, 1, dim=-1)
-                indices = indices + self.rank * logits.shape[-1]
+                indices = indices + self.tp_rank * logits.shape[-1]
 
                 packed_data = torch.cat(
                     [vals.to(torch.float64).view(torch.int64), indices], dim=0)
