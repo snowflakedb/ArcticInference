@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 import pandas as pd
 
@@ -12,27 +12,27 @@ class BenchmarkTask:
     # Metrics to collect for the benchmark task. Maps name -> key where name is
     # the name of the metric that appears in the summary and key is the key for
     # extracting the metric from each benchmark result.
-    metrics: Dict[str, str]
+    metrics: Dict[str, str | Callable]
 
 VLLM_CONFIGS = {
     "llama_8b": {
-        "model": "meta-llama/Llama-3.1-8B-Instruct",
+        "model": "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic",
         "tensor_parallel_size": 2,
         "enable_prefix_caching": False,
     },
     "llama_8b_shift": {
-        "model": "meta-llama/Llama-3.1-8B-Instruct",
+        "model": "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic",
         "ulysses_sequence_parallel_size": 2,
         "enable_shift_parallel": True,
         "enable_prefix_caching": False,
     },
     "llama_8b_swiftkv": {
-        "model": "Snowflake/Llama-3.1-SwiftKV-8B-Instruct",
+        "model": "Snowflake/Llama-3.1-SwiftKV-8B-Instruct-FP8",
         "tensor_parallel_size": 2,
         "enable_prefix_caching": False,
     },
     "llama_8b_suffix": {
-        "model": "meta-llama/Llama-3.1-8B-Instruct",
+        "model": "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic",
         "tensor_parallel_size": 2,
         "speculative_config": {
             "method": "suffix",
@@ -41,7 +41,7 @@ VLLM_CONFIGS = {
         "enable_prefix_caching": False,
     },
     "llama_8b_spec": {
-        "model": "meta-llama/Llama-3.1-8B-Instruct",
+        "model": "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic",
         "tensor_parallel_size": 2,
         "speculative_config": {
             "method": "arctic",
@@ -52,7 +52,7 @@ VLLM_CONFIGS = {
         "enable_prefix_caching": False,
     },
     "llama_8b_all": {
-        "model": "Snowflake/Llama-3.1-SwiftKV-8B-Instruct",
+        "model": "Snowflake/Llama-3.1-SwiftKV-8B-Instruct-FP8",
         "ulysses_sequence_parallel_size": 2,
         "enable_shift_parallel": True,
         "speculative_config": {
@@ -94,25 +94,57 @@ PERFORMANCE_TASKS = {
 }
 
 ACCURACY_TASKS = {
-    "gsm8k_cot": BenchmarkTask(
+    "arc_challenge": BenchmarkTask(
+        config={
+            "tasks": ["arc_challenge_chat"],
+            "apply_chat_template": True,
+            "num_fewshot": 5,
+        },
+        metrics={
+            "acc": "exact_match,remove_whitespace",
+        },
+    ),
+    # GPQA is broken in lm_eval==0.4.8, but can be good to add once fixed:
+    # https://github.com/EleutherAI/lm-evaluation-harness/issues/2907.
+    #
+    # "gpqa": BenchmarkTask(
+    #     config={
+    #         "tasks": ["gpqa_diamond_cot_n_shot"],
+    #         "apply_chat_template": True,
+    #         "num_fewshot": 5,
+    #     },
+    #     metrics={
+    #         "acc": "exact_match,flexible-extract",
+    #     },
+    # ),
+    "gsm8k": BenchmarkTask(
         config={
             "tasks": ["gsm8k_cot"],
-            "fewshot_as_multiturn": True,
             "apply_chat_template": True,
         },
         metrics={
             "acc": "exact_match,flexible-extract",
         },
     ),
-    "arc_challenge_chat": BenchmarkTask(
+    "ifeval": BenchmarkTask(
         config={
-            "tasks": ["arc_challenge_chat"],
+            "tasks": ["ifeval"],
             "apply_chat_template": True,
         },
         metrics={
-            "acc": "exact_match,remove_whitespace",
+            "score": lambda result: (result["prompt_level_strict_acc,none"] +
+                                     result["inst_level_strict_acc,none"]) / 2,
         },
-    )
+    ),
+    "mmlu_pro": BenchmarkTask(
+        config={
+            "tasks": ["mmlu_pro"],
+            "apply_chat_template": True,
+        },
+        metrics={
+            "acc": "exact_match,custom-extract",
+        },
+    ),
 }
 
 

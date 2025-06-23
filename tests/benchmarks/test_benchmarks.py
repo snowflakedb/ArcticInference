@@ -92,9 +92,6 @@ def test_performance(request, vllm_server, task_name):
         with open(f"{tmpdir}/result.json", "r") as f:
             result = json.load(f)
 
-    metrics = {name: result[key] for name, key in task.metrics.items()}
-    update_benchmark_summary(config_name, task_name, metrics)
-
     benchmark_result_dir = request.config.option.benchmark_result_dir
     if benchmark_result_dir is not None:
         result_path = (benchmark_result_dir / "performance" /
@@ -102,6 +99,10 @@ def test_performance(request, vllm_server, task_name):
         result_path.parent.mkdir(parents=True, exist_ok=True)
         with open(result_path, "w") as f:
             json.dump(result, f, indent=4)
+
+    metrics = {name: key(result) if callable(key) else result[key]
+               for name, key in task.metrics.items()}
+    update_benchmark_summary(config_name, task_name, metrics)
 
 
 @pytest.mark.parametrize("task_name", list(ACCURACY_TASKS.keys()))
@@ -111,36 +112,49 @@ def test_accuracy(request, vllm_server, task_name):
     task = ACCURACY_TASKS[task_name]
 
     assert len(task.config["tasks"]) == 1, \
-        "Accuracy tasks should only have one task configured"
+        "Accuracy benchmarks should only have one task configured"
 
     q = multiprocessing.Queue()
 
     def _run_process():
-        from lm_eval import evaluator
-        from lm_eval.utils import make_table
+        # Run lm_eval in a separate process because it imports torch and
+        # initializes CUDA, which breaks process forking in later tests.
+        try:
+            from lm_eval import evaluator
+            from lm_eval.utils import handle_non_serializable, make_table
 
-        result = evaluator.simple_evaluate(
-            model="local-completions",
-            model_args={
-                "model": vllm_args.model,
-                "base_url": "http://localhost:8000/v1/completions",
-                "num_concurrent": 64,
-            },
-            **task.config,
-        )
-        print(make_table(result))
-        q.put(result)
+            result = evaluator.simple_evaluate(
+                model="local-completions",
+                model_args={
+                    "model": vllm_args.model,
+                    "base_url": "http://localhost:8000/v1/completions",
+                    "num_concurrent": 256,
+                },
+                **task.config,
+            )
+            print(make_table(result))
 
-    # Run lm_eval in a separate process because it imports torch and
-    # initializes CUDA, which breaks process forking in later tests.
-    process = multiprocessing.Process(target=_run_process)
-    process.start()
-    result = q.get()
-    process.join()
+            tmpfile = f"{tmpdir}/result.json"
+            with open(tmpfile, "w") as f:
+                json.dump(result, f, indent=4, default=handle_non_serializable)
+        except Exception as exc:
+            # If an exception occurs, put it in the queue to be raised later
+            q.put(exc)
+        else:
+            # Send back the temporary file path instead of the result object
+            # since multiprocessing queue can hang on large objects.
+            q.put(tmpfile)
 
-    metrics = {name: result["results"][task.config["tasks"][0]][key]
-               for name, key in task.metrics.items()}
-    update_benchmark_summary(config_name, task_name, metrics)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        process = multiprocessing.Process(target=_run_process)
+        process.start()
+        r = q.get()
+        process.join()
+        if isinstance(r, Exception):
+            raise r
+        tmpfile = r
+        with open(tmpfile, "r") as f:
+            result = json.load(f)
 
     benchmark_result_dir = request.config.option.benchmark_result_dir
     if benchmark_result_dir is not None:
@@ -149,3 +163,8 @@ def test_accuracy(request, vllm_server, task_name):
         result_path.parent.mkdir(parents=True, exist_ok=True)
         with open(result_path, "w") as f:
             json.dump(result, f, indent=4)
+
+    result = result["results"][task.config["tasks"][0]]
+    metrics = {name: key(result) if callable(key) else result[key]
+               for name, key in task.metrics.items()}
+    update_benchmark_summary(config_name, task_name, metrics)
