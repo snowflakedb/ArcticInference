@@ -17,6 +17,24 @@ from vllm.platforms import current_platform
 DEFAULT_VOCAB_PADDING_SIZE = 64
 
 
+class SpeculatorTPInit():
+
+    def __init__(self):
+        self.init_tensor_parallelism()
+
+    def init_tensor_parallelism(self):
+        from vllm.distributed.parallel_state import (_TP, _SP)
+
+        tp_world_size = _TP.world_size
+        sp_world_size = _SP.world_size
+
+        # Work around due to cuda graph capture failure using SP_TP_GROUP's AllGather
+        self.tp_size = max(tp_world_size, sp_world_size)
+        self.tp_rank = _TP.rank % self.tp_size
+
+        self.TP_GROUP = _SP if sp_world_size > tp_world_size else _TP
+
+
 class UnquantizedEmbeddingMethod(QuantizeMethodBase):
     """Unquantized method for embeddings."""
 
@@ -160,7 +178,7 @@ def get_masked_input_and_mask(
     return input_, ~vocab_mask
 
 
-class VocabParallelEmbedding(torch.nn.Module):
+class VocabParallelEmbedding(torch.nn.Module, SpeculatorTPInit):
     """Embedding parallelized in the vocabulary dimension.
 
     Adapted from torch.nn.Embedding, note that we pad the vocabulary size to
@@ -210,10 +228,7 @@ class VocabParallelEmbedding(torch.nn.Module):
                  skip_quantization: bool = True):
         super().__init__()
 
-        from vllm.distributed.parallel_state import (_TP, _SP)
-        # Keep the input dimensions.
-        tp_rank = _TP.rank
-        self.tp_size = _TP.world_size * _SP.world_size
+        SpeculatorTPInit.__init__(self)
 
         self.num_embeddings = num_embeddings
         self.padding_size = padding_size
@@ -229,7 +244,7 @@ class VocabParallelEmbedding(torch.nn.Module):
         self.shard_indices = self._get_indices(self.num_embeddings_padded,
                                                self.org_vocab_size_padded,
                                                self.num_embeddings,
-                                               self.org_vocab_size, tp_rank,
+                                               self.org_vocab_size, self.tp_rank,
                                                self.tp_size)
         self.embedding_dim = embedding_dim
 
