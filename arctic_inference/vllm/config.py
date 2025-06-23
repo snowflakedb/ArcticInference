@@ -16,12 +16,13 @@
 from dataclasses import dataclass
 import logging
 
-from vllm.config import ParallelConfig, SpeculativeConfig, VllmConfig  
+from vllm.config import ParallelConfig, SpeculativeConfig, VllmConfig
 from vllm.transformers_utils.configs.mlp_speculator import MLPSpeculatorConfig
 
 from arctic_inference.patching import ArcticPatch
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class ArcticParallelConfig(ParallelConfig):
@@ -31,16 +32,15 @@ class ArcticParallelConfig(ParallelConfig):
     shift_parallel_threshold: int = 512
 
     def __post_init__(self, *args, **kwargs):
-        if (self.enable_shift_parallel and
-                self.ulysses_sequence_parallel_size == 1):
+        if (self.enable_shift_parallel
+                and self.ulysses_sequence_parallel_size == 1):
             raise ValueError("ulysses_sequence_parallel_size must be > 1 "
                              "when enable_shift_parallel is True.")
         super().__post_init__(*args, **kwargs)
 
     @property
     def world_size(self) -> int:
-        return (self.pipeline_parallel_size *
-                self.tensor_parallel_size *
+        return (self.pipeline_parallel_size * self.tensor_parallel_size *
                 self.ulysses_sequence_parallel_size)
 
     @world_size.setter
@@ -68,8 +68,8 @@ class ParallelConfigPatch(ArcticPatch[ParallelConfig]):
         # Override __new__ to return an ArcticParallelConfig instead of a
         # ParallelConfig when creating a new instance of the class.
         if cls is ParallelConfig:
-            return ArcticParallelConfig.__new__(ArcticParallelConfig,
-                                                *args, **kwargs)
+            return ArcticParallelConfig.__new__(ArcticParallelConfig, *args,
+                                                **kwargs)
         return super(ParallelConfig, cls).__new__(cls)
 
 
@@ -82,16 +82,20 @@ class SpeculativeConfigPatch(ArcticPatch[SpeculativeConfig]):
         # Override __new__ to return an ArcticSpeculativeConfig instead of a
         # SpeculativeConfig when creating a new instance of the class.
         if cls is SpeculativeConfig:
-            return ArcticSpeculativeConfig.__new__(
-                ArcticSpeculativeConfig, *args, **kwargs)
+            return ArcticSpeculativeConfig.__new__(ArcticSpeculativeConfig,
+                                                   *args, **kwargs)
         return super(SpeculativeConfig, cls).__new__(cls)
 
     def __post_init__(self):
-        if self.disable_by_batch_size is None:
+        use_suffix = (self.method
+                      == "suffix") or (self.method is None
+                                       and self.enable_suffix_decoding)
+        if (use_suffix or self.method == "arctic") and \
+            self.disable_by_batch_size is None:
             logger.info("Defaulting disable_by_batch_size to 64")
             self.disable_by_batch_size = 64
-        if self.method == "suffix" or (self.method is None and
-                                       self.enable_suffix_decoding):
+            
+        if use_suffix:
             self.method = "suffix"
             self.enable_suffix_decoding = True
             self.num_speculative_tokens = self.suffix_cache_max_depth
@@ -118,7 +122,7 @@ class VllmConfigPatch(ArcticPatch[VllmConfig]):
         string += f", enable_shift_parallel={self.parallel_config.enable_shift_parallel}"
         string += f", shift_parallel_threshold={self.parallel_config.shift_parallel_threshold}"
         return string
-    
+
 
 class MLPSpeculatorConfigPatch(ArcticPatch[MLPSpeculatorConfig]):
 
