@@ -87,6 +87,9 @@ class SpeculativeConfigPatch(ArcticPatch[SpeculativeConfig]):
         return super(SpeculativeConfig, cls).__new__(cls)
 
     def __post_init__(self):
+        if self.disable_by_batch_size is None:
+            logger.info("Defaulting disable_by_batch_size to 64")
+            self.disable_by_batch_size = 64
         if self.method == "suffix" or (self.method is None and
                                        self.enable_suffix_decoding):
             self.method = "suffix"
