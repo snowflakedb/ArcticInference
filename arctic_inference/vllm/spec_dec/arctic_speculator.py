@@ -54,9 +54,6 @@ def graph_capture(device: torch.device):
     import vllm.distributed.parallel_state as parallel_state
     with parallel_state._TP.graph_capture(context):
         yield context
-    # with parallel_state._TP.graph_capture(context), parallel_state._PP.graph_capture(
-    #         context), parallel_state._SP_TP.graph_capture(context):
-    #     yield context
 
 
 class MLPSpeculatorLayerNorm(nn.Module):

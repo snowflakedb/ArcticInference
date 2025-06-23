@@ -34,14 +34,6 @@ class SpeculatorTPInit():
 
         self.TP_GROUP = _SP if sp_world_size > tp_world_size else _TP
 
-        # from vllm.distributed.parallel_state import (get_tensor_model_parallel_rank,
-        #     get_tensor_model_parallel_world_size, get_tp_group)
-        # import arctic_inference.vllm.model_runner as model_runner
-        # with model_runner.set_shift_parallel_mode(True):
-        #     self.tp_rank = get_tensor_model_parallel_rank()
-        #     self.tp_size = get_tensor_model_parallel_world_size()
-        #     self.TP_GROUP = get_tp_group()
-
 
 class UnquantizedEmbeddingMethod(QuantizeMethodBase):
     """Unquantized method for embeddings."""
