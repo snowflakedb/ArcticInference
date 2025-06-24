@@ -430,34 +430,32 @@ class PiecewiseCompileInterpreterPatch(ArcticPatch[PiecewiseCompileInterpreter])
                     args: tuple[torch.fx.node.Argument,
                                 ...], kwargs: dict[str, Any]) -> Any:
         assert isinstance(target, str)
-        """ [Arctic Inference]
-        Since the patch class inherits the original class
-        through ArcticPatch class, we lose the access to the original class'
-        super() function. Instead of using super(), we directly invoke call_module
-        from the super of class PiecewiseCompileInterpreter(torch.fx.Interpreter).
-        """
+        # [Arctic Inference]
+        # Since the patch class inherits the original class
+        # through ArcticPatch class, we lose the access to the original class'
+        # super() function. Instead of using super(), we directly invoke call_module
+        # from the super of class PiecewiseCompileInterpreter(torch.fx.Interpreter).
         output = torch.fx.Interpreter.call_module(self, target, args, kwargs)
 
         if target in self.compile_submod_names:
             index = self.compile_submod_names.index(target)
             submod = self.fetch_attr(target)
-            """[Arctic Inference]
-            Compiling multiple models may yield subgraphs with certain symbolic
-            integer values that violates vllm's assumption here:
-            - v0.9.0.1/compilation/base_piecewise_backend.py#L64
-            The index of the significant symbol determines the runtime shape here:
-            - v0.9.0.1/compilation/cuda_piecewise_backend.py#L112
+            # [Arctic Inference]
+            # Compiling multiple models may yield subgraphs with certain symbolic
+            # integer values that violates vllm's assumption here:
+            # - v0.9.0.1/compilation/base_piecewise_backend.py#L64
+            # The index of the significant symbol determines the runtime shape here:
+            # - v0.9.0.1/compilation/cuda_piecewise_backend.py#L112
 
-            In the original model, the shape to be captured corresponds to the first
-            symbolic integer in the compiled function arguments as expected.
-            Apparently, this is not the case in the shift model. The compiler yields
-            additional symbolic integers that comes before the shape of the subgraph.
-            Therefore the assumed logic causes a crash at the end of the CUDA capture process.
+            # In vLLM's assumption the shape to be captured corresponds to the first
+            # symbolic integer in the compiled function arguments as expected.
+            # Apparently, this is not the case in the shift model. The compiler yields
+            # additional symbolic integers that comes before the shape of the subgraph.
+            # Therefore the assumed logic causes a crash at the end of the CUDA capture process.
             
-            The fix is relaxing vllm's original assumption that the first symbol
-            corresponds to the shape. Instead, we determine the symbol by looking at
-            the first fake tensor's shape, and find the matching symbol index.
-            """
+            # The fix is relaxing vllm's original assumption that the first symbol
+            # corresponds to the shape. Instead, we determine the symbol by looking at
+            # the first fake tensor's shape, and find the matching symbol index.
             sym_shape = self.find_symbolic_shape(args)
             sym_shape_indices = []
             for i, x in enumerate(args):
