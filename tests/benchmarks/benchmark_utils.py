@@ -25,6 +25,7 @@ VLLM_CONFIGS = {
         "tensor_parallel_size": 2,
         "ulysses_sequence_parallel_size": 2,
         "enable_shift_parallel": True,
+        "shift_parallel_threshold": 256,
         "enable_prefix_caching": False,
     },
     "llama_8b_swiftkv": {
