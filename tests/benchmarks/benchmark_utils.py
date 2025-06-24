@@ -17,8 +17,7 @@ class BenchmarkTask:
 VLLM_CONFIGS = {
     "llama_8b": {
         "model": "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic",
-        "tensor_parallel_size": 2,
-        "ulysses_sequence_parallel_size": 2,
+        "tensor_parallel_size": 4,
         "enable_prefix_caching": False,
     },
     "llama_8b_shift": {
@@ -30,14 +29,12 @@ VLLM_CONFIGS = {
     },
     "llama_8b_swiftkv": {
         "model": "Snowflake/Llama-3.1-SwiftKV-8B-Instruct-FP8",
-        "tensor_parallel_size": 2,
-        "ulysses_sequence_parallel_size": 2,
+        "tensor_parallel_size": 4,
         "enable_prefix_caching": False,
     },
     "llama_8b_suffix": {
         "model": "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic",
-        "tensor_parallel_size": 2,
-        "ulysses_sequence_parallel_size": 2,
+        "tensor_parallel_size": 4,
         "speculative_config": {
             "method": "suffix",
             "disable_by_batch_size": 64,
@@ -46,8 +43,7 @@ VLLM_CONFIGS = {
     },
     "llama_8b_spec": {
         "model": "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic",
-        "tensor_parallel_size": 2,
-        "ulysses_sequence_parallel_size": 2,
+        "tensor_parallel_size": 4,
         "speculative_config": {
             "method": "arctic",
             "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.1-8B-Instruct",
