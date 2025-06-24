@@ -414,6 +414,18 @@ class UlyssesFlashAttentionImplPatch(ArcticPatch[FlashAttentionImpl]):
 
 class PiecewiseCompileInterpreterPatch(ArcticPatch[PiecewiseCompileInterpreter]):
 
+    # find the symbolic shape in the first fake tensor dimension
+    def find_symbolic_shape(self, args):
+        for i, x in enumerate(args):
+            if isinstance(x, torch._subclasses.fake_tensor.FakeTensor):
+                for dim in x.shape:
+                    if isinstance(dim, torch.SymInt):
+                        return dim
+                assert False, (
+                    f"Expected symbolic shape in the first fake tensor "
+                    f"at index {i}, but found {x.shape} instead.")
+        assert False, "No instance of fake tensor is found in the arguments."
+  
     def call_module(self, target: torch.fx.node.Target,
                     args: tuple[torch.fx.node.Argument,
                                 ...], kwargs: dict[str, Any]) -> Any:
@@ -429,32 +441,25 @@ class PiecewiseCompileInterpreterPatch(ArcticPatch[PiecewiseCompileInterpreter])
         if target in self.compile_submod_names:
             index = self.compile_submod_names.index(target)
             submod = self.fetch_attr(target)
-
             """[Arctic Inference]
-            Compiling multiple models yields redundant symbolic integers that violates
-            vllm's assumptions here:
+            Compiling multiple models may yield subgraphs with certain symbolic
+            integer values that violates vllm's assumption here:
             - v0.9.0.1/compilation/base_piecewise_backend.py#L64
+            The index of the significant symbol determines the runtime shape here:
             - v0.9.0.1/compilation/cuda_piecewise_backend.py#L112
+
             In the original model, the shape to be captured corresponds to the first
             symbolic integer in the compiled function arguments as expected.
             Apparently, this is not the case in the shift model. The compiler yields
-            redundant symbolic integers that are lined up before the actual dynamic shape
-            and therefore the previous logic causes a crash at the end of the CUDA capture process.
+            additional symbolic integers that comes before the shape of the subgraph.
+            Therefore the assumed logic causes a crash at the end of the CUDA capture process.
             
-            The fix is updating the logic by relaxing vllm's original assumption as that there is only
-            one significant symbolic integer (which represents the shape of the subgraph) and it follows
-            the first fake tensor. In other words, there is no other torch.SymInt between the fake input
-            tensor and the symbolic integer that represents its shape. 
+            The fix is relaxing vllm's original assumption that the first symbol
+            corresponds to the shape. Instead, we determine the symbol by looking at
+            the first fake tensor's shape, and find the matching symbol index.
             """
-            sym_shape_indices = []
-            test = False
-            for i, x in enumerate(args):
-                if isinstance(x, torch.SymInt):
-                    if test:
-                        sym_shape_indices.append(i)
-                        break
-                else:
-                    test = True
+            sym_shape = self.find_symbolic_shape(args)
+            sym_shape_indices = [i for i, x in enumerate(args) if x == sym_shape]
 
             global compilation_start_time
             compiled_graph_for_general_shape = self.vllm_backend.\
