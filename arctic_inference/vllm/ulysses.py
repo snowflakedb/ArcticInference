@@ -415,9 +415,10 @@ class UlyssesFlashAttentionImplPatch(ArcticPatch[FlashAttentionImpl]):
 class PiecewiseCompileInterpreterPatch(ArcticPatch[PiecewiseCompileInterpreter]):
 
     # find the symbolic shape of the subgraph
-    def find_symbolic_shape(self, args):
+    def find_symbolic_shape(self, args: tuple[torch.fx.node.Argument,
+                                ...]) -> torch.SymInt:
         symbols = set()
-        for i, x in enumerate(args):
+        for x in args:
             if isinstance(x, torch._subclasses.fake_tensor.FakeTensor):
                 for dim in x.shape:
                     if isinstance(dim, torch.SymInt):
