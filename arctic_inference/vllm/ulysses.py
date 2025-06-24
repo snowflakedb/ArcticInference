@@ -32,6 +32,9 @@ from vllm.v1.attention.backends.flash_attn import FlashAttentionImpl
 from vllm.v1.executor.abstract import FailureCallback
 from vllm.v1.executor.multiproc_executor import (MultiprocExecutor, WorkerProc,
                                                  UnreadyWorkerProcHandle)
+from vllm.platforms import current_platform
+from vllm.utils import resolve_obj_by_qualname
+from vllm.compilation.backends import PiecewiseCompileInterpreter
 
 from arctic_inference.patching import ArcticPatch
 
@@ -42,6 +45,7 @@ def apply_shift_parallel_patches():
     UlyssesMultiprocExecutorPatch.apply_patch()
     UlyssesAttentionPatch.apply_patch()
     UlyssesFlashAttentionImplPatch.apply_patch()
+    PiecewiseCompileInterpreterPatch.apply_patch()
 
 
 class UlyssesModelConfigPatch(ArcticPatch[ModelConfig]):
@@ -405,4 +409,72 @@ class UlyssesFlashAttentionImplPatch(ArcticPatch[FlashAttentionImpl]):
         output.copy_(c.view(sp_size, -1, self.num_heads * self.head_size)
                      .transpose(0, 1)
                      .reshape(-1, self.num_heads * sp_size * self.head_size))
+        return output
+
+
+class PiecewiseCompileInterpreterPatch(ArcticPatch[PiecewiseCompileInterpreter]):
+
+    def call_module(self, target: torch.fx.node.Target,
+                    args: tuple[torch.fx.node.Argument,
+                                ...], kwargs: dict[str, Any]) -> Any:
+        assert isinstance(target, str)
+        """ [Arctic Inference]
+        Since the patch class inherits the original class
+        through ArcticPatch class, we lose the access to the original class'
+        super() function. Instead of using super(), we directly invoke call_module
+        from the super of class PiecewiseCompileInterpreter(torch.fx.Interpreter).
+        """
+        output = torch.fx.Interpreter.call_module(self, target, args, kwargs)
+
+        if target in self.compile_submod_names:
+            index = self.compile_submod_names.index(target)
+            submod = self.fetch_attr(target)
+
+            """[Arctic Inference]
+            Compiling multiple models yields redundant symbolic integers that violates
+            vllm's assumptions here:
+            - v0.9.0.1/compilation/base_piecewise_backend.py#L64
+            - v0.9.0.1/compilation/cuda_piecewise_backend.py#L112
+            In the original model, the shape to be captured corresponds to the first
+            symbolic integer in the compiled function arguments as expected.
+            Apparently, this is not the case in the shift model. The compiler yields
+            redundant symbolic integers that are lined up before the actual dynamic shape
+            and therefore the previous logic causes a crash at the end of the CUDA capture process.
+            
+            The fix is updating the logic by relaxing vllm's original assumption as that there is only
+            one significant symbolic integer (which represents the shape of the subgraph) and it follows
+            the first fake tensor. In other words, there is no other torch.SymInt between the fake input
+            tensor and the symbolic integer that represents its shape. 
+            """
+            sym_shape_indices = []
+            test = False
+            for i, x in enumerate(args):
+                if isinstance(x, torch.SymInt):
+                    if test:
+                        sym_shape_indices.append(i)
+                        break
+                else:
+                    test = True
+
+            global compilation_start_time
+            compiled_graph_for_general_shape = self.vllm_backend.\
+                compiler_manager.compile(
+                submod,
+                args,
+                self.compilation_config.inductor_compile_config,
+                self.compilation_config,
+                graph_index=index,
+                num_graphs=len(self.compile_submod_names),
+                runtime_shape=None)
+
+            piecewise_backend = resolve_obj_by_qualname(
+                current_platform.get_piecewise_backend_cls())
+            self.module.__dict__[target] = piecewise_backend(
+                submod, self.vllm_config, self.graph_pool, index,
+                len(self.compile_submod_names), sym_shape_indices,
+                compiled_graph_for_general_shape, self.vllm_backend)
+
+            from vllm.compilation.counter import compilation_counter
+            compilation_counter.num_piecewise_capturable_graphs_seen += 1
+
         return output
