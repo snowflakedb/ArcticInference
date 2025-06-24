@@ -459,7 +459,11 @@ class PiecewiseCompileInterpreterPatch(ArcticPatch[PiecewiseCompileInterpreter])
             the first fake tensor's shape, and find the matching symbol index.
             """
             sym_shape = self.find_symbolic_shape(args)
-            sym_shape_indices = [i for i, x in enumerate(args) if x == sym_shape]
+            sym_shape_indices = []
+            for i, x in enumerate(args):
+                if isinstance(x, torch.SymInt):
+                    if sym_shape == x:
+                        sym_shape_indices.append(i)
 
             global compilation_start_time
             compiled_graph_for_general_shape = self.vllm_backend.\
