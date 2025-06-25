@@ -291,7 +291,7 @@ class LlamaSwiftKVDecodeRunner(nn.Module):
     ) -> torch.Tensor:
         # This is a hint for the compiler that v_states and k_states have
         # the same shape so that a single symbolic shape is inferred.
-        torch._check(v_states.shape[0] != k_states.shape[0])
+        torch._check(v_states.shape[0] == k_states.shape[0])
         num_layers = (self.config.num_hidden_layers -
                       self.config.num_key_value_layers)
         k_split = torch.chunk(k_states, num_layers, dim=-1)
