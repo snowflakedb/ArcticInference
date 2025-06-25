@@ -375,15 +375,16 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
         v_ = v_.view(-1, self.num_kv_heads, self.head_size)
         c_ = output.view(-1, self.num_heads, self.head_size)
 
-        # original (head-parallel) attention
+        # original attention
         torch.ops.vllm.unified_attention_with_output(
                     q_, k_, v_, c_, self.layer_name)
         
         # Ulysses all-to-all 2/2
         c = torch.empty_like(c_)
         torch.distributed.all_to_all_single(c, c_, group=self.device_group)
-        output = c.view(self.sp_size, -1, self.num_heads * self.head_size) \
-            .transpose(0, 1).reshape(-1, self.num_heads * self.sp_size * self.head_size)
+        output = (c.view(self.sp_size, -1, self.num_heads * self.head_size)
+                  .transpose(0, 1)
+                  .reshape(-1, self.num_heads * self.sp_size * self.head_size))
         
         return output.view(-1, hidden_size)
 
