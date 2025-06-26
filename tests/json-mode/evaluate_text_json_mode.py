@@ -99,11 +99,10 @@ def process_batch(
             continue
 
         llm_json_output = row.message.content
-        print(f"vllm output: {llm_json_output}")
         # The best way to verify if the LLM output respects the expected schema
         # is to try to create an instance of it.
         try:
-            instance = TASK_NAME_TO_TASK_SCHEMA[task_name](**llm_json_output)
+            instance = TASK_NAME_TO_TASK_SCHEMA[task_name].model_validate_json(str(llm_json_output))
             results.append(instance.model_dump())
         except (pydantic.ValidationError, TypeError):
             results.append(None)
@@ -117,6 +116,9 @@ def compute_answer_score(
     generated_answer: dict | None,
 ) -> float:
     """Return the score of the generated answer for the given task."""
+    # print("sample answerable:", sample["answerable"])
+    # print("sample answer:", sample["answer"])
+    # print("generated answer:", generated_answer)
 
     if generated_answer is None:
         return 0.0
@@ -202,6 +204,8 @@ def evaluate_task_outputs(
     # Each output is evaluated against its corresponding sample data.
     assert len(sample_data) == len(task_outputs)
 
+    print("llm outputs:", task_outputs)
+
     scores = [
         compute_answer_score(
             task_name=task_name, sample=sample, generated_answer=output
@@ -279,6 +283,8 @@ def main(args: argparse.Namespace):
             options=options,
         )
 
+        print("llm_outputs:", llm_outputs)
+
         # Get scores.
         scores = evaluate_task_outputs(
             task_name=task_name,
@@ -318,13 +324,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--task",
         type=str,
-        required=True,
+        required=False,
         choices=VALID_TASKS,
         help=f'Task name. Must be one of: {", ".join(VALID_TASKS)}',
+        default="json-mode-all",
     )
 
     parser.add_argument(
-        "--llm", type=str, required=True, help="Name of the LLM to use."
+        "--llm", type=str, required=False, help="Name of the LLM to use.",
+        default="Snowflake/Llama-3.3-SwiftKV-70B-Instruct"
     )
 
     parser.add_argument(
@@ -345,7 +353,7 @@ def parse_args() -> argparse.Namespace:
         "--n-samples",
         "-n",
         type=int,
-        default=5,
+        default=1,
         help="Number of samples to use from the dataset.",
     )
 
