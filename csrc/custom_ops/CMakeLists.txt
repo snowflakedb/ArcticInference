@@ -1,3 +1,4 @@
+# cmake -DCMAKE_PREFIX_PATH=/usr/local/lib/python3.12/dist-packages/torch/share/cmake -DCUTLASS_ARCH_MMA_SM100_SUPPORTED=1 ..
 cmake_minimum_required(VERSION 3.14)
 include(FetchContent)
 
@@ -14,7 +15,6 @@ list(APPEND CMAKE_PREFIX_PATH ${TORCH_CMAKE_PREFIX_PATH})
 
 find_package(CUDA REQUIRED)
 find_package(pybind11 REQUIRED)
-find_package(Torch REQUIRED)
 
 SET(CUTLASS_ENABLE_HEADERS_ONLY ON CACHE BOOL "Enable only the header library")
 set(CUTLASS_REVISION "v3.9.2" CACHE STRING "CUTLASS revision to use")
@@ -46,7 +46,13 @@ target_compile_definitions(custom_ops PRIVATE
   -DTORCH_API_INCLUDE_TYPEDEFS
 )
 
-target_include_directories(custom_ops PRIVATE ${TORCH_INCLUDE_DIRS})
+find_package(Torch REQUIRED)
+
+target_include_directories(custom_ops PRIVATE 
+  ${TORCH_INCLUDE_DIRS} 
+  ${CUTLASS_INCLUDE_DIR}
+  ${CUTLASS_TOOLS_UTIL_INCLUDE_DIR}
+)
 
 target_link_libraries(custom_ops PRIVATE
   torch
