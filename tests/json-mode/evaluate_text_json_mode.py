@@ -5,7 +5,7 @@ import os
 import sys
 
 from task_description import TASK_DESCRIPTIONS, TASK_NAME_TO_TASK_SCHEMA
-from utils import call_corvo_embed, call_corvo_complete
+from utils import call_vllm_complete
 
 import pydantic
 from loguru import logger
@@ -87,23 +87,19 @@ def process_batch(
             ]
         )
 
-    response = call_corvo_complete(
+    response = call_vllm_complete(
         prompts=prompts, llm_name=llm_name, options=options
     )
-    if not response.ok:
-        logger.error("ERROR: received a non '200' response from Corvo. "
-                     "Consider all responses to be None.")
-        return [None for _ in range(len(sample_data))]
 
-    # 'response' is a JSON string with only one key ('data')
-    all_rows = response.json().get("data", [])
+    all_rows = response.choices
     results: list[None | dict] = []
-    for _, row in all_rows:
+    for row in all_rows:
         if row is None:
             results.append(None)
             continue
 
-        llm_json_output = row["structured_output"][0]["raw_message"]
+        llm_json_output = row.message.content
+        print(f"vllm output: {llm_json_output}")
         # The best way to verify if the LLM output respects the expected schema
         # is to try to create an instance of it.
         try:
@@ -113,18 +109,6 @@ def process_batch(
             results.append(None)
 
     return results
-
-
-def compute_sentence_similarity(sentence_a: str, sentence_b: str) -> float:
-    """Return the cosine similarity between the embedding of each sentence."""
-    embedding_a, embedding_b = call_corvo_embed([sentence_a, sentence_b])
-    if embedding_a is None or embedding_b is None:
-        return 0.0
-
-    norm_a = np.linalg.norm(embedding_a)
-    norm_b = np.linalg.norm(embedding_b)
-
-    return np.dot(embedding_a, embedding_b) / (norm_a * norm_b)
 
 
 def compute_answer_score(
@@ -139,13 +123,13 @@ def compute_answer_score(
 
     # Read TASK_DESCRIPTION to understand why we evaluate the generated answers
     # that way.
-    if task_name == "GenerateAnswer":
-        if sample["answerable"]:
-            return compute_sentence_similarity(
-                sentence_a=sample["answer"],
-                sentence_b=generated_answer["answer"],
-            )
-        return float(generated_answer["answer"].upper() == "NOT ENOUGH CONTEXT")
+    # if task_name == "GenerateAnswer":
+    #     if sample["answerable"]:
+    #         return compute_sentence_similarity(
+    #             sentence_a=sample["answer"],
+    #             sentence_b=generated_answer["answer"],
+    #         )
+    #     return float(generated_answer["answer"].upper() == "NOT ENOUGH CONTEXT")
 
     if task_name == "RateContext":
         # If the question can be answered with the context, we expect the context
@@ -159,14 +143,14 @@ def compute_answer_score(
             sample["answerable"] == generated_answer["answerable_question"]
         )
 
-    if task_name == "ParaphraseQuestions":
-        similarities = [
-            compute_sentence_similarity(
-                sentence_a=sample["question"], sentence_b=generated_question
-            )
-            for generated_question in generated_answer["paraphrased_questions"]
-        ]
-        return sum(similarities) / len(similarities)
+    # if task_name == "ParaphraseQuestions":
+    #     similarities = [
+    #         compute_sentence_similarity(
+    #             sentence_a=sample["question"], sentence_b=generated_question
+    #         )
+    #         for generated_question in generated_answer["paraphrased_questions"]
+    #     ]
+    #     return sum(similarities) / len(similarities)
 
     if task_name == "RAGAS":
         # Answer relevance  and Faithfulness are between 0-5. We expects scores
@@ -181,30 +165,30 @@ def compute_answer_score(
 
         return float(answer_relevance_ok and faithfulness_ok and context_ok)
 
-    if task_name == "GenerateAnswerWithConfidence":
-        if not 0 <= generated_answer["confidence"] <= 5:
-            return 0.0
+    # if task_name == "GenerateAnswerWithConfidence":
+    #     if not 0 <= generated_answer["confidence"] <= 5:
+    #         return 0.0
 
-        return compute_sentence_similarity(
-            sentence_a=sample["answer"], sentence_b=generated_answer["answer"]
-        )
+    #     return compute_sentence_similarity(
+    #         sentence_a=sample["answer"], sentence_b=generated_answer["answer"]
+    #     )
 
-    if task_name == "GenerateAnswersWithConfidence":
-        # Check if all confidence scores are correct, and select the one with
-        # the highest confidence.
-        highest_confidence = -1
-        highest_generated_answer = ""
-        for el in generated_answer["answers"]:
-            confidence = el["confidence"]
-            if not 0 <= confidence <= 5:
-                return 0.0
-            if confidence > highest_confidence:
-                highest_confidence = confidence
-                highest_generated_answer = el["answer"]
+    # if task_name == "GenerateAnswersWithConfidence":
+    #     # Check if all confidence scores are correct, and select the one with
+    #     # the highest confidence.
+    #     highest_confidence = -1
+    #     highest_generated_answer = ""
+    #     for el in generated_answer["answers"]:
+    #         confidence = el["confidence"]
+    #         if not 0 <= confidence <= 5:
+    #             return 0.0
+    #         if confidence > highest_confidence:
+    #             highest_confidence = confidence
+    #             highest_generated_answer = el["answer"]
 
-        return compute_sentence_similarity(
-            sentence_a=sample["answer"], sentence_b=highest_generated_answer
-        )
+    #     return compute_sentence_similarity(
+    #         sentence_a=sample["answer"], sentence_b=highest_generated_answer
+    #     )
 
     return 0.0
 
