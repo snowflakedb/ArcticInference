@@ -349,8 +349,8 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
         # pack
         qkv = (torch.cat(
             (query.view(-1, self.sp_size, self.num_heads * self.head_size),
-                key.view(-1, self.sp_size, self.num_kv_heads * self.head_size),
-                value.view(-1, self.sp_size, self.num_kv_heads * self.head_size)),
+             key.view(-1, self.sp_size, self.num_kv_heads * self.head_size),
+             value.view(-1, self.sp_size, self.num_kv_heads * self.head_size)),
             dim=-1)
                .transpose(0, 1)
                .reshape(-1, (self.num_heads + 2 * self.num_kv_heads) * self.head_size))
