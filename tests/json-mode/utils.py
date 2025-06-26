@@ -21,19 +21,18 @@ def call_vllm_complete(
             raise ValueError("Only 'json' response format is supported in this test.")
     json_schema = response_format.get("json_schema", None)
 
-    print("******************************************************************")
-    for i in range(len(prompts[0])):
-        print(f"Prompt {i}: {prompts[0][i]}")
-    print("-------------------------------")
+    responses = []
 
-    chat_response = client.chat.completions.create(
-        model=llm_name,
-        messages=prompts[0],
-        temperature=options.get("temperature", 0.0),
-        extra_body={
-            "guided_json": json_schema
-        } if json_schema else {},
-    )
+    for i in range(len(prompts)):
+        chat_response = client.chat.completions.create(
+            model=llm_name,
+            messages=prompts[i],
+            temperature=options.get("temperature", 0.0),
+            extra_body={
+                "guided_json": json_schema
+            } if json_schema else {},
+        )
+        responses.append(chat_response)
 
-    return chat_response
+    return responses
 

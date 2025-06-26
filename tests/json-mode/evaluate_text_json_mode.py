@@ -87,18 +87,18 @@ def process_batch(
             ]
         )
 
-    response = call_vllm_complete(
+    responses = call_vllm_complete(
         prompts=prompts, llm_name=llm_name, options=options
     )
 
-    all_rows = response.choices
+    all_rows = responses
     results: list[None | dict] = []
     for row in all_rows:
         if row is None:
             results.append(None)
             continue
 
-        llm_json_output = row.message.content
+        llm_json_output = row.choices[0].message.content
         # The best way to verify if the LLM output respects the expected schema
         # is to try to create an instance of it.
         try:
@@ -204,7 +204,8 @@ def evaluate_task_outputs(
     # Each output is evaluated against its corresponding sample data.
     assert len(sample_data) == len(task_outputs)
 
-    print("llm outputs:", task_outputs)
+    for i in range(len(task_outputs)):
+        print("llm outputs:", task_outputs[i])
 
     scores = [
         compute_answer_score(
@@ -283,7 +284,7 @@ def main(args: argparse.Namespace):
             options=options,
         )
 
-        print("llm_outputs:", llm_outputs)
+        # print("llm_outputs:", llm_outputs)
 
         # Get scores.
         scores = evaluate_task_outputs(
