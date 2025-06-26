@@ -5,18 +5,16 @@ import os
 import sys
 
 from task_description import TASK_DESCRIPTIONS, TASK_NAME_TO_TASK_SCHEMA
-from utils import call_vllm_complete
+from utils import call_vllm_complete, compute_sentence_similarity
 
 import pydantic
 from loguru import logger
-import numpy as np
 
 DATASET_WIKIQUESTIONS = "datasets/WikiQuestions.json"
 
 
 def load_dataset_wikiquestions(
-    filepath: str = DATASET_WIKIQUESTIONS,
-) -> list[dict[str, str]]:
+    filepath: str = DATASET_WIKIQUESTIONS, ) -> list[dict[str, str]]:
     """Load the WikiQuestions dataset from filepath. Return a list of samples."""
     try:
         logger.info(f"Loading dataset \'{filepath}\' ...")
@@ -37,8 +35,7 @@ def generate_system_prompt(instructions: str, output_schema: str) -> str:
         f"Instructions: {instructions} \n"
         "Output the result as a JSON string with the "
         f"following format: {output_schema}. \n"
-        "IMPORTANT!! Do not start the JSON with ```json or end it with ```."
-    )
+        "IMPORTANT!! Do not start the JSON with ```json or end it with ```.")
     return system_prompt
 
 
@@ -47,16 +44,12 @@ def generate_user_prompt(task_name: str, sample_data: dict[str, str]) -> str:
     if task_name == "ParaphraseQuestions":
         user_prompt = f"Question: {sample_data.get('question', 'empty')}"
     elif task_name == "RAGAS":
-        user_prompt = (
-            f"Context: {sample_data.get('context', 'empty')} \n"
-            f"Question: {sample_data.get('question', 'empty')} \n"
-            f"Answer: {sample_data.get('answer', 'empty')}"
-        )
+        user_prompt = (f"Context: {sample_data.get('context', 'empty')} \n"
+                       f"Question: {sample_data.get('question', 'empty')} \n"
+                       f"Answer: {sample_data.get('answer', 'empty')}")
     else:
-        user_prompt = (
-            f"Context: {sample_data.get('context', 'empty')} \n"
-            f"Question: {sample_data.get('question', 'empty')}"
-        )
+        user_prompt = (f"Context: {sample_data.get('context', 'empty')} \n"
+                       f"Question: {sample_data.get('question', 'empty')}")
 
     return user_prompt
 
@@ -70,26 +63,28 @@ def process_batch(
     """Generate the outputs for the given task on the batch of sample data."""
     task_instructions = TASK_DESCRIPTIONS[task_name]["task_instructions"]
     task_output_schema = TASK_DESCRIPTIONS[task_name]["response_format"]
-    system_prompt = generate_system_prompt(
-        instructions=task_instructions, output_schema=task_output_schema
-    )
+    system_prompt = generate_system_prompt(instructions=task_instructions,
+                                           output_schema=task_output_schema)
 
     # Create a batch of prompts (1 prompt per sample)
     prompts = []
     for sample in sample_data:
-        user_prompt = generate_user_prompt(
-            task_name=task_name, sample_data=sample
-        )
-        prompts.append(
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ]
-        )
+        user_prompt = generate_user_prompt(task_name=task_name,
+                                           sample_data=sample)
+        prompts.append([
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
+                "role": "user",
+                "content": user_prompt
+            },
+        ])
 
-    responses = call_vllm_complete(
-        prompts=prompts, llm_name=llm_name, options=options
-    )
+    responses = call_vllm_complete(prompts=prompts,
+                                   llm_name=llm_name,
+                                   options=options)
 
     all_rows = responses
     results: list[None | dict] = []
@@ -102,7 +97,8 @@ def process_batch(
         # The best way to verify if the LLM output respects the expected schema
         # is to try to create an instance of it.
         try:
-            instance = TASK_NAME_TO_TASK_SCHEMA[task_name].model_validate_json(str(llm_json_output))
+            instance = TASK_NAME_TO_TASK_SCHEMA[task_name].model_validate_json(
+                str(llm_json_output))
             results.append(instance.model_dump())
         except (pydantic.ValidationError, TypeError):
             results.append(None)
@@ -125,13 +121,14 @@ def compute_answer_score(
 
     # Read TASK_DESCRIPTION to understand why we evaluate the generated answers
     # that way.
-    # if task_name == "GenerateAnswer":
-    #     if sample["answerable"]:
-    #         return compute_sentence_similarity(
-    #             sentence_a=sample["answer"],
-    #             sentence_b=generated_answer["answer"],
-    #         )
-    #     return float(generated_answer["answer"].upper() == "NOT ENOUGH CONTEXT")
+    if task_name == "GenerateAnswer":
+        if sample["answerable"]:
+            return compute_sentence_similarity(
+                sentence_a=sample["answer"],
+                sentence_b=generated_answer["answer"],
+            )
+        return float(
+            generated_answer["answer"].upper() == "NOT ENOUGH CONTEXT")
 
     if task_name == "RateContext":
         # If the question can be answered with the context, we expect the context
@@ -142,17 +139,15 @@ def compute_answer_score(
 
     if task_name == "AssessAnswerability":
         return float(
-            sample["answerable"] == generated_answer["answerable_question"]
-        )
+            sample["answerable"] == generated_answer["answerable_question"])
 
-    # if task_name == "ParaphraseQuestions":
-    #     similarities = [
-    #         compute_sentence_similarity(
-    #             sentence_a=sample["question"], sentence_b=generated_question
-    #         )
-    #         for generated_question in generated_answer["paraphrased_questions"]
-    #     ]
-    #     return sum(similarities) / len(similarities)
+    if task_name == "ParaphraseQuestions":
+        similarities = [
+            compute_sentence_similarity(sentence_a=sample["question"],
+                                        sentence_b=generated_question)
+            for generated_question in generated_answer["paraphrased_questions"]
+        ]
+        return sum(similarities) / len(similarities)
 
     if task_name == "RAGAS":
         # Answer relevance  and Faithfulness are between 0-5. We expects scores
@@ -167,30 +162,28 @@ def compute_answer_score(
 
         return float(answer_relevance_ok and faithfulness_ok and context_ok)
 
-    # if task_name == "GenerateAnswerWithConfidence":
-    #     if not 0 <= generated_answer["confidence"] <= 5:
-    #         return 0.0
+    if task_name == "GenerateAnswerWithConfidence":
+        if not 0 <= generated_answer["confidence"] <= 5:
+            return 0.0
 
-    #     return compute_sentence_similarity(
-    #         sentence_a=sample["answer"], sentence_b=generated_answer["answer"]
-    #     )
+        return compute_sentence_similarity(
+            sentence_a=sample["answer"], sentence_b=generated_answer["answer"])
 
-    # if task_name == "GenerateAnswersWithConfidence":
-    #     # Check if all confidence scores are correct, and select the one with
-    #     # the highest confidence.
-    #     highest_confidence = -1
-    #     highest_generated_answer = ""
-    #     for el in generated_answer["answers"]:
-    #         confidence = el["confidence"]
-    #         if not 0 <= confidence <= 5:
-    #             return 0.0
-    #         if confidence > highest_confidence:
-    #             highest_confidence = confidence
-    #             highest_generated_answer = el["answer"]
+    if task_name == "GenerateAnswersWithConfidence":
+        # Check if all confidence scores are correct, and select the one with
+        # the highest confidence.
+        highest_confidence = -1
+        highest_generated_answer = ""
+        for el in generated_answer["answers"]:
+            confidence = el["confidence"]
+            if not 0 <= confidence <= 5:
+                return 0.0
+            if confidence > highest_confidence:
+                highest_confidence = confidence
+                highest_generated_answer = el["answer"]
 
-    #     return compute_sentence_similarity(
-    #         sentence_a=sample["answer"], sentence_b=highest_generated_answer
-    #     )
+        return compute_sentence_similarity(sentence_a=sample["answer"],
+                                           sentence_b=highest_generated_answer)
 
     return 0.0
 
@@ -204,13 +197,13 @@ def evaluate_task_outputs(
     # Each output is evaluated against its corresponding sample data.
     assert len(sample_data) == len(task_outputs)
 
-    for i in range(len(task_outputs)):
-        print("llm outputs:", task_outputs[i])
+    # for i in range(len(task_outputs)):
+    #     print("llm outputs:", task_outputs[i])
 
     scores = [
-        compute_answer_score(
-            task_name=task_name, sample=sample, generated_answer=output
-        )
+        compute_answer_score(task_name=task_name,
+                             sample=sample,
+                             generated_answer=output)
         for sample, output in zip(sample_data, task_outputs)
     ]
     return scores
@@ -226,7 +219,10 @@ def save_results(results: dict[str, float], output_folder: str):
     # }
     results_to_save = {
         "results": {
-            task_name: {"score": score} for task_name, score in results.items()
+            task_name: {
+                "score": score
+            }
+            for task_name, score in results.items()
         }
     }
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -259,21 +255,24 @@ def main(args: argparse.Namespace):
     for task_name in TASK_DESCRIPTIONS:
         # We do not do the task if it was not given as an argument, or if
         # not "all" tasks need to be done.
-        if (task_name != evaluation_task) and (evaluation_task != "json-mode-all"):
+        if (task_name != evaluation_task) and (evaluation_task
+                                               != "json-mode-all"):
             continue
 
         logger.info(f"Evaluating task: {task_name} ...")
 
         expected_schema = TASK_NAME_TO_TASK_SCHEMA[task_name]
         expected_schema_json: dict[str, str | dict | list] = (
-            expected_schema.model_json_schema()
-        )
+            expected_schema.model_json_schema())
 
         # Prepare the option object for COMPLETE() based on the expected output
         # schema.
         options: dict[str, float | dict] = {
             "temperature": 0,
-            "response_format": {"type": "json", "schema": expected_schema_json},
+            "response_format": {
+                "type": "json",
+                "schema": expected_schema_json
+            },
         }
 
         # Process samples.
@@ -317,8 +316,7 @@ def main(args: argparse.Namespace):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Evaluate the quality of JSON-mode output in Complete()."
-    )
+        description="Evaluate the quality of JSON-mode output in Complete().")
 
     VALID_TASKS = list(TASK_DESCRIPTIONS.keys()) + ["json-mode-all"]
 
@@ -331,10 +329,11 @@ def parse_args() -> argparse.Namespace:
         default="json-mode-all",
     )
 
-    parser.add_argument(
-        "--llm", type=str, required=False, help="Name of the LLM to use.",
-        default="Snowflake/Llama-3.3-SwiftKV-70B-Instruct"
-    )
+    parser.add_argument("--llm",
+                        type=str,
+                        required=False,
+                        help="Name of the LLM to use.",
+                        default="Snowflake/Llama-3.3-SwiftKV-70B-Instruct")
 
     parser.add_argument(
         "--input",

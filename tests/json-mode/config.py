@@ -2,7 +2,6 @@
 
 import os
 
-
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "snowflake-arctic-embed-m-v1.5")
 REQUEST_MAX_RETRIES = int(os.getenv("REQUEST_MAX_RETRIES", 10))
 REQUEST_TIMEOUT_IN_SECONDS = int(os.getenv("REQUEST_TIMEOUT_IN_SECONDS", 30))
