@@ -364,7 +364,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
         ], dim=-1)
 
         # original attention
-        c_ = self._orig_forward(query, key, value, **kwargs)
+        c_ = self._orig_forward(q_, k_, v_, **kwargs)
         
         # Ulysses all-to-all 2/2
         c = torch.empty_like(c_)
