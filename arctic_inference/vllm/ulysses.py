@@ -346,14 +346,6 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
         if self.sp_size == 1 or is_shift_parallel_mode():
             return self._orig_forward(query, key, value, **kwargs)
 
-        from vllm.forward_context import get_forward_context
-        if self.calculate_kv_scales:
-            attn_metadata = get_forward_context().attn_metadata
-            if attn_metadata.enable_kv_scales_calculation:
-                self.calc_kv_scales(key, value)
-        hidden_size = query.shape[-1]
-        output = torch.empty_like(query)
-        
         # pack
         qkv = torch.cat(
             (query.view(-1, self.sp_size, self.num_heads * self.head_size),
@@ -369,15 +361,9 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             self.num_heads * self.head_size, self.num_kv_heads *
             self.head_size, self.num_kv_heads * self.head_size
         ], dim=-1)
-        # prepare
-        q_ = q_.view(-1, self.num_heads, self.head_size)
-        k_ = k_.view(-1, self.num_kv_heads, self.head_size)
-        v_ = v_.view(-1, self.num_kv_heads, self.head_size)
-        c_ = output.view(-1, self.num_heads, self.head_size)
 
         # original attention
-        torch.ops.vllm.unified_attention_with_output(
-                    q_, k_, v_, c_, self.layer_name)
+        c_ = self._orig_forward(query, key, value, **kwargs)
         
         # Ulysses all-to-all 2/2
         c = torch.empty_like(c_)
@@ -386,7 +372,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                   .transpose(0, 1)
                   .reshape(-1, self.num_heads * self.sp_size * self.head_size))
         
-        return output.view(-1, hidden_size)
+        return output
 
 
 class PiecewiseCompileInterpreterPatch(ArcticPatch[PiecewiseCompileInterpreter]):
