@@ -365,7 +365,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
 
         # original attention
         c_ = self._orig_forward(q_, k_, v_, **kwargs)
-        
+
         # Ulysses all-to-all 2/2
         c = torch.empty_like(c_)
         torch.distributed.all_to_all_single(c, c_, group=self.device_group)
