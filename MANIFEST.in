@@ -1,1 +1,2 @@
 graft arctic_inference/embedding/proto
+recursive-include csrc *
