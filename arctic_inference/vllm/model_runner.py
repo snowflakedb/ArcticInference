@@ -258,7 +258,6 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         scheduler_output: "SchedulerOutput",
         intermediate_tensors: Optional[IntermediateTensors] = None,
     ) -> Union[ModelRunnerOutput, IntermediateTensors]:
-
         self._update_states(scheduler_output)
         if not scheduler_output.total_num_scheduled_tokens:
             if not has_kv_transfer_group():
@@ -268,39 +267,31 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             return self.kv_connector_no_forward(scheduler_output)
 
         # Prepare the decoder inputs.
-        attn_metadata, logits_indices, spec_decode_metadata = (
-            self._prepare_inputs(scheduler_output))
+        (attn_metadata, attention_cuda_graphs, logits_indices,
+         spec_decode_metadata,
+         num_scheduled_tokens_np) = (self._prepare_inputs(scheduler_output))
         num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
-        use_shift_model = (
-            self.use_ulysses and self.shift_model is not None and
-            num_scheduled_tokens <= self.shift_parallel_threshold)
-        if self.use_ulysses and not use_shift_model:
-            # add padding to the batch size to make it a multiple of SP
-            from vllm.utils import round_up
-            sp_size = self.parallel_config.ulysses_sequence_parallel_size
-            num_input_tokens = round_up(num_scheduled_tokens, sp_size)
-            if (self.use_cuda_graph and num_input_tokens // sp_size
-                    <= self.cudagraph_batch_sizes[-1]):
-                num_input_tokens = self.vllm_config.pad_for_cudagraph(
-                    num_input_tokens // sp_size) * sp_size
+        if (self.use_cuda_graph
+                and num_scheduled_tokens <= self.cudagraph_batch_sizes[-1]):
+            # Use piecewise CUDA graphs.
+            # Add padding to the batch size.
+            num_input_tokens = self.vllm_config.pad_for_cudagraph(
+                num_scheduled_tokens)
         else:
-            if (self.use_cuda_graph
-                    and num_scheduled_tokens <= self.cudagraph_batch_sizes[-1]):
-                # Use piecewise CUDA graphs.
-                # Add padding to the batch size.
-                num_input_tokens = self.vllm_config.pad_for_cudagraph(
-                    num_scheduled_tokens)
+            # Eager mode.
+            # Pad tokens to multiple of tensor_parallel_size when
+            # enabled collective fusion for SP
+            tp_size = self.vllm_config.parallel_config.tensor_parallel_size
+            if self.compilation_config.pass_config. \
+                enable_sequence_parallelism and tp_size > 1:
+                from vllm.utils import round_up
+                num_input_tokens = round_up(num_scheduled_tokens, tp_size)
             else:
-                # Eager mode.
-                # Pad tokens to multiple of tensor_parallel_size when
-                # enabled collective fusion for SP
-                tp_size = self.vllm_config.parallel_config.tensor_parallel_size
-                if self.vllm_config.compilation_config.pass_config. \
-                    enable_sequence_parallelism and tp_size > 1:
-                    from vllm.utils import round_up
-                    num_input_tokens = round_up(num_scheduled_tokens, tp_size)
-                else:
-                    num_input_tokens = num_scheduled_tokens
+                num_input_tokens = num_scheduled_tokens
+
+        # Padding for DP
+        num_pad, num_tokens_across_dp = self.get_dp_padding(num_input_tokens)
+        num_input_tokens += num_pad
 
         # _prepare_inputs may reorder the batch, so we must gather multi
         # modal outputs after that to ensure the correct order
@@ -343,21 +334,28 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             intermediate_tensors = self.sync_and_slice_intermediate_tensors(
                 num_input_tokens, intermediate_tensors, True)
 
-        # Run the decoder.
+        # Some attention backends only support CUDA Graphs in pure decode.
+        # If attention doesn't support CUDA Graphs for this batch, but we
+        # compiled with full CUDA graphs, we have to skip them entirely.
+        skip_cuda_graphs = self.full_cuda_graph and not attention_cuda_graphs
+
+        # Run the model.
         # Use persistent buffers for CUDA graphs.
-        with set_forward_context(attn_metadata,
-                                 self.vllm_config,
-                                 num_tokens=num_input_tokens):
+        with set_forward_context(
+                attn_metadata,
+                self.vllm_config,
+                num_tokens=num_input_tokens,
+                num_tokens_across_dp=num_tokens_across_dp,
+                skip_cuda_graphs=skip_cuda_graphs,
+        ):
             self.maybe_setup_kv_connector(scheduler_output)
 
-            model = self.shift_model if use_shift_model else self.model
-            with set_shift_parallel_mode(use_shift_model):
-                model_output = model(
-                    input_ids=input_ids,
-                    positions=positions,
-                    intermediate_tensors=intermediate_tensors,
-                    inputs_embeds=inputs_embeds,
-                )
+            model_output = self.model(
+                input_ids=input_ids,
+                positions=positions,
+                intermediate_tensors=intermediate_tensors,
+                inputs_embeds=inputs_embeds,
+            )
 
             self.maybe_wait_for_kv_save()
             finished_sending, finished_recving = (
@@ -383,6 +381,11 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                                             all_gather_group=get_tp_group())
             logits = None
         else:
+            if self.input_batch.pooling_params:
+                return self._pool(hidden_states, num_scheduled_tokens,
+                                  num_scheduled_tokens_np, finished_sending,
+                                  finished_recving)
+
             sample_hidden_states = hidden_states[logits_indices]
             logits = self.model.compute_logits(sample_hidden_states, None)
         if broadcast_pp_output:
@@ -431,6 +434,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             )
             sampler_output.sampled_token_ids = output_token_ids
 
+        num_nans_in_logits = {}
+        if envs.VLLM_COMPUTE_NANS_IN_LOGITS:
+            num_nans_in_logits = self._get_nans_in_logits(logits)
+
         # TODO(woosuk): The following loop can be slow since it iterates over
         # the requests one by one. Optimize.
         discard_sampled_tokens_req_indices = []
@@ -477,52 +484,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         for i in discard_sampled_tokens_req_indices:
             valid_sampled_token_ids[i].clear()
 
-        disable_spec_decode = (
-            self.speculative_config and
-            self.speculative_config.disable_by_batch_size and
-            len(self.input_batch.req_ids) > self.speculative_config.disable_by_batch_size
-        )
-
-        suffix_spec_token_ids = None
-        orig_sampled_token_ids = valid_sampled_token_ids.copy()
-        if self._suffix_cache is not None:
-            self._update_suffix_cache(valid_sampled_token_ids)
-            if not disable_spec_decode:
-                results = self.generate_draft_token_ids_suffix(
-                    valid_sampled_token_ids)
-                suffix_spec_token_ids = []
-                # The score is an estimate of the acceptance length. Thus, the
-                # heuristic is to use the suffix decoded tokens if the score is
-                # greater than the # of tokens we would speculate otherwise.
-                min_score = (self.speculative_config.num_speculative_tokens
-                             if self.speculative_config.method != "suffix"
-                             else 0)
-                min_score = (0 if self.speculative_config.method == "suffix"
-                             else self.speculative_config.num_speculative_tokens)
-                for i, result in enumerate(results):
-                    if result.score >= min_score:
-                        # Use suffix decoded tokens, disable other speculation
-                        # methods for this request.
-                        valid_sampled_token_ids[i] = []
-                        suffix_spec_token_ids.append(result.token_ids)
-                    else:
-                        suffix_spec_token_ids.append([])
-
-        spec_token_ids = None
-        if not self.use_spec_decode or disable_spec_decode:
+        if not self.speculative_config:
             # Speculative decoding is not enabled.
-            pass
-        elif (self.speculative_config.method == "arctic" or 
-              self.speculative_config.method == "mlp_speculator"):
-            assert isinstance(self.drafter, ArcticProposer)
-            previous_hidden_states = self.drafter.prepare_hidden_states(
-                sample_hidden_states=sample_hidden_states,
-                sampled_token_ids=sampled_token_ids,
-                spec_decode_metadata=spec_decode_metadata,
-            )
-            spec_token_ids = self.generate_draft_token_ids_arctic(
-                valid_sampled_token_ids, 
-                previous_hidden_states=previous_hidden_states)
+            spec_token_ids = None
         elif self.speculative_config.method == "ngram":
             assert isinstance(self.drafter, NgramProposer)
             spec_token_ids = self.generate_draft_token_ids(
@@ -630,19 +594,11 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             )
             spec_token_ids = draft_token_ids.tolist()
 
-        if spec_token_ids is None:
-            spec_token_ids = suffix_spec_token_ids
-        elif suffix_spec_token_ids is not None:
-            spec_token_ids = [
-                suffix_spec_token_ids[i] or spec_token_ids[i]
-                for i in range(len(suffix_spec_token_ids))
-            ]
-
-        valid_sampled_token_ids = orig_sampled_token_ids
-
         # Clear KVConnector state after all KVs are generated.
         if has_kv_transfer_group():
             get_kv_transfer_group().clear_connector_metadata()
+
+        self.eplb_step()
 
         return ModelRunnerOutput(
             req_ids=self.input_batch.req_ids,
@@ -651,8 +607,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             spec_token_ids=spec_token_ids,
             logprobs=logprobs_lists,
             prompt_logprobs_dict=prompt_logprobs_dict,
+            pooler_output=[],
             finished_sending=finished_sending,
             finished_recving=finished_recving,
+            num_nans_in_logits=num_nans_in_logits,
         )
     
     def generate_draft_token_ids_arctic(
