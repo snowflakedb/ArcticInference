@@ -353,7 +353,7 @@ def parse_args() -> argparse.Namespace:
         "--n-samples",
         "-n",
         type=int,
-        default=1,
+        default=25,
         help="Number of samples to use from the dataset.",
     )
 
