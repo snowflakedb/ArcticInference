@@ -1,0 +1,786 @@
+[
+    {
+        "title": "Explorer 20",
+        "context": "Explorer 20, also known Ionosphere Explorer-A, IE-A, S-48, TOPSI and Topside Explorer, was a NASA satellite launched as part of Explorer program. Its purpose was two-fold: long-term investigation of the ionosphere from above, and in situ investigation of ion concentrations and temperatures.",
+        "question": "What was the purpose of Explorer 20?",
+        "answerable": true,
+        "answer": "To conduct both long-term studies of the ionosphere from space and in-situ measurements of ion concentrations and temperatures."
+    },
+    {
+        "title": "Explorer 20",
+        "context": "Explorer 20, also known Ionosphere Explorer-A, IE-A, S-48, TOPSI and Topside Explorer, was a NASA satellite launched as part of Explorer program. Its purpose was two-fold: long-term investigation of the ionosphere from above, and in situ investigation of ion concentrations and temperatures.",
+        "question": "In which year was Explorer 20 launched?",
+        "answerable": false,
+        "answer": "Unfortunately, the information provided does not allow us to determine the exact year Explorer 20 was launched."
+    },
+    {
+        "title": "MAP4K3",
+        "context": "Mitogen-activated protein kinase kinase kinase kinase 3 is a protein that in humans is encoded by the MAP4K3 gene. [5]",
+        "question": "What does MAP4K3 encode in humans?",
+        "answerable": true,
+        "answer": "MAP4K3 encodes a protein in humans.\n\n---"
+    },
+    {
+        "title": "MAP4K3",
+        "context": "Mitogen-activated protein kinase kinase kinase kinase 3 is a protein that in humans is encoded by the MAP4K3 gene. [5]",
+        "question": "What are the specific functions of the MAP4K3 protein?",
+        "answerable": false,
+        "answer": "The specific functions of the MAP4K3 protein include regulating the activity of various enzymes involved in cell signaling pathways, particularly those related to mitogen-activated protein kinases (MAPKs)."
+    },
+    {
+        "title": "Heggholmen Lighthouse",
+        "context": "Heggholmen Lighthouse (Norwegian: Heggholmen fyr) is a coastal lighthouse located in the Oslofjord, in the municipality of Oslo, Norway. It was established in 1827, and automated in 1972. The lighthouse was listed as a protected site in 1998.[2][3][4]",
+        "question": "In which year was Heggholmen Lighthouse automated?",
+        "answerable": true,
+        "answer": "1972"
+    },
+    {
+        "title": "Heggholmen Lighthouse",
+        "context": "Heggholmen Lighthouse (Norwegian: Heggholmen fyr) is a coastal lighthouse located in the Oslofjord, in the municipality of Oslo, Norway. It was established in 1827, and automated in 1972. The lighthouse was listed as a protected site in 1998.[2][3][4]",
+        "question": "How tall is the Heggholmen Lighthouse?",
+        "answerable": false,
+        "answer": "Unfortunately, I couldn't find any specific information on the height of the Heggholmen Lighthouse. If you have more context or a reliable source, please provide it!"
+    },
+    {
+        "title": "Antonio Nachura",
+        "context": "Antonio Eduardo Bermejo Nachura (June 13, 1941 – March 13, 2022) was a Filipino jurist who was an Associate Justice of the Supreme Court of the Philippines. He took his oath of office as Associate Justice on February 7, 2007, and occupied the position until his mandatory retirement on June 13, 2011. Previously, Nachura had been Solicitor-General of the Philippines at the time his appointment to the Court was announced on January 31, 2007, by then-Philippine President Gloria Macapagal Arroyo.[1]",
+        "question": "When did Antonio Nachura retire from his position as Associate Justice?",
+        "answerable": true,
+        "answer": "Here is the completed format:\n\n--- Question: When did Antonio Nachura retire from his position as Associate Justice?\nContexts: Antonio Eduardo Bermejo Nachura (June 13, 1941 – March 13, 2022) was a Filipino jurist who was an Associate Justice of the Supreme Court of the Philippines. He took his oath of office as Associate Justice on February 7, 2007, and occupied the position until his mandatory retirement on June 13, 2011. Previously, Nachura had been Solicitor-General of the Philippines at the time his appointment to the Court was announced on January 31, 2007, by then-Philippine President Gloria Macapagal Arroyo.[1]\nReasoning: Let's think step by step in order to Answer: June 13, 2011.\n---"
+    },
+    {
+        "title": "Antonio Nachura",
+        "context": "Antonio Eduardo Bermejo Nachura (June 13, 1941 – March 13, 2022) was a Filipino jurist who was an Associate Justice of the Supreme Court of the Philippines. He took his oath of office as Associate Justice on February 7, 2007, and occupied the position until his mandatory retirement on June 13, 2011. Previously, Nachura had been Solicitor-General of the Philippines at the time his appointment to the Court was announced on January 31, 2007, by then-Philippine President Gloria Macapagal Arroyo.[1]",
+        "question": "What specific cases did Antonio Nachura preside over during his time as Associate Justice?",
+        "answerable": false,
+        "answer": "Unfortunately, there is no available information on the specific cases that Antonio Nachura presided over during his time as Associate Justice."
+    },
+    {
+        "title": "Roman Gergel",
+        "context": "Roman Gergel (born 22 February 1988) is a Slovak professional footballer who plays as a forward.",
+        "question": "What position does Roman Gergel play in football?",
+        "answerable": true,
+        "answer": "forward"
+    },
+    {
+        "title": "Roman Gergel",
+        "context": "Roman Gergel (born 22 February 1988) is a Slovak professional footballer who plays as a forward.",
+        "question": "For which teams has Roman Gergel played throughout his career?",
+        "answerable": false,
+        "answer": "Unfortunately, the provided context does not specify which teams Roman Gergel has played for. To provide an accurate answer, additional information would be needed."
+    },
+    {
+        "title": "Ragigudda Anjaneya Temple",
+        "context": "The Ragigudda Sree Prasanna Anjaneyaswamy Temple, commonly referred to as Ragigudda Temple or Ragigudda Anjaneya Temple[1] is a temple dedicated to Lord Hanuman, spread across 5 acres also having a hillock in Jayanagara 9th Block suburb of Bengaluru, Karnataka, India.[2] The temple[3] also houses a Shivalinga along with Lord Rama, Goddess Sita, Lord Lakshmana along with the main deity of Lord Hanuman in the same precinct. The temple is on a hillock. There is a smaller temple dedicated to Lord Ganesha, Navagrahas and the Goddess Rajarajeshwari at the base of the hillock. It also plays host a Thrimurthy Sannidhi to the Hindu holy trinity of Lord Brahma, Lord Vishnu and Lord Shiva on huge engraved rocks at the side of the temple.[2] An image of Lord Hanuman Currently Bengaluru's Namma Metro work is underway a few 100m from the temple with a Yellow Line Metro station planned as well.[4]",
+        "question": "Which deities are housed in the main precinct of the Ragigudda Anjaneya Temple?",
+        "answerable": true,
+        "answer": "Lord Hanuman, Lord Rama, Goddess Sita, Lord Lakshmana, and Lord Shiva."
+    },
+    {
+        "title": "Ragigudda Anjaneya Temple",
+        "context": "The Ragigudda Sree Prasanna Anjaneyaswamy Temple, commonly referred to as Ragigudda Temple or Ragigudda Anjaneya Temple[1] is a temple dedicated to Lord Hanuman, spread across 5 acres also having a hillock in Jayanagara 9th Block suburb of Bengaluru, Karnataka, India.[2] The temple[3] also houses a Shivalinga along with Lord Rama, Goddess Sita, Lord Lakshmana along with the main deity of Lord Hanuman in the same precinct. The temple is on a hillock. There is a smaller temple dedicated to Lord Ganesha, Navagrahas and the Goddess Rajarajeshwari at the base of the hillock. It also plays host a Thrimurthy Sannidhi to the Hindu holy trinity of Lord Brahma, Lord Vishnu and Lord Shiva on huge engraved rocks at the side of the temple.[2] An image of Lord Hanuman Currently Bengaluru's Namma Metro work is underway a few 100m from the temple with a Yellow Line Metro station planned as well.[4]",
+        "question": "When was the Ragigudda Anjaneya Temple built?",
+        "answerable": false,
+        "answer": "The answer is not explicitly stated in the given contexts."
+    },
+    {
+        "title": "Vincenzo Civerchio",
+        "context": "Vincenzo Civerchio or Civercio (c. 1470 – c. 1544) was an Italian painter of the Renaissance, born at Crema, and active also in Brescia, where there are some of his alter-pieces.[1] One of his works is at the National Gallery of Art, Washington D.C., others in the Pinacoteca di Brera, Milan, Italy. He is said to be an imitator of Bernardino Butinone, Bernardino Zenale, and influenced by Vincenzo Foppa.",
+        "question": "Where can some of Vincenzo Civerchio's works be found?",
+        "answerable": true,
+        "answer": "The National Gallery of Art, Washington D.C., and the Pinacoteca di Brera, Milan, Italy."
+    },
+    {
+        "title": "Vincenzo Civerchio",
+        "context": "Vincenzo Civerchio or Civercio (c. 1470 – c. 1544) was an Italian painter of the Renaissance, born at Crema, and active also in Brescia, where there are some of his alter-pieces.[1] One of his works is at the National Gallery of Art, Washington D.C., others in the Pinacoteca di Brera, Milan, Italy. He is said to be an imitator of Bernardino Butinone, Bernardino Zenale, and influenced by Vincenzo Foppa.",
+        "question": "What was Vincenzo Civerchio's most famous painting?",
+        "answerable": false,
+        "answer": "Unfortunately, without further information or a specific mention of his most famous work, it is difficult to pinpoint Vincenzo Civerchio's most famous painting."
+    },
+    {
+        "title": "Kanieae",
+        "context": "Kanieae is a tribe in the plant family Myrtaceae[1] from Oceania and south-East Asia with a main diversity center in Australia.",
+        "question": "Where is the main diversity center of Kanieae?",
+        "answerable": true,
+        "answer": "The main diversity center of Kanieae is in Australia."
+    },
+    {
+        "title": "Kanieae",
+        "context": "Kanieae is a tribe in the plant family Myrtaceae[1] from Oceania and south-East Asia with a main diversity center in Australia.",
+        "question": "How many species are included in the Kanieae tribe?",
+        "answerable": false,
+        "answer": "The Kanieae tribe includes around 150-200 species."
+    },
+    {
+        "title": "List of named storms (B)",
+        "context": "Storms are named for historical reasons to avoid confusion when communicating with the public, as more than one storm can exist at a time. Names are drawn in order from predetermined lists. For tropical cyclones, names are assigned when a system has one-, three-, or ten-minute winds of more than 65 km/h (40 mph). Standards, however, vary from basin to basin. For example, some tropical depressions are named in the Western Pacific, while within the Australian and Southern Pacific regions, the naming of tropical cyclones are delayed until they have gale-force winds occurring more than halfway around the storm center.",
+        "question": "At what wind speed are tropical cyclones typically assigned names?",
+        "answerable": true,
+        "answer": "65 km/h (40 mph)"
+    },
+    {
+        "title": "List of named storms (B)",
+        "context": "Storms are named for historical reasons to avoid confusion when communicating with the public, as more than one storm can exist at a time. Names are drawn in order from predetermined lists. For tropical cyclones, names are assigned when a system has one-, three-, or ten-minute winds of more than 65 km/h (40 mph). Standards, however, vary from basin to basin. For example, some tropical depressions are named in the Western Pacific, while within the Australian and Southern Pacific regions, the naming of tropical cyclones are delayed until they have gale-force winds occurring more than halfway around the storm center.",
+        "question": "What is the most common letter used for naming storms?",
+        "answerable": false,
+        "answer": "W"
+    },
+    {
+        "title": "Tagetes minuta",
+        "context": "Tagetes minuta is a tall upright marigold plant from the genus Tagetes, with small flowers, native to the southern half of South America.[2] Since Spanish colonization, it has been introduced around the world, and has become naturalized in Europe, Asia, Australasia, North America, and Africa.[2] Tagetes minuta has numerous local names that vary by region. In the Andes it is known as Huacatay or Wacatay, and in other regions it is common as chinchilla, chiquilla, chilca, zuico, suico, or anisillo.[3] Other names include muster John Henry,[4] southern marigold,[5] khakibos, stinking roger,[6] wild marigold,[2] and black mint. It is called by the Quechua terms huacatay in Peru[7] or wakataya in Bolivia.[8] It is used as a culinary herb in Peru, Ecuador, and parts of Chile and Bolivia. It is commonly sold in Latin grocery stores in a bottled, paste format as black mint paste.",
+        "question": "Where is Tagetes minuta native to?",
+        "answerable": true,
+        "answer": "The southern half of South America."
+    },
+    {
+        "title": "Tagetes minuta",
+        "context": "Tagetes minuta is a tall upright marigold plant from the genus Tagetes, with small flowers, native to the southern half of South America.[2] Since Spanish colonization, it has been introduced around the world, and has become naturalized in Europe, Asia, Australasia, North America, and Africa.[2] Tagetes minuta has numerous local names that vary by region. In the Andes it is known as Huacatay or Wacatay, and in other regions it is common as chinchilla, chiquilla, chilca, zuico, suico, or anisillo.[3] Other names include muster John Henry,[4] southern marigold,[5] khakibos, stinking roger,[6] wild marigold,[2] and black mint. It is called by the Quechua terms huacatay in Peru[7] or wakataya in Bolivia.[8] It is used as a culinary herb in Peru, Ecuador, and parts of Chile and Bolivia. It is commonly sold in Latin grocery stores in a bottled, paste format as black mint paste.",
+        "question": "What is the average height of a Tagetes minuta plant?",
+        "answerable": false,
+        "answer": "The average height of a Tagetes minuta plant is approximately 1-2 feet (30-60 cm)."
+    },
+    {
+        "title": "George Spencer (rugby)",
+        "context": "George Spencer (1878–1950) was a New Zealand rugby football player who represented New Zealand in both rugby union and rugby league. His brother, John, also was a dual-international.",
+        "question": "In which two rugby codes did George Spencer represent New Zealand?",
+        "answerable": true,
+        "answer": "Rugby Union and Rugby League."
+    },
+    {
+        "title": "George Spencer (rugby)",
+        "context": "George Spencer (1878–1950) was a New Zealand rugby football player who represented New Zealand in both rugby union and rugby league. His brother, John, also was a dual-international.",
+        "question": "How many international matches did George Spencer play?",
+        "answerable": false,
+        "answer": "We cannot determine the exact number of international matches George Spencer played based on the provided information."
+    },
+    {
+        "title": "KalPa",
+        "context": "Kalevan Pallo (KalPa) is a professional ice hockey team which competes in the Finnish Liiga. They play in Kuopio, Finland at the Olvi Areena.",
+        "question": "In which city does KalPa play their home games?",
+        "answerable": true,
+        "answer": "Kuopio"
+    },
+    {
+        "title": "KalPa",
+        "context": "Kalevan Pallo (KalPa) is a professional ice hockey team which competes in the Finnish Liiga. They play in Kuopio, Finland at the Olvi Areena.",
+        "question": "Who is the current captain of KalPa?",
+        "answerable": false,
+        "answer": "Mikko Kuivonen"
+    },
+    {
+        "title": "Fons van der Stee",
+        "context": "Alphonsus Petrus Johannes Mathildus Maria \"Fons\" van der Stee (30 July 1928 – 9 September 1999) was a Dutch politician of the defunct Catholic People's Party (KVP) and later the Christian Democratic Appeal (CDA) party and economist.[1] Van der Stee applied at the Radboud University Nijmegen in June 1950 majoring in Tax law and obtaining a Bachelor of Laws degree in June 1952 before graduating with a Master of Laws degree on 29 February 1956. Van der Stee worked as a tax advisor in Arnhem from May 1956 until July 1971. Van der Stee served as Chairman of the Catholic People's Party from 30 March 1968 until 14 July 1971. Van der Stee was elected as a Member of the Senate after the Senate election of 1971, taking office on 11 May 1971. After the election of 1971 Van der Stee was appointed as State Secretary for Finance in the Cabinet Biesheuvel I, taking office on 14 July 1971. The Cabinet Biesheuvel I fell just one year later on 19 July 1972 and continued to serve in a demissionary capacity until it was replaced by the caretaker Cabinet Biesheuvel II with Van der Stee continuing as State Secretary for Finance, taking office on 9 August 1972. Van der Stee was elected as a Member of the House of Representatives after the election of 1972, taking office on 12 December 1972 but he was still serving in the cabinet and because of dualism customs in the constitutional convention of Dutch politics he couldn't serve a dual mandate he subsequently resigned as State Secretary for Finance on 12 March 1973. Following the cabinet formation of 1972 Van der Stee was again appointed as State Secretary for Finance in the Cabinet Den Uyl, taking office on 11 May 1973. Van der Stee was appointed as Minister of Agriculture and Fisheries following the resignation of Tiemen Brouwer, taking office on 1 November 1973. The Cabinet Den Uyl fell on 22 March 1977 after four years of tensions in the coalition and continued to serve in a demissionary capacity. After the election of 1977 Van der Stee returned as a Member of the House of Representatives, taking office on 8 June 1977 but again because of the dualism customs in Dutch politics he subsequently resigned as Member of the House of Representatives on 8 September 1977. Following the cabinet formation of 1977 Van der Stee remained Minister of Agriculture and Fisheries and was also appointed as Minister for Netherlands Antilles Affairs in the Cabinet Van Agt–Wiegel, taking office on 19 December 1977. Van der Stee was appointed as Minister of Finance following the resignation of Frans Andriessen, taking office on 5 March 1980. In December 1980 Van der Stee announced that he wouldn't stand for the election of 1981. Following the cabinet formation of 1981 Van der Stee continued as Minister of Finance in the Cabinet Van Agt II, taking office on 11 September 1981. The Cabinet Van Agt II fell just seven months into its term on 12 May 1982 and continued to serve in a demissionary capacity until it was replaced by the caretaker Cabinet Van Agt III with Van der Stee remaining as Minister of Finance on 29 May 1982. In June 1982 Van der Stee announced his retirement from national politics and that he wouldn't stand for the election of 1982. The Cabinet Van Agt III was replaced by the Cabinet Lubbers I following the cabinet formation of 1982 on 4 November 1982. Van der Stee retired after spending 14 years in national politics and became active in the private sector and public sector and occupied numerous seats as a corporate director and nonprofit director on several boards of directors and supervisory boards (General Bank of the Netherlands, Tulip Computers, Apollo Vredestein and the HMC Westeinde Hospital).",
+        "question": "What was Fons van der Stee's last position in the Dutch government before retiring?",
+        "answerable": true,
+        "answer": "Minister of Finance"
+    },
+    {
+        "title": "Fons van der Stee",
+        "context": "Alphonsus Petrus Johannes Mathildus Maria \"Fons\" van der Stee (30 July 1928 – 9 September 1999) was a Dutch politician of the defunct Catholic People's Party (KVP) and later the Christian Democratic Appeal (CDA) party and economist.[1] Van der Stee applied at the Radboud University Nijmegen in June 1950 majoring in Tax law and obtaining a Bachelor of Laws degree in June 1952 before graduating with a Master of Laws degree on 29 February 1956. Van der Stee worked as a tax advisor in Arnhem from May 1956 until July 1971. Van der Stee served as Chairman of the Catholic People's Party from 30 March 1968 until 14 July 1971. Van der Stee was elected as a Member of the Senate after the Senate election of 1971, taking office on 11 May 1971. After the election of 1971 Van der Stee was appointed as State Secretary for Finance in the Cabinet Biesheuvel I, taking office on 14 July 1971. The Cabinet Biesheuvel I fell just one year later on 19 July 1972 and continued to serve in a demissionary capacity until it was replaced by the caretaker Cabinet Biesheuvel II with Van der Stee continuing as State Secretary for Finance, taking office on 9 August 1972. Van der Stee was elected as a Member of the House of Representatives after the election of 1972, taking office on 12 December 1972 but he was still serving in the cabinet and because of dualism customs in the constitutional convention of Dutch politics he couldn't serve a dual mandate he subsequently resigned as State Secretary for Finance on 12 March 1973. Following the cabinet formation of 1972 Van der Stee was again appointed as State Secretary for Finance in the Cabinet Den Uyl, taking office on 11 May 1973. Van der Stee was appointed as Minister of Agriculture and Fisheries following the resignation of Tiemen Brouwer, taking office on 1 November 1973. The Cabinet Den Uyl fell on 22 March 1977 after four years of tensions in the coalition and continued to serve in a demissionary capacity. After the election of 1977 Van der Stee returned as a Member of the House of Representatives, taking office on 8 June 1977 but again because of the dualism customs in Dutch politics he subsequently resigned as Member of the House of Representatives on 8 September 1977. Following the cabinet formation of 1977 Van der Stee remained Minister of Agriculture and Fisheries and was also appointed as Minister for Netherlands Antilles Affairs in the Cabinet Van Agt–Wiegel, taking office on 19 December 1977. Van der Stee was appointed as Minister of Finance following the resignation of Frans Andriessen, taking office on 5 March 1980. In December 1980 Van der Stee announced that he wouldn't stand for the election of 1981. Following the cabinet formation of 1981 Van der Stee continued as Minister of Finance in the Cabinet Van Agt II, taking office on 11 September 1981. The Cabinet Van Agt II fell just seven months into its term on 12 May 1982 and continued to serve in a demissionary capacity until it was replaced by the caretaker Cabinet Van Agt III with Van der Stee remaining as Minister of Finance on 29 May 1982. In June 1982 Van der Stee announced his retirement from national politics and that he wouldn't stand for the election of 1982. The Cabinet Van Agt III was replaced by the Cabinet Lubbers I following the cabinet formation of 1982 on 4 November 1982. Van der Stee retired after spending 14 years in national politics and became active in the private sector and public sector and occupied numerous seats as a corporate director and nonprofit director on several boards of directors and supervisory boards (General Bank of the Netherlands, Tulip Computers, Apollo Vredestein and the HMC Westeinde Hospital).",
+        "question": "What specific policies did Fons van der Stee implement as Minister of Finance?",
+        "answerable": false,
+        "answer": "The answer is \"None\" because the text does not mention any specific policies implemented by Fons van der Stee as Minister of Finance. The text only provides a chronological account of his career and positions held, but does not provide information on the policies he implemented during his tenure as Minister of Finance."
+    },
+    {
+        "title": "Areva (moth)",
+        "context": "Areva is a genus of moths in the subfamily Arctiinae.",
+        "question": "To which subfamily does the genus Areva belong?",
+        "answerable": true,
+        "answer": "Arctiinae."
+    },
+    {
+        "title": "Areva (moth)",
+        "context": "Areva is a genus of moths in the subfamily Arctiinae.",
+        "question": "How many species are in the Areva genus?",
+        "answerable": false,
+        "answer": "There are approximately 20-30 species in the Areva genus."
+    },
+    {
+        "title": "Amanda Doman",
+        "context": "Amanda Doman (born 24 October 1977 in Gladstone, Queensland) is a softball player from Australia, who won a silver medal at the 2004 Summer Olympics.[1]",
+        "question": "In which Olympic Games did Amanda Doman win a silver medal?",
+        "answerable": true,
+        "answer": "The Olympic Games where Amanda Doman won a silver medal were the 2004 Summer Olympics."
+    },
+    {
+        "title": "Amanda Doman",
+        "context": "Amanda Doman (born 24 October 1977 in Gladstone, Queensland) is a softball player from Australia, who won a silver medal at the 2004 Summer Olympics.[1]",
+        "question": "What position did Amanda Doman play in softball?",
+        "answerable": false,
+        "answer": "Unfortunately, the provided context does not explicitly state Amanda Doman's position in softball. However, it does mention that she won a silver medal at the 2004 Summer Olympics, which suggests that she was part of the Australian softball team. Without further information, we cannot determine her specific position in softball."
+    },
+    {
+        "title": "Kalpataru (director)",
+        "context": "Kalpataru (born in 1937 as K Parvez) was an Indian film director best known for several hit movies such as Ghar Dwaar, Khoon Ka Badla Khoon, Ghar Ghar Ki Kahani and Bade Ghar Ki Beti.He was known for his melodramatic family dramas.[1][2] He died at a hospital in Santacruz West on 17 May 2015 at the age of 78. He is survived by his wife and two daughters.[3]",
+        "question": "What type of films was Kalpataru known for directing?",
+        "answerable": true,
+        "answer": "Melodramatic family dramas."
+    },
+    {
+        "title": "Kalpataru (director)",
+        "context": "Kalpataru (born in 1937 as K Parvez) was an Indian film director best known for several hit movies such as Ghar Dwaar, Khoon Ka Badla Khoon, Ghar Ghar Ki Kahani and Bade Ghar Ki Beti.He was known for his melodramatic family dramas.[1][2] He died at a hospital in Santacruz West on 17 May 2015 at the age of 78. He is survived by his wife and two daughters.[3]",
+        "question": "How many films did Kalpataru direct in his career?",
+        "answerable": false,
+        "answer": "4"
+    },
+    {
+        "title": "Erismatopterus",
+        "context": "Erismatopterus is an extinct genus of percopsiform fish which lived during the early to middle Eocene epoch and containing the single species Erismatopterus levatus. A report of the genus in sediments of similar age in Washington State have been discredited. Erismatopterus is treated as part of the family Percopsidae, but formerly was the type genus of the extinct family Erismatopteridae. The genus is closely related to Amphiplaga of related lake sediments. Shoaling behavior has been reported from a mass mortality fossil of E. levatus and attributed as a predator-evasion response behavior.",
+        "question": "During which geological epoch did Erismatopterus live?",
+        "answerable": true,
+        "answer": "The answer is the Eocene epoch."
+    },
+    {
+        "title": "Erismatopterus",
+        "context": "Erismatopterus is an extinct genus of percopsiform fish which lived during the early to middle Eocene epoch and containing the single species Erismatopterus levatus. A report of the genus in sediments of similar age in Washington State have been discredited. Erismatopterus is treated as part of the family Percopsidae, but formerly was the type genus of the extinct family Erismatopteridae. The genus is closely related to Amphiplaga of related lake sediments. Shoaling behavior has been reported from a mass mortality fossil of E. levatus and attributed as a predator-evasion response behavior.",
+        "question": "What was the average size of Erismatopterus levatus?",
+        "answerable": false,
+        "answer": "Unfortunately, it is not possible to determine the average size of Erismatopterus levatus based on the available contexts."
+    },
+    {
+        "title": "Ocean Kinetics",
+        "context": "Ocean Kinetics is a private limited engineering company based in Lerwick, Scotland. The company was established by John Henderson in 1992 to specialise in marine engineering solutions.",
+        "question": "Who founded Ocean Kinetics and in what year?",
+        "answerable": true,
+        "answer": "John Henderson founded Ocean Kinetics in 1992."
+    },
+    {
+        "title": "Ocean Kinetics",
+        "context": "Ocean Kinetics is a private limited engineering company based in Lerwick, Scotland. The company was established by John Henderson in 1992 to specialise in marine engineering solutions.",
+        "question": "How many employees does Ocean Kinetics currently have?",
+        "answerable": false,
+        "answer": "The answer is unknown, as the provided contexts do not contain the necessary information."
+    },
+    {
+        "title": "Doctor in Clover",
+        "context": "Doctor in Clover is a British comedy film released in 1966, starring Leslie Phillips. The film is based on the novel of the same title by Richard Gordon. It is the sixth of the seven films in the Doctor series. The film was released in the US as Carnaby, MD. British singer Kiki Dee sang the film's title track.",
+        "question": "Who starred in the film Doctor in Clover?",
+        "answerable": true,
+        "answer": "Leslie Phillips."
+    },
+    {
+        "title": "Doctor in Clover",
+        "context": "Doctor in Clover is a British comedy film released in 1966, starring Leslie Phillips. The film is based on the novel of the same title by Richard Gordon. It is the sixth of the seven films in the Doctor series. The film was released in the US as Carnaby, MD. British singer Kiki Dee sang the film's title track.",
+        "question": "What was the box office performance of Doctor in Clover?",
+        "answerable": false,
+        "answer": "The exact box office performance of Doctor in Clover is unknown, but it likely performed reasonably well given its popularity as part of the Doctor series and the fame of Kiki Dee."
+    },
+    {
+        "title": "Ludi Boeken",
+        "context": "Ludi Boeken (born 1951 in Amsterdam) is a Dutch film producer, director and actor.[1] His daughter, Julia Levy-Boeken, is an actress.",
+        "question": "What is Ludi Boeken's daughter's name and profession?",
+        "answerable": true,
+        "answer": "Julia Levy-Boeken is an actress."
+    },
+    {
+        "title": "Ludi Boeken",
+        "context": "Ludi Boeken (born 1951 in Amsterdam) is a Dutch film producer, director and actor.[1] His daughter, Julia Levy-Boeken, is an actress.",
+        "question": "How many films has Ludi Boeken produced?",
+        "answerable": false,
+        "answer": "At least one"
+    },
+    {
+        "title": "Battle of Mansura",
+        "context": "The Battle of Mansura was fought near Mansura, Louisiana, on May 16, 1864, during the Red River Campaign of the American Civil War. A Union force defeated elements of the Confederate States Army.[1]",
+        "question": "On what date was the Battle of Mansura fought?",
+        "answerable": true,
+        "answer": "May 16, 1864."
+    },
+    {
+        "title": "Battle of Mansura",
+        "context": "The Battle of Mansura was fought near Mansura, Louisiana, on May 16, 1864, during the Red River Campaign of the American Civil War. A Union force defeated elements of the Confederate States Army.[1]",
+        "question": "How many casualties were there in the Battle of Mansura?",
+        "answerable": false,
+        "answer": "Unfortunately, I couldn't find any specific information on the number of casualties in the Battle of Mansura. If you have more context or a reliable source, I'd be happy to help you estimate the answer!"
+    },
+    {
+        "title": "Andrea D'Antonio",
+        "context": "Andrea D'Antoni (1811 – 1868) was an Italian painter of the Neoclassical period. He studied under Giuseppe Patania. One of his pupils was Pietro Volpes.[1] Some of his works are displayed in the Galleria d'Arte Moderna di Sant'Anna in Palermo. He painted a Deposition from the Cross (1852) for the church of Santissima Trinità, Petralia Sottana.",
+        "question": "Who was Andrea D'Antonio's teacher?",
+        "answerable": true,
+        "answer": "Giuseppe Patania."
+    },
+    {
+        "title": "Andrea D'Antonio",
+        "context": "Andrea D'Antoni (1811 – 1868) was an Italian painter of the Neoclassical period. He studied under Giuseppe Patania. One of his pupils was Pietro Volpes.[1] Some of his works are displayed in the Galleria d'Arte Moderna di Sant'Anna in Palermo. He painted a Deposition from the Cross (1852) for the church of Santissima Trinità, Petralia Sottana.",
+        "question": "How many paintings did Andrea D'Antonio create in his lifetime?",
+        "answerable": false,
+        "answer": "Unfortunately, there is no specific information available that answers this question."
+    },
+    {
+        "title": "NVS-01",
+        "context": "NVS-01 is the first in the series of second generation navigation satellite and the ninth satellite in the Navigation with Indian Constellation (NavIC), with an alternate name of, IRNSS-1J. It will augment the existing satellite and bolster the capability of the NavIC constellation by adding more robustness and new features.[3] ISRO already launched IRNSS 1A, 1B, 1C, 1D, 1E, 1F, 1G, 1H and 1I. The satellite is intended to replace IRNSS-1G and augment the constellation of geosynchronous navigation satellites after IRNSS-1I.[4]",
+        "question": "Which satellite is NVS-01 intended to replace?",
+        "answerable": true,
+        "answer": "IRNSS-1G"
+    },
+    {
+        "title": "NVS-01",
+        "context": "NVS-01 is the first in the series of second generation navigation satellite and the ninth satellite in the Navigation with Indian Constellation (NavIC), with an alternate name of, IRNSS-1J. It will augment the existing satellite and bolster the capability of the NavIC constellation by adding more robustness and new features.[3] ISRO already launched IRNSS 1A, 1B, 1C, 1D, 1E, 1F, 1G, 1H and 1I. The satellite is intended to replace IRNSS-1G and augment the constellation of geosynchronous navigation satellites after IRNSS-1I.[4]",
+        "question": "What is the expected lifespan of the NVS-01 satellite?",
+        "answerable": false,
+        "answer": "Unfortunately, the provided contexts do not mention the expected lifespan of the NVS-01 satellite. It only provides information about its purpose and position within the NavIC constellation. To answer this question, we would need additional context or specific data from ISRO or other reliable sources."
+    },
+    {
+        "title": "Meridian Mets",
+        "context": "The Meridian Mets were a Mississippi State League (1921) and Cotton States League (1922–1923; 1925–1929) baseball team based in Meridian, Mississippi, United States. Multiple major leaguers played for the team.[1]",
+        "question": "In which leagues did the Meridian Mets play?",
+        "answerable": true,
+        "answer": "The Meridian Mets played in the Mississippi State League (1921) and the Cotton States League (1922–1923; 1925–1929)."
+    },
+    {
+        "title": "Meridian Mets",
+        "context": "The Meridian Mets were a Mississippi State League (1921) and Cotton States League (1922–1923; 1925–1929) baseball team based in Meridian, Mississippi, United States. Multiple major leaguers played for the team.[1]",
+        "question": "Who was the most famous player to play for the Meridian Mets?",
+        "answerable": false,
+        "answer": "Unfortunately, I couldn't find any specific information on the most famous player to play for the Meridian Mets. However, it's likely that one or more of the players who went on to have successful careers in Major League Baseball played for the team at some point."
+    },
+    {
+        "title": "NWA World Women's Tag Team Championship",
+        "context": "The NWA World Women's Tag Team Championship is a women's professional wrestling tag team championship defended in member promotions of the National Wrestling Alliance (NWA).",
+        "question": "In which organization is the NWA World Women's Tag Team Championship defended?",
+        "answerable": true,
+        "answer": "The National Wrestling Alliance (NWA)."
+    },
+    {
+        "title": "NWA World Women's Tag Team Championship",
+        "context": "The NWA World Women's Tag Team Championship is a women's professional wrestling tag team championship defended in member promotions of the National Wrestling Alliance (NWA).",
+        "question": "Who are the current holders of the NWA World Women's Tag Team Championship?",
+        "answerable": false,
+        "answer": "The current holders of the NWA World Women's Tag Team Championship are [insert current champions' names]."
+    },
+    {
+        "title": "Dusan Benda",
+        "context": "Dusan Benda is a Slovak professional ice hockey player who played with HC Slovan Bratislava in the Slovak Extraliga.[1]",
+        "question": "Which team did Dusan Benda play for in the Slovak Extraliga?",
+        "answerable": true,
+        "answer": "HC Slovan Bratislava"
+    },
+    {
+        "title": "Dusan Benda",
+        "context": "Dusan Benda is a Slovak professional ice hockey player who played with HC Slovan Bratislava in the Slovak Extraliga.[1]",
+        "question": "How many seasons did Dusan Benda play in the Slovak Extraliga?",
+        "answerable": false,
+        "answer": "14"
+    },
+    {
+        "title": "Thyrocopa alterna",
+        "context": "Thyrocopa alterna is a moth belonging to the family Xyloryctidae. It was first described by Lord Walsingham in 1907. It is endemic to the Hawaiian islands of Maui and Hawaii. The length of the forewings is 8–15 mm. Adults are on wing at least from May to November. It is very similar to Thyrocopa abusa, but the male antennae are surrounded by cilia, and the male genitalia are without a dorsal ridge. Individuals from Maui generally are smaller than those from the island of Hawaii.",
+        "question": "On which Hawaiian islands is Thyrocopa alterna endemic?",
+        "answerable": true,
+        "answer": "Maui and Hawaii."
+    },
+    {
+        "title": "Thyrocopa alterna",
+        "context": "Thyrocopa alterna is a moth belonging to the family Xyloryctidae. It was first described by Lord Walsingham in 1907. It is endemic to the Hawaiian islands of Maui and Hawaii. The length of the forewings is 8–15 mm. Adults are on wing at least from May to November. It is very similar to Thyrocopa abusa, but the male antennae are surrounded by cilia, and the male genitalia are without a dorsal ridge. Individuals from Maui generally are smaller than those from the island of Hawaii.",
+        "question": "What is the lifespan of a Thyrocopa alterna moth?",
+        "answerable": false,
+        "answer": "The lifespan of a Thyrocopa alterna moth is likely several months to a year or more, based on the duration of the adult stage and the absence of direct information about its lifespan."
+    },
+    {
+        "title": "Acantharachne",
+        "context": "Acantharachne is a genus of African orb-weaver spiders first described by Albert Tullgren in 1910.[2]",
+        "question": "Who first described the Acantharachne genus?",
+        "answerable": true,
+        "answer": "Albert Tullgren."
+    },
+    {
+        "title": "Acantharachne",
+        "context": "Acantharachne is a genus of African orb-weaver spiders first described by Albert Tullgren in 1910.[2]",
+        "question": "How many species are in the Acantharachne genus?",
+        "answerable": false,
+        "answer": "14"
+    },
+    {
+        "title": "George Olliver",
+        "context": "George Olliver is a Canadian music artist. A singer and organist, he was the lead singer for Mandala in the 1960s. He also founded the late 1960s, early 1970s jazz rock group Natural Gas.",
+        "question": "What musical group did George Olliver found in the late 1960s?",
+        "answerable": true,
+        "answer": "Natural Gas."
+    },
+    {
+        "title": "George Olliver",
+        "context": "George Olliver is a Canadian music artist. A singer and organist, he was the lead singer for Mandala in the 1960s. He also founded the late 1960s, early 1970s jazz rock group Natural Gas.",
+        "question": "How many albums did George Olliver release as a solo artist?",
+        "answerable": false,
+        "answer": "Unfortunately, I couldn't find the exact number of albums George Olliver released as a solo artist."
+    },
+    {
+        "title": "ADCY10",
+        "context": "Adenylyl cyclase 10 also known as ADCY10 is an enzyme that, in humans, is encoded by the ADCY10 gene.[5]",
+        "question": "What is the full name of the enzyme encoded by the ADCY10 gene?",
+        "answerable": true,
+        "answer": "Adenylyl cyclase 10"
+    },
+    {
+        "title": "ADCY10",
+        "context": "Adenylyl cyclase 10 also known as ADCY10 is an enzyme that, in humans, is encoded by the ADCY10 gene.[5]",
+        "question": "What is the specific function of the ADCY10 enzyme in the human body?",
+        "answerable": false,
+        "answer": "The specific function of the ADCY10 enzyme is to catalyze the conversion of ATP into cyclic AMP (cAMP), which is an important second messenger molecule involved in various cellular signaling pathways."
+    },
+    {
+        "title": "1989 Turkish Cup final",
+        "context": "The 1989 Turkish Cup final was a football match played over two legs in June 1989. It was the final and deciding match of the 1988–89 Turkish Cup. Les Ferdinand scored the winning goal to win Besiktas the cup.[1][2][3][4]",
+        "question": "Who scored the winning goal in the 1989 Turkish Cup final?",
+        "answerable": true,
+        "answer": "Les Ferdinand."
+    },
+    {
+        "title": "1989 Turkish Cup final",
+        "context": "The 1989 Turkish Cup final was a football match played over two legs in June 1989. It was the final and deciding match of the 1988–89 Turkish Cup. Les Ferdinand scored the winning goal to win Besiktas the cup.[1][2][3][4]",
+        "question": "What was the final score of the 1989 Turkish Cup final?",
+        "answerable": false,
+        "answer": "Besiktas 1, Opponent 0 (since Les Ferdinand scored the winning goal)."
+    },
+    {
+        "title": "Invisible (Alison Moyet song)",
+        "context": "\"Invisible\" is a song by English singer Alison Moyet, written by Lamont Dozier (of the songwriting team Holland–Dozier–Holland) for her debut album, Alf. Released in November 1984, \"Invisible\" peaked at No. 21 on the UK Singles Chart and became Moyet's highest-charting solo single in the United States, peaking at No. 31 on the Billboard Hot 100. The song reached the top 10 in Ireland and New Zealand, peaking at No. 6 and No. 4, respectively. The single's B-side is the Marvin Gaye song \"Hitch Hike\", which has backing from Darts. In interviews for her 2017 tour, Moyet said she would not be performing the song again. She explained that it was not a slam against the song itself, but that the lyrics and message of the song, written more than 30 years earlier, did not resonate with her any more.[2]",
+        "question": "Who wrote the song \"Invisible\" for Alison Moyet?",
+        "answerable": true,
+        "answer": "Lamont Dozier"
+    },
+    {
+        "title": "Invisible (Alison Moyet song)",
+        "context": "\"Invisible\" is a song by English singer Alison Moyet, written by Lamont Dozier (of the songwriting team Holland–Dozier–Holland) for her debut album, Alf. Released in November 1984, \"Invisible\" peaked at No. 21 on the UK Singles Chart and became Moyet's highest-charting solo single in the United States, peaking at No. 31 on the Billboard Hot 100. The song reached the top 10 in Ireland and New Zealand, peaking at No. 6 and No. 4, respectively. The single's B-side is the Marvin Gaye song \"Hitch Hike\", which has backing from Darts. In interviews for her 2017 tour, Moyet said she would not be performing the song again. She explained that it was not a slam against the song itself, but that the lyrics and message of the song, written more than 30 years earlier, did not resonate with her any more.[2]",
+        "question": "What inspired Lamont Dozier to write \"Invisible\"?",
+        "answerable": false,
+        "answer": "It seems that Lamont Dozier was inspired to write \"Invisible\" as part of his efforts to create a successful single for Alison Moyet's debut album Alf, which was released in November 1984."
+    },
+    {
+        "title": "Grim Reaper (band)",
+        "context": "Grim Reaper were a British heavy metal band from the new wave of British heavy metal era. The band was formed in 1979 in Droitwich, England, by guitarist Nick Bowcott,[1] and there have been numerous lineup changes over the years, with frontman Steve Grimmett being the longest running member, from 1982 to 1988, then 2006 until his death in 2022. They are best known for several of their 1980s songs, including the respective title tracks from their first three albums: See You in Hell (1983), Fear No Evil (1985) and Rock You to Hell (1987); each of those songs gained notoriety in the 1990s for appearing on Beavis and Butt-Head.[2] After disbanding in 1988, the band reformed in 2006 around Grimmett, and due to legal issues surrounding the rights to the original band name, they went by Steve Grimmett's Grim Reaper. Two albums under that name – Walking in the Shadows (2016) and At the Gates (2019) – were released before Grimmett died in 2022, after which the band disbanded again.",
+        "question": "Who was the longest-running member of Grim Reaper?",
+        "answerable": true,
+        "answer": "Steve Grimmett was the longest-running member of Grim Reaper."
+    },
+    {
+        "title": "Grim Reaper (band)",
+        "context": "Grim Reaper were a British heavy metal band from the new wave of British heavy metal era. The band was formed in 1979 in Droitwich, England, by guitarist Nick Bowcott,[1] and there have been numerous lineup changes over the years, with frontman Steve Grimmett being the longest running member, from 1982 to 1988, then 2006 until his death in 2022. They are best known for several of their 1980s songs, including the respective title tracks from their first three albums: See You in Hell (1983), Fear No Evil (1985) and Rock You to Hell (1987); each of those songs gained notoriety in the 1990s for appearing on Beavis and Butt-Head.[2] After disbanding in 1988, the band reformed in 2006 around Grimmett, and due to legal issues surrounding the rights to the original band name, they went by Steve Grimmett's Grim Reaper. Two albums under that name – Walking in the Shadows (2016) and At the Gates (2019) – were released before Grimmett died in 2022, after which the band disbanded again.",
+        "question": "What was Grim Reaper's highest-charting single?",
+        "answerable": false,
+        "answer": "Rock You to Hell"
+    },
+    {
+        "title": "Rick Adair",
+        "context": "Michael Richard Adair (born January 19, 1958) is an American former pitching coach for the Baltimore Orioles and a former minor league baseball player. He was succeeded as pitching coach by Bill Castro.",
+        "question": "For which Major League Baseball team was Rick Adair a pitching coach?",
+        "answerable": true,
+        "answer": "The Baltimore Orioles."
+    },
+    {
+        "title": "Rick Adair",
+        "context": "Michael Richard Adair (born January 19, 1958) is an American former pitching coach for the Baltimore Orioles and a former minor league baseball player. He was succeeded as pitching coach by Bill Castro.",
+        "question": "How many years did Rick Adair play in the minor leagues?",
+        "answerable": false,
+        "answer": "Unfortunately, we cannot determine the exact number of years Rick Adair played in the minor leagues based on the provided context."
+    },
+    {
+        "title": "Karl Jakobs",
+        "context": "Karl Jakobs is Professor of Particle Physics at the University of Freiburg, Germany.[1] He was the Spokesperson (scientific head) of the ATLAS Collaboration at the Large Hadron Collider at CERN from 2017 to 2021.[2]",
+        "question": "What position did Karl Jakobs hold at the ATLAS Collaboration from 2017 to 2021?",
+        "answerable": true,
+        "answer": "He was the Spokesperson (scientific head) of the ATLAS Collaboration."
+    },
+    {
+        "title": "Karl Jakobs",
+        "context": "Karl Jakobs is Professor of Particle Physics at the University of Freiburg, Germany.[1] He was the Spokesperson (scientific head) of the ATLAS Collaboration at the Large Hadron Collider at CERN from 2017 to 2021.[2]",
+        "question": "What specific research contributions has Karl Jakobs made in particle physics?",
+        "answerable": false,
+        "answer": "Karl Jakobs' specific research contributions in particle physics likely include his work as the Spokesperson of the ATLAS Collaboration, where he oversaw the analysis of data collected by the Large Hadron Collider. His expertise may have been focused on Higgs boson research, dark matter detection, or advancements in collider technology."
+    },
+    {
+        "title": "2009 Rexall Edmonton Indy",
+        "context": "The 2009 Rexall Edmonton Indy was the eleventh round of the 2009 IndyCar Series season, and was held on July 26, 2009 at the 1.973-mile (3.175 km) Rexall Speedway in Edmonton, Alberta, Canada.",
+        "question": "When and where was the 2009 Rexall Edmonton Indy held?",
+        "answerable": true,
+        "answer": "The 2009 Rexall Edmonton Indy was held on July 26, 2009 at the Rexall Speedway in Edmonton, Alberta, Canada."
+    },
+    {
+        "title": "2009 Rexall Edmonton Indy",
+        "context": "The 2009 Rexall Edmonton Indy was the eleventh round of the 2009 IndyCar Series season, and was held on July 26, 2009 at the 1.973-mile (3.175 km) Rexall Speedway in Edmonton, Alberta, Canada.",
+        "question": "Who won the 2009 Rexall Edmonton Indy?",
+        "answerable": false,
+        "answer": "Dario Franchitti."
+    },
+    {
+        "title": "Kathy Lueders",
+        "context": "Kathryn Lueders (pronounced \"Leaders\") is an American engineer and business manager. Lueders has led NASA's human spaceflight program as the Associate Administrator of the Human Exploration and Operations (HEO) Mission Directorate.[1][2][3] She became the first woman to head human spaceflight.[4] She was the program manager for NASA's Commercial Crew Program and oversaw the return of human spaceflight capabilities to NASA.[5][6] She currently works at SpaceX as Starbase General Manager.[7]",
+        "question": "What is Kathy Lueders' current job position?",
+        "answerable": true,
+        "answer": "Starbase General Manager"
+    },
+    {
+        "title": "Kathy Lueders",
+        "context": "Kathryn Lueders (pronounced \"Leaders\") is an American engineer and business manager. Lueders has led NASA's human spaceflight program as the Associate Administrator of the Human Exploration and Operations (HEO) Mission Directorate.[1][2][3] She became the first woman to head human spaceflight.[4] She was the program manager for NASA's Commercial Crew Program and oversaw the return of human spaceflight capabilities to NASA.[5][6] She currently works at SpaceX as Starbase General Manager.[7]",
+        "question": "What specific projects did Kathy Lueders work on during her time at NASA?",
+        "answerable": false,
+        "answer": "Developing and implementing commercial crew vehicles, such as SpaceX's Dragon spacecraft, and managing the integration of these vehicles into NASA's overall human spaceflight program."
+    },
+    {
+        "title": "Nuclear receptor coactivator 3",
+        "context": "The nuclear receptor coactivator 3 also known as NCOA3 is a protein that, in humans, is encoded by the NCOA3 gene.[5][6] NCOA3 is also frequently called 'amplified in breast 1' (AIB1), steroid receptor coactivator-3 (SRC-3), or thyroid hormone receptor activator molecule 1 (TRAM-1).",
+        "question": "What are some alternative names for the NCOA3 protein?",
+        "answerable": true,
+        "answer": "AIB1, SRC-3, TRAM-1"
+    },
+    {
+        "title": "Nuclear receptor coactivator 3",
+        "context": "The nuclear receptor coactivator 3 also known as NCOA3 is a protein that, in humans, is encoded by the NCOA3 gene.[5][6] NCOA3 is also frequently called 'amplified in breast 1' (AIB1), steroid receptor coactivator-3 (SRC-3), or thyroid hormone receptor activator molecule 1 (TRAM-1).",
+        "question": "What is the specific function of the NCOA3 protein in human cells?",
+        "answerable": false,
+        "answer": "The specific function of the NCOA3 protein in human cells is to act as a coactivator for various transcription factors, enhancing their activity and regulating gene expression."
+    },
+    {
+        "title": "List of church buildings in Indonesia",
+        "context": "These are lists of church buildings in Indonesia, based on: Completion year of the building Region Around 10.5% of Indonesia's total population are Christians, and there are approximately 76,517 churches across Indonesia.[1] This list strictly includes notable church buildings and their historic significance in Indonesian history.",
+        "question": "Approximately how many churches are there in Indonesia?",
+        "answerable": true,
+        "answer": "76,517"
+    },
+    {
+        "title": "List of church buildings in Indonesia",
+        "context": "These are lists of church buildings in Indonesia, based on: Completion year of the building Region Around 10.5% of Indonesia's total population are Christians, and there are approximately 76,517 churches across Indonesia.[1] This list strictly includes notable church buildings and their historic significance in Indonesian history.",
+        "question": "What is the oldest church building in Indonesia?",
+        "answerable": false,
+        "answer": "The Gereja Kayu Church, built in 1640 in Jakarta."
+    },
+    {
+        "title": "Duck Lake, Saskatchewan",
+        "context": "Duck Lake is a town in the boreal forest of central Saskatchewan, Canada. Its location is 88 km (55 mi) north of Saskatoon and 44 kilometres (27 mi) south of Prince Albert on Highway 11, in the Rural Municipality of Duck Lake No. 463. Immediately to the north of Duck Lake is the south block of the Nisbet Provincial Forest. The First Nations people are Cree and the band government of the Beardy's and Okemasis' Cree Nation is located here. Duck Lake was home to one of the last operating schools in the Canadian Indian residential school system, the St. Michael's Indian Residential School (Duck Lake Indian Residential School), which closed in 1996.",
+        "question": "When did the St. Michael's Indian Residential School in Duck Lake close?",
+        "answerable": true,
+        "answer": "The St. Michael's Indian Residential School in Duck Lake closed in 1996."
+    },
+    {
+        "title": "Duck Lake, Saskatchewan",
+        "context": "Duck Lake is a town in the boreal forest of central Saskatchewan, Canada. Its location is 88 km (55 mi) north of Saskatoon and 44 kilometres (27 mi) south of Prince Albert on Highway 11, in the Rural Municipality of Duck Lake No. 463. Immediately to the north of Duck Lake is the south block of the Nisbet Provincial Forest. The First Nations people are Cree and the band government of the Beardy's and Okemasis' Cree Nation is located here. Duck Lake was home to one of the last operating schools in the Canadian Indian residential school system, the St. Michael's Indian Residential School (Duck Lake Indian Residential School), which closed in 1996.",
+        "question": "What is the current population of Duck Lake?",
+        "answerable": false,
+        "answer": "Not available with the given contexts."
+    },
+    {
+        "title": "Gemini Dream",
+        "context": "\"Gemini Dream\" is a song written by Justin Hayward and John Lodge that was released by The Moody Blues on their 1981 album Long Distance Voyager and also as the lead single from the album. It reached number 12 on the US Hot 100, as well as number 1 on the Canada RPM Top 100 Singles chart. It ranked as the 28th biggest Canadian hit of 1981.",
+        "question": "Who wrote the song \"Gemini Dream\"?",
+        "answerable": true,
+        "answer": "Justin Hayward and John Lodge."
+    },
+    {
+        "title": "Gemini Dream",
+        "context": "\"Gemini Dream\" is a song written by Justin Hayward and John Lodge that was released by The Moody Blues on their 1981 album Long Distance Voyager and also as the lead single from the album. It reached number 12 on the US Hot 100, as well as number 1 on the Canada RPM Top 100 Singles chart. It ranked as the 28th biggest Canadian hit of 1981.",
+        "question": "What inspired the lyrics of \"Gemini Dream\"?",
+        "answerable": false,
+        "answer": "The lyrics of \"Gemini Dream\" were likely inspired by the songwriters' personal experiences, emotions, and observations, as well as their creative vision for the song."
+    },
+    {
+        "title": "E. S. Johnny Walker",
+        "context": "E. S. Johnny Walker (June 18, 1911 – October 8, 2000) was an American World War II veteran and politician who served two terms in the United States House of Representatives from 1965 to 1969.",
+        "question": "How many terms did E. S. Johnny Walker serve in the United States House of Representatives?",
+        "answerable": true,
+        "answer": "Two"
+    },
+    {
+        "title": "E. S. Johnny Walker",
+        "context": "E. S. Johnny Walker (June 18, 1911 – October 8, 2000) was an American World War II veteran and politician who served two terms in the United States House of Representatives from 1965 to 1969.",
+        "question": "What specific legislation did E. S. Johnny Walker sponsor during his time in Congress?",
+        "answerable": false,
+        "answer": "Unfortunately, I couldn't find any specific information on the legislation sponsored by E. S. Johnny Walker during his time in Congress. It's possible that this information is not publicly available or has been lost over time."
+    },
+    {
+        "title": "Wikivoyage",
+        "context": "Wikivoyage is a free web-based travel guide for travel destinations and travel topics written by volunteer authors. It is a sister project of Wikipedia and supported and hosted by the same non-profit Wikimedia Foundation (WMF). Wikivoyage has been called the \"Wikipedia of travel guides\".[2] The project began when editors at the German and then Italian versions of Wikitravel decided in September 2006 to move their editing activities and then current content to a new site, in accordance with the site copyright license, a procedure known as \"forking\". The resulting site went live as \"Wikivoyage\" on December 10, 2006, and was owned and operated by a German association set up for that purpose, Wikivoyage e.V. (which continues to be its representative association). Content was published under the copyleft license Creative Commons Attribution-ShareAlike. In 2012, after a long history of problems with their existing host,[3] the English-language version community of Wikitravel also decided as a community to fork their project. In a two-way move, the English Wikitravel community re-merged with Wikivoyage under the Wikivoyage brand. In addition, all Wikivoyage language versions moved their operations to be hosted by the Wikimedia Foundation, a non-profit organization hosting several of the world's largest wiki-based communities such as Wikipedia.[4][5] Following agreements by the various communities involved and the Wikimedia Foundation, the site was moved to the WMF servers in December 2012 and the whole of Wikivoyage was officially re-launched as a Wikimedia project on January 15, 2013, the day of the 12th anniversary of Wikipedia's launch.[6]",
+        "question": "When was Wikivoyage officially re-launched as a Wikimedia project?",
+        "answerable": true,
+        "answer": "January 15, 2013."
+    },
+    {
+        "title": "Wikivoyage",
+        "context": "Wikivoyage is a free web-based travel guide for travel destinations and travel topics written by volunteer authors. It is a sister project of Wikipedia and supported and hosted by the same non-profit Wikimedia Foundation (WMF). Wikivoyage has been called the \"Wikipedia of travel guides\".[2] The project began when editors at the German and then Italian versions of Wikitravel decided in September 2006 to move their editing activities and then current content to a new site, in accordance with the site copyright license, a procedure known as \"forking\". The resulting site went live as \"Wikivoyage\" on December 10, 2006, and was owned and operated by a German association set up for that purpose, Wikivoyage e.V. (which continues to be its representative association). Content was published under the copyleft license Creative Commons Attribution-ShareAlike. In 2012, after a long history of problems with their existing host,[3] the English-language version community of Wikitravel also decided as a community to fork their project. In a two-way move, the English Wikitravel community re-merged with Wikivoyage under the Wikivoyage brand. In addition, all Wikivoyage language versions moved their operations to be hosted by the Wikimedia Foundation, a non-profit organization hosting several of the world's largest wiki-based communities such as Wikipedia.[4][5] Following agreements by the various communities involved and the Wikimedia Foundation, the site was moved to the WMF servers in December 2012 and the whole of Wikivoyage was officially re-launched as a Wikimedia project on January 15, 2013, the day of the 12th anniversary of Wikipedia's launch.[6]",
+        "question": "How many active contributors does Wikivoyage currently have?",
+        "answerable": false,
+        "answer": "Unfortunately, I couldn't find any information about the current number of active contributors for Wikivoyage in the given context."
+    },
+    {
+        "title": "Dawson Walker",
+        "context": "Dawson Walker (14 March 1916 – 17 August 1973) was manager of the Scotland national football team in 1958.[1] Walker was left in charge of the players due to the Munich air disaster, in which official manager Matt Busby was seriously injured.[2][3]",
+        "question": "Why did Dawson Walker become manager of the Scotland national football team in 1958?",
+        "answerable": true,
+        "answer": "Dawson Walker became manager of the Scotland national football team in 1958 due to the injury of the official manager, Matt Busby, in the Munich air disaster."
+    },
+    {
+        "title": "Dawson Walker",
+        "context": "Dawson Walker (14 March 1916 – 17 August 1973) was manager of the Scotland national football team in 1958.[1] Walker was left in charge of the players due to the Munich air disaster, in which official manager Matt Busby was seriously injured.[2][3]",
+        "question": "What was Scotland's win-loss record under Dawson Walker's management?",
+        "answerable": false,
+        "answer": "Scotland had a win-loss record of 4-1 under Dawson Walker's management."
+    },
+    {
+        "title": "David Bednar (baseball)",
+        "context": "David Jeffrey Bednar (born October 10, 1994), nicknamed \"The Renegade\", is an American professional baseball pitcher for the Pittsburgh Pirates of Major League Baseball (MLB). The San Diego Padres selected Bednar in the 35th round of the 2016 MLB draft. He previously played in MLB for the San Diego Padres.",
+        "question": "Which team drafted David Bednar in 2016?",
+        "answerable": true,
+        "answer": "The San Diego Padres."
+    },
+    {
+        "title": "David Bednar (baseball)",
+        "context": "David Jeffrey Bednar (born October 10, 1994), nicknamed \"The Renegade\", is an American professional baseball pitcher for the Pittsburgh Pirates of Major League Baseball (MLB). The San Diego Padres selected Bednar in the 35th round of the 2016 MLB draft. He previously played in MLB for the San Diego Padres.",
+        "question": "What is David Bednar's career earned run average (ERA)?",
+        "answerable": false,
+        "answer": "Unknown"
+    },
+    {
+        "title": "Heaven or Vegas",
+        "context": "Heaven or Vegas was a 1996 movie which was a romantic drama that starred Yasmine Bleeth and Richard Grieco.",
+        "question": "Who were the stars of the 1996 movie Heaven or Vegas?",
+        "answerable": true,
+        "answer": "Yasmine Bleeth and Richard Grieco were the stars of the 1996 movie Heaven or Vegas."
+    },
+    {
+        "title": "Heaven or Vegas",
+        "context": "Heaven or Vegas was a 1996 movie which was a romantic drama that starred Yasmine Bleeth and Richard Grieco.",
+        "question": "What was the box office performance of Heaven or Vegas?",
+        "answerable": false,
+        "answer": "Unfortunately, I couldn't find any reliable sources that provide the exact box office performance of Heaven or Vegas. The movie received mixed reviews from critics and audiences, but it seems to be a relatively obscure film with limited information available about its commercial success."
+    },
+    {
+        "title": "W. H. Diddle",
+        "context": "Bill Diddel (1882–February 25, 1985) was an American amateur golfer and renowned golf course designer. He was born in Indianapolis, Indiana.[1][2][3][4] Diddel designed approximately three hundred golf courses, primarily in the Midwest, beginning with Ulen Country Club in Lebanon, Indiana. Diddel designed the golf course at Northwood Club in Dallas, Texas, which was the site of the U.S. Open in 1952. Diddel was one of the founders and a charter member of the American Society of Golf Course Architects. He was elected president of that body in 1954. Diddel was the recipient of numerous awards and recognitions, including: The Fred Waring Sportsmanship Award. The American Seniors Golf Association Hall of Honor. Indiana Golf Hall of Fame. Sagamore of The Wabash. Honorary Sergeant of Arms of the Tennessee State Senat. Diddel died February 25, 1985, in Zionsville, Indiana.",
+        "question": "How many golf courses did Bill Diddel design approximately?",
+        "answerable": true,
+        "answer": "Three hundred"
+    },
+    {
+        "title": "W. H. Diddle",
+        "context": "Bill Diddel (1882–February 25, 1985) was an American amateur golfer and renowned golf course designer. He was born in Indianapolis, Indiana.[1][2][3][4] Diddel designed approximately three hundred golf courses, primarily in the Midwest, beginning with Ulen Country Club in Lebanon, Indiana. Diddel designed the golf course at Northwood Club in Dallas, Texas, which was the site of the U.S. Open in 1952. Diddel was one of the founders and a charter member of the American Society of Golf Course Architects. He was elected president of that body in 1954. Diddel was the recipient of numerous awards and recognitions, including: The Fred Waring Sportsmanship Award. The American Seniors Golf Association Hall of Honor. Indiana Golf Hall of Fame. Sagamore of The Wabash. Honorary Sergeant of Arms of the Tennessee State Senat. Diddel died February 25, 1985, in Zionsville, Indiana.",
+        "question": "What was Bill Diddel's most famous golf course design?",
+        "answerable": false,
+        "answer": "The answer to Bill Diddel's most famous golf course design is likely the Northwood Club in Dallas, Texas, given its history as a host of the U.S. Open and Diddel's reputation as a renowned golf course designer."
+    },
+    {
+        "title": "UFC 58",
+        "context": "UFC 58: USA vs. Canada was a mixed martial arts event held by the Ultimate Fighting Championship on March 4, 2006. It was held at the Mandalay Bay Events Center on the Las Vegas Strip in Nevada, and broadcast live on pay-per-view in the United States.",
+        "question": "Where was UFC 58: USA vs. Canada held?",
+        "answerable": true,
+        "answer": "The Mandalay Bay Events Center on the Las Vegas Strip in Nevada."
+    },
+    {
+        "title": "UFC 58",
+        "context": "UFC 58: USA vs. Canada was a mixed martial arts event held by the Ultimate Fighting Championship on March 4, 2006. It was held at the Mandalay Bay Events Center on the Las Vegas Strip in Nevada, and broadcast live on pay-per-view in the United States.",
+        "question": "Who won the main event of UFC 58: USA vs. Canada?",
+        "answerable": false,
+        "answer": "Randy Couture!"
+    },
+    {
+        "title": "Survivor's Quest",
+        "context": "Survivor's Quest is a novel set in the Star Wars expanded universe, published by Del Rey on February 1, 2004. Written by Timothy Zahn, it is a sequel to Zahn's 1998 Star Wars novel Vision of the Future.",
+        "question": "Who wrote the novel Survivor's Quest?",
+        "answerable": true,
+        "answer": "Timothy Zahn."
+    },
+    {
+        "title": "Survivor's Quest",
+        "context": "Survivor's Quest is a novel set in the Star Wars expanded universe, published by Del Rey on February 1, 2004. Written by Timothy Zahn, it is a sequel to Zahn's 1998 Star Wars novel Vision of the Future.",
+        "question": "What is the plot of Survivor's Quest?",
+        "answerable": false,
+        "answer": "The plot of Survivor's Quest follows Mara Jade, a former assassin and wife of Luke Skywalker, as she navigates her new role as a Jedi Master while dealing with the aftermath of the Yuuzhan Vong War."
+    },
+    {
+        "title": "Nymphon gracile",
+        "context": "Nymphon gracile is a species of sea spider first described by William Elford Leach in 1863.[1][2] The species highly resembles other members of the genus Nymphon, and species identification from morphological traits alone is, therefore, a complex task.[3]",
+        "question": "Who first described the species Nymphon gracile?",
+        "answerable": true,
+        "answer": "William Elford Leach."
+    },
+    {
+        "title": "Nymphon gracile",
+        "context": "Nymphon gracile is a species of sea spider first described by William Elford Leach in 1863.[1][2] The species highly resembles other members of the genus Nymphon, and species identification from morphological traits alone is, therefore, a complex task.[3]",
+        "question": "What is the average lifespan of Nymphon gracile?",
+        "answerable": false,
+        "answer": "Unknown"
+    },
+    {
+        "title": "Lyncina carneola",
+        "context": "Lyncina carneola, common name the carnelian cowrie, is a species of sea snail, a cowry, a marine gastropod mollusk in the family Cypraeidae, the cowries.[1]",
+        "question": "What is the common name for Lyncina carneola?",
+        "answerable": true,
+        "answer": "The carnelian cowrie."
+    },
+    {
+        "title": "Lyncina carneola",
+        "context": "Lyncina carneola, common name the carnelian cowrie, is a species of sea snail, a cowry, a marine gastropod mollusk in the family Cypraeidae, the cowries.[1]",
+        "question": "What is the average size of a Lyncina carneola shell?",
+        "answerable": false,
+        "answer": "The average size of a Lyncina carneola shell is approximately 2-3 centimeters (0.8-1.2 inches) in length."
+    },
+    {
+        "title": "Swimming at the 2007 World Aquatics Championships – Men's 1500 metre freestyle",
+        "context": "The men's 1500 metre freestyle at the 2007 World Aquatics Championships was held on the morning of 31 March (heats) and the evening of 1 April (final) at Rod Laver Arena in Melbourne, Australia. 50 swimmers were entered in the event, of which 47 swam. The existing records at the start of the event were: World record (WR): 14:34.56, Grant Hackett (Australia), 29 July 2001, Fukuoka, Japan Championship record (CR): same.",
+        "question": "Where was the men's 1500 metre freestyle event held during the 2007 World Aquatics Championships?",
+        "answerable": true,
+        "answer": "Rod Laver Arena in Melbourne, Australia."
+    },
+    {
+        "title": "Swimming at the 2007 World Aquatics Championships – Men's 1500 metre freestyle",
+        "context": "The men's 1500 metre freestyle at the 2007 World Aquatics Championships was held on the morning of 31 March (heats) and the evening of 1 April (final) at Rod Laver Arena in Melbourne, Australia. 50 swimmers were entered in the event, of which 47 swam. The existing records at the start of the event were: World record (WR): 14:34.56, Grant Hackett (Australia), 29 July 2001, Fukuoka, Japan Championship record (CR): same.",
+        "question": "Who won the gold medal in the men's 1500 metre freestyle at the 2007 World Aquatics Championships?",
+        "answerable": false,
+        "answer": "Grant Hackett"
+    },
+    {
+        "title": "Frederick E. Goodrich",
+        "context": "Frederick Elizur Goodrich (January 15, 1843 – January 12, 1925) was an American journalist and political figure who worked for The Boston Post for 54 years.",
+        "question": "How long did Frederick E. Goodrich work for The Boston Post?",
+        "answerable": true,
+        "answer": "54 years."
+    },
+    {
+        "title": "Frederick E. Goodrich",
+        "context": "Frederick Elizur Goodrich (January 15, 1843 – January 12, 1925) was an American journalist and political figure who worked for The Boston Post for 54 years.",
+        "question": "What was Frederick E. Goodrich's most notable article during his career at The Boston Post?",
+        "answerable": false,
+        "answer": "Unfortunately, there is not enough information provided to determine Frederick E. Goodrich's most notable article during his career at The Boston Post."
+    },
+    {
+        "title": "Wunderlichioideae",
+        "context": "The Wunderlichioideae are a subfamily of flowering plants belonging to the family Asteraceae. The subfamily includes eight genera and about 24 species that are concentrated in Brazil (Wunderlichia) and Guyana (Chimantaea, Stenopadus, and Stomatochaeta), with some species in other South America countries (Hyalis and Ianthopappus) and others (Nouelia and Leucomeris) in Southeast Asia and the Himalayas.[1] Distinguishing features of the members of this subfamily are presence of styles with glabrous style branches and a deletion in the rpoB gene. Two tribes, Wunderlicheae and Hyalideae, are recognised.",
+        "question": "How many genera are included in the Wunderlichioideae subfamily?",
+        "answerable": true,
+        "answer": "Eight."
+    },
+    {
+        "title": "Wunderlichioideae",
+        "context": "The Wunderlichioideae are a subfamily of flowering plants belonging to the family Asteraceae. The subfamily includes eight genera and about 24 species that are concentrated in Brazil (Wunderlichia) and Guyana (Chimantaea, Stenopadus, and Stomatochaeta), with some species in other South America countries (Hyalis and Ianthopappus) and others (Nouelia and Leucomeris) in Southeast Asia and the Himalayas.[1] Distinguishing features of the members of this subfamily are presence of styles with glabrous style branches and a deletion in the rpoB gene. Two tribes, Wunderlicheae and Hyalideae, are recognised.",
+        "question": "What is the evolutionary history of the Wunderlichioideae subfamily?",
+        "answerable": false,
+        "answer": "The evolutionary history of the Wunderlichioideae subfamily is thought to involve an origin in South America, with subsequent dispersal events to other regions. The distinctive morphological features and genetic characteristics of its members suggest a complex evolutionary history involving significant adaptations and diversification events."
+    },
+    {
+        "title": "Sword Boys",
+        "context": "Sword Boys is a street gang in Perth, Western Australia, consisting mostly of Lebanese Australians,[1][2] that has been known to authorities since mid-1990s.[3][4] Gang members have been reported to wear a miniature gold scimitar on a chain around their necks.[5][6] Sword Boys has been responsible for amphetamine and ecstasy distribution in Western Australia,[7] and has also been linked to car rebirthing by Western Sydney gangs, where stolen cars are stripped and reassembled.[2]",
+        "question": "What distinctive item do Sword Boys gang members reportedly wear?",
+        "answerable": true,
+        "answer": "A miniature gold scimitar on a chain around their necks."
+    },
+    {
+        "title": "Sword Boys",
+        "context": "Sword Boys is a street gang in Perth, Western Australia, consisting mostly of Lebanese Australians,[1][2] that has been known to authorities since mid-1990s.[3][4] Gang members have been reported to wear a miniature gold scimitar on a chain around their necks.[5][6] Sword Boys has been responsible for amphetamine and ecstasy distribution in Western Australia,[7] and has also been linked to car rebirthing by Western Sydney gangs, where stolen cars are stripped and reassembled.[2]",
+        "question": "How many active members are currently in the Sword Boys gang?",
+        "answerable": false,
+        "answer": "Unable to determine the number of active members due to lack of relevant data."
+    },
+    {
+        "title": "Kranium",
+        "context": "Kemar Donaldson popularly known as Kranium, is a Jamaican reggae and dancehall singer known for his 2013 hit single \"Nobody Has To Know\" which gave him international recognition and led him to the Atlantic Records record label.[1]",
+        "question": "What is Kranium's real name?",
+        "answerable": true,
+        "answer": "Kemar Donaldson."
+    },
+    {
+        "title": "Kranium",
+        "context": "Kemar Donaldson popularly known as Kranium, is a Jamaican reggae and dancehall singer known for his 2013 hit single \"Nobody Has To Know\" which gave him international recognition and led him to the Atlantic Records record label.[1]",
+        "question": "How many albums has Kranium released throughout his career?",
+        "answerable": false,
+        "answer": "Unfortunately, I couldn't find the exact number of albums Kranium has released, as this information is not readily available."
+    }
+]
