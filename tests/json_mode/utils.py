@@ -1,12 +1,13 @@
+import asyncio
 from loguru import logger
 import requests
-from openai import OpenAI
+from openai import AsyncOpenAI
 from sentence_transformers import SentenceTransformer, util
 
 openai_api_key = "-"
 openai_api_base = "http://localhost:8000/v1"
 
-client = OpenAI(
+client = AsyncOpenAI(
     api_key=openai_api_key,
     base_url=openai_api_base,
 )
@@ -14,31 +15,36 @@ client = OpenAI(
 sim_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
 
 
-def call_vllm_complete(
+async def get_chat_completion(
+    prompt: list[dict[str, str]],
+    llm_name: str,
+    temperature: float = 0.0,
+    json_schema: dict[str, str] | None = None,
+) -> requests.Response:
+    response = await client.chat.completions.create(
+        model=llm_name,
+        messages=prompt,
+        temperature=temperature,
+        extra_body={"guided_json": json_schema})
+    return response
+
+
+async def call_vllm_complete(
     prompts: list[list[dict[str, str]]],
     llm_name: str,
     options: dict[str, float | dict],
 ) -> requests.Response:
     response_format = options.get("response_format", None)
- 
-    if response_format is not None:
-        if response_format.get("type") != "json":
-            raise ValueError(
-                "Only 'json' response format is supported in this test.")
     json_schema = response_format.get("schema", None)
-
-    responses = []
-
     assert json_schema is not None
 
-    for i in range(len(prompts)):
-        chat_response = client.chat.completions.create(
-            model=llm_name,
-            messages=prompts[i], 
-            temperature=options.get("temperature", 0.0),
-            extra_body={"guided_json": json_schema},
-        )
-        responses.append(chat_response)
+    temperature = options.get("temperature", 0.0)
+    tasks = [
+        get_chat_completion(prompt, llm_name, temperature, json_schema)
+        for prompt in prompts
+    ]
+
+    responses = await asyncio.gather(*tasks)
 
     return responses
 

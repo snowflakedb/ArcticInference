@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import datetime
 import json
 import os
@@ -82,9 +83,9 @@ def process_batch(
             },
         ])
 
-    responses = call_vllm_complete(prompts=prompts,
-                                   llm_name=llm_name,
-                                   options=options)
+    responses = asyncio.run(
+        call_vllm_complete(prompts=prompts, llm_name=llm_name,
+                           options=options))
 
     all_rows = responses
     results: list[None | dict] = []
