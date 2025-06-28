@@ -339,6 +339,10 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
         if not is_shift_parallel_mode():
             num_heads //= self.sp_size
             kwargs["num_kv_heads"] //= self.sp_size
+
+        if torch.distributed.get_rank() == 0:
+            print("ulysses self.num_heads {self.num_heads} self.num_kv_heads {self.num_kv_heads}")
+
         return self._orig_init(num_heads, *args, **kwargs)
 
     def forward(self, query, key, value, **kwargs):
