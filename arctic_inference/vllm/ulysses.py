@@ -359,13 +359,13 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
         get_world_group().barrier()
         for i in range(get_world_group().world_size):
             if torch.distributed.get_rank() == i:
-                print(f"UlyssesAttentionPatch forward: rank {i} "
-                      f"                               query {query.shape} "
-                      f"                               key {key.shape} "
-                      f"                               value {value.shape} "
-                      f"                               sp_size {self.sp_size} "
-                      f"                               num_heads {self.num_heads} "
-                      f"                               num_kv_heads {self.num_kv_heads} "
+                print(f"UlyssesAttentionPatch forward: rank {i}\n"
+                      f"                               query {query.shape}\n"
+                      f"                               key {key.shape}\n"
+                      f"                               value {value.shape}\n"
+                      f"                               sp_size {self.sp_size}\n"
+                      f"                               num_heads {self.num_heads}\n"
+                      f"                               num_kv_heads {self.num_kv_heads}\n"
                       f"                               head_size {self.head_size}")
             torch.cuda.synchronize()
             get_world_group().barrier()
