@@ -342,7 +342,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
 
         if not is_shift_parallel_mode():
             num_heads //= self.sp_size
-            kwargs["num_kv_heads"] //= self.sp_size
+            kwargs["num_kv_heads"] //= max(self.sp_size, 1)
 
         if torch.distributed.get_rank() == 0:
             print(f"ulysses after num_heads {num_heads} num_kv_heads {kwargs['num_kv_heads']} ")
