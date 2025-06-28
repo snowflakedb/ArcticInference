@@ -355,6 +355,18 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
         if self.sp_size == 1 or is_shift_parallel_mode():
             return self._orig_forward(query, key, value, **kwargs)
 
+        torch.cuda.synchronize()
+        get_world_group().barrier()
+        for i in range(get_world_group().world_size):
+            if torch.distributed.get_rank() == i:
+                print(f"UlyssesAttentionPatch forward: rank {i} "
+                      f"sp_size {self.sp_size} "
+                      f"num_heads {self.num_heads} "
+                      f"num_kv_heads {self.num_kv_heads} "
+                      f"head_size {self.head_size}")
+            torch.cuda.synchronize()
+            get_world_group().barrier()
+
         # pack
         qkv = (torch.cat(
             (query.view(-1, self.sp_size, self.num_heads * self.head_size),
