@@ -275,6 +275,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                             # SP_AG {jj} k {k}")
                             ranks.append(k)
                         group_ranks.append(ranks)
+            # group_ranks = [[0, 4], [1, 5], [2, 6], [3, 7]]
             # group_ranks = [[0, 1], [2, 3], [4, 5], [6, 7]]
             # print(f" $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ SP all-gather group_ranks {group_ranks}")
             SP_AG_group_ranks = group_ranks
