@@ -278,6 +278,22 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
             parallel_state._SP_AA = _SP_AA
             parallel_state._SP_AG = _SP_AG
 
+            torch.cuda.synchronize()
+            get_world_group().barrier()
+            for i in range(get_world_group().world_size):
+                if torch.distributed.get_rank() == i:
+                    print(f"UlyssesParallelStatePatch initialized: rank {i}\n"
+                            f"                               PP {_PP.local_rank} / {_PP.world_size}\n"
+                            f"                               TP {_TP.local_rank} / {_TP.world_size}\n"
+                            f"                               SP {_SP.local_rank} / {_SP.world_size}\n"
+                            f"                               DP {_DP.local_rank} / {_DP.world_size}\n"
+                            f"                               EP {_EP.local_rank} / {_EP.world_size}\n"
+                            f"                               SP_TP {_SP_TP.local_rank} / {_SP_TP.world_size}\n"
+                            f"                               SP_AA {_SP_AA.local_rank} / {_SP_AA.world_size}\n"
+                            f"                               SP_AG {_SP_AG.local_rank} / {_SP_AG.world_size}\n")
+                torch.cuda.synchronize()
+                get_world_group().barrier()
+
     from contextlib import contextmanager
     @contextmanager
     def graph_capture(device: torch.device):
