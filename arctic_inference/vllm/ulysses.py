@@ -388,10 +388,12 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
     def __init__(self, num_heads, *args, **kwargs):
         from .model_runner import is_shift_parallel_mode
         self.sp_size = parallel_state._SP.world_size
-        self.device_group = parallel_state._SP.device_group
+        self.alltotall_device_group = parallel_state._SP.device_group
+        self.sp_kv_size = parallel_state._SP_AG.world_size
+        self.allgather_device_group = parallel_state._SP_AG.device_group
 
         if torch.distributed.get_rank() == 0:
-            print(f"ulysses before num_heads {num_heads} num_kv_heads {kwargs['num_kv_heads']} ")
+            print(f"ulysses before num_heads {num_heads} num_kv_heads {kwargs['num_kv_heads']} sp_kv size {self.sp_kv_size} ")
 
         if not is_shift_parallel_mode():
             num_heads //= self.sp_size
@@ -439,16 +441,16 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                                0, 1).reshape(-1,
                                              self.num_heads * self.head_size)
             q_ = torch.empty_like(q)
-            torch.distributed.all_to_all_single(q_, q, group=self.device_group)
+            torch.distributed.all_to_all_single(q_, q, group=self.alltoall_device_group)
             # Ulysses all-gather (key, value)
             kv = torch.cat((key, value), dim=-1)
             kv_ = torch.empty(q_.shape[0],
                               2 * self.num_kv_heads * self.head_size,
                               dtype=query.dtype,
                               device=query.device)
-            # torch.distributed.all_gather_into_tensor(kv_,
-            #                                          kv,
-            #                                          group=self.device_group)
+            torch.distributed.all_gather_into_tensor(kv_,
+                                                     kv,
+                                                     group=self.allgather_device_group)
             k_, v_ = kv_.split([self.num_kv_heads * self.head_size] * 2,
                                dim=-1)
         else:
@@ -462,7 +464,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                 .reshape(-1, (self.num_heads + 2 * self.num_kv_heads) * self.head_size))
             # Ulysses all-to-all 1/2
             qkv_ = torch.empty_like(qkv)
-            torch.distributed.all_to_all_single(qkv_, qkv, group=self.device_group)
+            torch.distributed.all_to_all_single(qkv_, qkv, group=self.alltoall_device_group)
             # unpack
             q_, k_, v_ = qkv_.split([
                 self.num_heads * self.head_size, self.num_kv_heads *
