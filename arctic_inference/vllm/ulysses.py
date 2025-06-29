@@ -331,6 +331,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
 
     _orig_init = Attention.__init__
     _orig_forward = Attention.forward
+    is_kv_replicated = None
 
     def __init__(self, num_heads, *args, **kwargs):
         from .model_runner import is_shift_parallel_mode
@@ -342,8 +343,15 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
 
         if not is_shift_parallel_mode():
             num_heads //= self.sp_size
-            num_kv_heads = max(1, kwargs["num_kv_heads"] // self.sp_size)
-            kwargs["num_kv_heads"] = num_kv_heads
+            num_kv_heads = kwargs["num_kv_heads"] // self.sp_size
+            if num_kv_heads == 0:
+                num_kv_heads = 1
+                self.is_kv_replicated = True
+            else:
+                self.is_kv_replicated = False
+            kwargs["num_heads"] = num_heads
+            # num_kv_heads = max(1, kwargs["num_kv_heads"] // self.sp_size)
+            # kwargs["num_kv_heads"] = num_kv_heads
 
         if torch.distributed.get_rank() == 0:
             print(f"ulysses after num_heads {num_heads} num_kv_heads {kwargs['num_kv_heads']} ")
@@ -354,6 +362,8 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
         from .model_runner import is_shift_parallel_mode
         if self.sp_size == 1 or is_shift_parallel_mode():
             return self._orig_forward(query, key, value, **kwargs)
+
+        assert self.is_kv_replicated is not None
 
         torch.cuda.synchronize()
         get_world_group().barrier()
@@ -366,7 +376,8 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                       f"                               sp_size {self.sp_size}\n"
                       f"                               num_heads {self.num_heads}\n"
                       f"                               num_kv_heads {self.num_kv_heads}\n"
-                      f"                               head_size {self.head_size}")
+                      f"                               head_size {self.head_size}\n"
+                      f"                               is_kv_replicated {self.is_kv_replicated}")
             torch.cuda.synchronize()
             get_world_group().barrier()
 
