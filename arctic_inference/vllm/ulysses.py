@@ -220,7 +220,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
             _SP_TP.rank_in_group)
 
         # num_kv_heads = config.model_config.get_num_kv_heads(config.parallel_config)
-        total_num_kv_heads = config.model_config.get_total_num_kv_heads(config.parallel_config)
+        total_num_kv_heads = config.model_config.get_total_num_kv_heads()
         print(f" total_num_kv_heads: {total_num_kv_heads} ******************************************************c onfig {config}\n")
 
         parallel_state._TP = _TP
