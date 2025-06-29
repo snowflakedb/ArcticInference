@@ -481,15 +481,14 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             #                self.head_size).transpose(0, 1).reshape(
             #                    -1,
             #                    self.num_kv_heads * self.head_size).contiguous()
-            
-            kv = torch.cat((key.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size),
-                            value.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size)),
-                           dim=-1).transpose(0, 1).reshape(
-                               -1, 2 * self.num_kv_heads * self.head_size)
-            kv__ = torch.empty_like(kv)
-            torch.distributed.all_to_all_single(kv__,
-                                                kv,
-                                                group=self.sp_aa_device_group)
+            # kv = torch.cat((key.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size),
+            #                 value.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size)),
+            #                dim=-1).transpose(0, 1).reshape(
+            #                    -1, 2 * self.num_kv_heads * self.head_size)
+            # kv__ = torch.empty_like(kv)
+            # torch.distributed.all_to_all_single(kv__,
+            #                                     kv,
+            #                                     group=self.sp_aa_device_group)
             # k__, v__ = kv_.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
             # k__ = torch.empty_like(k)
             # v__ = torch.empty_like(v)
@@ -499,33 +498,34 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             # torch.distributed.all_to_all_single(v__,
             #                                     v,
             #                                     group=self.sp_aa_device_group)
-            kv_ = torch.empty((q.shape[0], 2 * self.num_kv_heads * self.head_size),
-                             device=key.device,
-                             dtype=key.dtype)
+            # kv_ = torch.empty((q.shape[0], 2 * self.num_kv_heads * self.head_size),
+            #                  device=key.device,
+            #                  dtype=key.dtype)
             # v_ = torch.empty_like(k_)
             # torch.distributed.all_gather_into_tensor(
             #     k_, k__.contiguous(), group=self.sp_ag_device_group)
-            torch.distributed.all_gather_into_tensor(
-                kv_, kv__, group=self.sp_ag_device_group)
+            # torch.distributed.all_gather_into_tensor(
+            #     kv_, kv__, group=self.sp_ag_device_group)
 
             # Ulysses pack (key, value)
-            # kv = torch.cat((key.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size),
-            #                 value.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size)),
-            #                dim=-1).transpose(0, 1).reshape(
-            #                    -1, 2 * self.num_kv_heads * self.head_size).contiguous()
-            # kv_ = torch.empty_like(kv)
+            kv = torch.cat((key.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size),
+                            value.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size)),
+                           dim=-1).transpose(0, 1).reshape(
+                               -1, 2 * self.num_kv_heads * self.head_size)
+            kv_ = torch.empty_like(kv)
             # Ulysses all-to-all (key, value)
-            # torch.distributed.all_to_all_single(kv_, kv, group=self.sp_aa_device_group)
+            torch.distributed.all_to_all_single(kv_, kv, group=self.sp_aa_device_group)
             # Ulysses all-gather (key, value)
-            # kv__ = torch.empty(q_.shape[0],
-            #                   2 * self.num_kv_heads * self.head_size,
-            #                   dtype=query.dtype,
-            #                   device=query.device)
-            # torch.distributed.all_gather_into_tensor(kv__,
-            #                                          kv_,
-            #                                          group=self.sp_ag_device_group)
-            # # unpack (key, value)
-            k_, v_ = kv_.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
+            kv__ = torch.empty(q_.shape[0],
+                              2 * self.num_kv_heads * self.head_size,
+                              dtype=query.dtype,
+                              device=query.device)
+            torch.distributed.all_gather_into_tensor(kv__,
+                                                     kv_,
+                                                     group=self.sp_ag_device_group)
+            # TODO: Reorder the kv__ tensor to match the original SP order
+            # unpack (key, value)
+            k_, v_ = kv__.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
         else:
             # pack
             qkv = (torch.cat(
