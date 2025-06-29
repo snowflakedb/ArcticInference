@@ -246,6 +246,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                             # print(f"{k}")
                             ranks.append(k)
                         group_ranks.append(ranks)
+            group_ranks = [[0, 1, 2, 3], [4, 5, 6, 7]]
             print(f" ########################################## SP all-to-all group_ranks {group_ranks}")
             _SP_AA = init_model_parallel_group(group_ranks,
                                             get_world_group().local_rank,
@@ -266,7 +267,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                             # SP_AG {jj} k {k}")
                             ranks.append(k)
                         group_ranks.append(ranks)
-            # group_ranks = [[0, 4], [1, 5], [2, 6], [3, 7]]
+            group_ranks = [[0, 4], [1, 5], [2, 6], [3, 7]]
             print(f" $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ SP all-gather group_ranks {group_ranks}")
             _SP_AG = init_model_parallel_group(group_ranks,
                                             get_world_group().local_rank,
@@ -448,11 +449,11 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             k = key.view(-1, self.sp_aa_size, self.num_kv_heads *
                          self.head_size).transpose(0, 1).reshape(
                              -1,
-                             self.num_kv_heads * self.head_size).contiguous()
+                             self.num_kv_heads * self.head_size)
             v = value.view(-1, self.sp_aa_size, self.num_kv_heads *
                            self.head_size).transpose(0, 1).reshape(
                                -1,
-                               self.num_kv_heads * self.head_size).contiguous()
+                               self.num_kv_heads * self.head_size)
             k__ = torch.empty_like(k)
             v__ = torch.empty_like(v)
             torch.distributed.all_to_all_single(k__,
