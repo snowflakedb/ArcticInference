@@ -343,6 +343,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
 
         if not is_shift_parallel_mode():
             num_heads //= self.sp_size
+            num_kv_heads = kwargs["num_kv_heads"]
             if num_kv_heads < self.sp_size:
                 self.is_kv_replicated = True
                 num_kv_heads = 1
