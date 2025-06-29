@@ -448,20 +448,20 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             kv = torch.cat((key.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size),
                             value.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size)),
                            dim=-1).transpose(0, 1).reshape(
-                               -1, 2 * self.num_kv_heads * self.head_size)
-            kv__ = torch.empty_like(kv)
+                               -1, 2 * self.num_kv_heads * self.head_size).contiguous()
+            kv_ = torch.empty_like(kv)
             # Ulysses all-to-all (key, value)
-            torch.distributed.all_to_all_single(kv__, kv, group=self.sp_aa_device_group)
+            torch.distributed.all_to_all_single(kv_, kv, group=self.sp_aa_device_group)
             # Ulysses all-gather (key, value)
-            kv_ = torch.empty(q_.shape[0],
+            kv__ = torch.empty(q_.shape[0],
                               2 * self.num_kv_heads * self.head_size,
                               dtype=query.dtype,
                               device=query.device)
-            torch.distributed.all_gather_into_tensor(kv_,
-                                                     kv__,
+            torch.distributed.all_gather_into_tensor(kv__,
+                                                     kv_,
                                                      group=self.sp_ag_device_group)
             # unpack (key, value)
-            k_, v_ = kv_.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
+            k_, v_ = kv__.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
         else:
             # pack
             qkv = (torch.cat(
