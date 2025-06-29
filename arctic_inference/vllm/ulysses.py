@@ -386,8 +386,8 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
         self.sp_kv_size = parallel_state._SP_AG.world_size
         self.sp_kv_device_group = parallel_state._SP_AG.device_group
 
-        if torch.distributed.get_rank() == 0:
-            print(f"ulysses before num_heads {num_heads} num_kv_heads {kwargs['num_kv_heads']} sp_kv size {self.sp_kv_size} ")
+        # if torch.distributed.get_rank() == 0:
+        #     print(f"ulysses before num_heads {num_heads} num_kv_heads {kwargs['num_kv_heads']} sp_kv size {self.sp_kv_size} ")
 
         if not is_shift_parallel_mode():
             num_heads //= self.sp_size
@@ -400,8 +400,8 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                 num_kv_heads //= self.sp_size
             kwargs["num_kv_heads"] = num_kv_heads
 
-        if torch.distributed.get_rank() == 0:
-            print(f"ulysses after num_heads {num_heads} num_kv_heads {kwargs['num_kv_heads']} ")
+        # if torch.distributed.get_rank() == 0:
+        #     print(f"ulysses after num_heads {num_heads} num_kv_heads {kwargs['num_kv_heads']} ")
 
         return self._orig_init(num_heads, *args, **kwargs)
 
@@ -412,21 +412,21 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
 
         assert self.is_kv_replicated is not None
 
-        torch.cuda.synchronize()
-        get_world_group().barrier()
-        for i in range(get_world_group().world_size):
-            if torch.distributed.get_rank() == i:
-                print(f"UlyssesAttentionPatch forward: rank {i}\n"
-                      f"                               query {query.shape}\n"
-                      f"                               key {key.shape}\n"
-                      f"                               value {value.shape}\n"
-                      f"                               sp_size {self.sp_size}\n"
-                      f"                               num_heads {self.num_heads}\n"
-                      f"                               num_kv_heads {self.num_kv_heads}\n"
-                      f"                               head_size {self.head_size}\n"
-                      f"                               is_kv_replicated {self.is_kv_replicated}")
-            torch.cuda.synchronize()
-            get_world_group().barrier()
+        # torch.cuda.synchronize()
+        # get_world_group().barrier()
+        # for i in range(get_world_group().world_size):
+        #     if torch.distributed.get_rank() == i:
+        #         print(f"UlyssesAttentionPatch forward: rank {i}\n"
+        #               f"                               query {query.shape}\n"
+        #               f"                               key {key.shape}\n"
+        #               f"                               value {value.shape}\n"
+        #               f"                               sp_size {self.sp_size}\n"
+        #               f"                               num_heads {self.num_heads}\n"
+        #               f"                               num_kv_heads {self.num_kv_heads}\n"
+        #               f"                               head_size {self.head_size}\n"
+        #               f"                               is_kv_replicated {self.is_kv_replicated}")
+        #     torch.cuda.synchronize()
+        #     get_world_group().barrier()
 
         if self.is_kv_replicated:
             # Ulysses all-to-all 1/2 (query)
