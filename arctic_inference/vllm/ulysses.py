@@ -343,15 +343,13 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
 
         if not is_shift_parallel_mode():
             num_heads //= self.sp_size
-            num_kv_heads = kwargs["num_kv_heads"] // self.sp_size
-            if num_kv_heads == 0:
-                num_kv_heads = 1
+            if num_kv_heads < self.sp_size:
                 self.is_kv_replicated = True
+                num_kv_heads = 1
             else:
                 self.is_kv_replicated = False
+                num_kv_heads = kwargs["num_kv_heads"] // self.sp_size
             kwargs["num_kv_heads"] = num_kv_heads
-            # num_kv_heads = max(1, kwargs["num_kv_heads"] // self.sp_size)
-            # kwargs["num_kv_heads"] = num_kv_heads
 
         if torch.distributed.get_rank() == 0:
             print(f"ulysses after num_heads {num_heads} num_kv_heads {kwargs['num_kv_heads']} ")
