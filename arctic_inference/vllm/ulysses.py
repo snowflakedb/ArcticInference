@@ -218,8 +218,10 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
             world_size, _DP.rank_in_group, _PP.rank_in_group,
             _TP.rank_in_group, _EP.rank_in_group, _SP.rank_in_group,
             _SP_TP.rank_in_group)
-        
-        print(f" ****************************************************** config {config}\n")
+
+        num_kv_heads = config.model_config.get_num_kv_heads(config.parallel_config)
+        # print(f"num_kv_heads: {num_kv_heads}")
+        print(f" num_kv_heads: {num_kv_heads} ******************************************************c onfig {config}\n")
 
         parallel_state._TP = _TP
         parallel_state._PP = _PP
