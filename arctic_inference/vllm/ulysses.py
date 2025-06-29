@@ -87,6 +87,8 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
 
     _SP = None
     _SP_TP = None
+    _SP_AA = None
+    _SP_AG = None
 
     @staticmethod
     def initialize_model_parallel(
@@ -219,50 +221,52 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
             _TP.rank_in_group, _EP.rank_in_group, _SP.rank_in_group,
             _SP_TP.rank_in_group)
 
+
         PP = _PP.world_size
         TP = _TP.world_size
         SP = _SP.world_size
         SP_TP = SP * TP
         TP_heads = config.model_config._orig_get_num_kv_heads(config.parallel_config)
-        group_ranks = []
-        for i in range(PP):
-            # print("************** PP ****************")
-            for j in range(TP):
-                # print("-------------- SP ------------------")
-                for jj_1 in range(SP // TP_heads):
-                    # print("``````````````` SP_AA `````````````````")
-                    ranks = []
-                    for jj in range(TP_heads):
-                        k = jj * SP_TP // TP_heads + jj_1 * TP + j
-                        # print(f"{k}")
-                        ranks.append(k)
-                    group_ranks.append(ranks)
-        print(f" ########################################## SP all-to-all group_ranks {group_ranks}")
-        _SP_AA = init_model_parallel_group(group_ranks,
-                                           get_world_group().local_rank,
-                                           backend,
-                                           group_name="sp_aa")
-        group_ranks = []
-        # for i in range(PP):
-        #     # print("************** PP ****************")
-        #     for j in range(TP):
-        #         # print("-------------- SP ------------------")
-        #         for jj_1 in range(TP_heads):
-        #             # print("``````````````` SP_AG `````````````````")
-        #             ranks = []
-        #             for jj in range(SP // TP_heads):
-        #                 k = jj * TP + jj_1 * SP_TP // TP_heads + j
-        #                 k += i * SP_TP
-        #                 # print(f"PP {i} TP {j} SP {jj_1}
-        #                 # SP_AG {jj} k {k}")
-        #                 ranks.append(k)
-        #             group_ranks.append(ranks)
-        group_ranks = [[0, 4], [1, 5], [2, 6], [3, 7]]
-        print(f" $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ SP all-gather group_ranks {group_ranks}")
-        _SP_AG = init_model_parallel_group(group_ranks,
-                                           get_world_group().local_rank,
-                                           backend,
-                                           group_name="sp_ag")
+        if TP_heads < sequence_parallel_size:
+            group_ranks = []
+            for i in range(PP):
+                # print("************** PP ****************")
+                for j in range(TP):
+                    # print("-------------- SP ------------------")
+                    for jj_1 in range(SP // TP_heads):
+                        # print("``````````````` SP_AA `````````````````")
+                        ranks = []
+                        for jj in range(TP_heads):
+                            k = jj * SP_TP // TP_heads + jj_1 * TP + j
+                            # print(f"{k}")
+                            ranks.append(k)
+                        group_ranks.append(ranks)
+            print(f" ########################################## SP all-to-all group_ranks {group_ranks}")
+            _SP_AA = init_model_parallel_group(group_ranks,
+                                            get_world_group().local_rank,
+                                            backend,
+                                            group_name="sp_aa")
+            group_ranks = []
+            # for i in range(PP):
+            #     # print("************** PP ****************")
+            #     for j in range(TP):
+            #         # print("-------------- SP ------------------")
+            #         for jj_1 in range(TP_heads):
+            #             # print("``````````````` SP_AG `````````````````")
+            #             ranks = []
+            #             for jj in range(SP // TP_heads):
+            #                 k = jj * TP + jj_1 * SP_TP // TP_heads + j
+            #                 k += i * SP_TP
+            #                 # print(f"PP {i} TP {j} SP {jj_1}
+            #                 # SP_AG {jj} k {k}")
+            #                 ranks.append(k)
+            #             group_ranks.append(ranks)
+            group_ranks = [[0, 4], [1, 5], [2, 6], [3, 7]]
+            print(f" $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ SP all-gather group_ranks {group_ranks}")
+            _SP_AG = init_model_parallel_group(group_ranks,
+                                            get_world_group().local_rank,
+                                            backend,
+                                            group_name="sp_ag")
 
         parallel_state._TP = _TP
         parallel_state._PP = _PP
@@ -384,8 +388,6 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
         from .model_runner import is_shift_parallel_mode
         self.sp_size = parallel_state._SP.world_size
         self.sp_device_group = parallel_state._SP.device_group
-        self.sp_kv_size = parallel_state._SP_AG.world_size
-        self.sp_kv_device_group = parallel_state._SP_AG.device_group
 
         # if torch.distributed.get_rank() == 0:
         #     print(f"ulysses before num_heads {num_heads} num_kv_heads {kwargs['num_kv_heads']} sp_kv size {self.sp_kv_size} ")
@@ -396,6 +398,8 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             if num_kv_heads < self.sp_size:
                 self.is_kv_replicated = True
                 num_kv_heads = 1
+                self.sp_kv_size = parallel_state._SP_AG.world_size
+                self.sp_kv_device_group = parallel_state._SP_AG.device_group
             else:
                 self.is_kv_replicated = False
                 num_kv_heads //= self.sp_size
