@@ -389,8 +389,8 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
         from .model_runner import is_shift_parallel_mode
         self.sp_size = parallel_state._SP.world_size
         self.sp_device_group = parallel_state._SP.device_group
-        self.sp_kv_size = parallel_state._SP_AA.world_size
-        self.sp_kv_device_group = parallel_state._SP_AA.device_group
+        self.sp_kv_size = parallel_state._SP_AG.world_size
+        self.sp_kv_device_group = parallel_state._SP_AG.device_group
 
         if torch.distributed.get_rank() == 0:
             print(f"ulysses before num_heads {num_heads} num_kv_heads {kwargs['num_kv_heads']} sp_kv size {self.sp_kv_size} ")
