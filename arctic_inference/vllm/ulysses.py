@@ -486,11 +486,11 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                             value.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size)),
                            dim=-1).transpose(0, 1).reshape(
                                -1, 2 * self.num_kv_heads * self.head_size)
-            kv_ = torch.empty_like(kv)
-            torch.distributed.all_to_all_single(kv_,
+            kv__ = torch.empty_like(kv)
+            torch.distributed.all_to_all_single(kv__,
                                                 kv,
                                                 group=self.sp_aa_device_group)
-            k__, v__ = kv_.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
+            # k__, v__ = kv_.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
             # k__ = torch.empty_like(k)
             # v__ = torch.empty_like(v)
             # torch.distributed.all_to_all_single(k__,
@@ -499,14 +499,14 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             # torch.distributed.all_to_all_single(v__,
             #                                     v,
             #                                     group=self.sp_aa_device_group)
-            k_ = torch.empty((q.shape[0], self.num_kv_heads * self.head_size),
+            kv_ = torch.empty((q.shape[0], 2 * self.num_kv_heads * self.head_size),
                              device=key.device,
                              dtype=key.dtype)
-            v_ = torch.empty_like(k_)
+            # v_ = torch.empty_like(k_)
+            # torch.distributed.all_gather_into_tensor(
+            #     k_, k__.contiguous(), group=self.sp_ag_device_group)
             torch.distributed.all_gather_into_tensor(
-                k_, k__.contiguous(), group=self.sp_ag_device_group)
-            torch.distributed.all_gather_into_tensor(
-                v_, v__.contiguous(), group=self.sp_ag_device_group)
+                kv_, kv__, group=self.sp_ag_device_group)
 
             # Ulysses pack (key, value)
             # kv = torch.cat((key.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size),
@@ -525,7 +525,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             #                                          kv_,
             #                                          group=self.sp_ag_device_group)
             # # unpack (key, value)
-            # k_, v_ = kv__.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
+            k_, v_ = kv_.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
         else:
             # pack
             qkv = (torch.cat(
