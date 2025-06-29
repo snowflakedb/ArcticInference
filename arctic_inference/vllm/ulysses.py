@@ -152,6 +152,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         assert _TP is None, ("tensor model parallel group is already initialized")
         group_ranks = all_ranks.view(-1, tensor_model_parallel_size).unbind(0)
         group_ranks = [x.tolist() for x in group_ranks]
+        TP_group_ranks = group_ranks
 
         # message queue broadcaster is only used in tensor model parallel group
         _TP = init_model_parallel_group(group_ranks,
@@ -166,6 +167,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         group_ranks = all_ranks.transpose(2, 4).reshape(
             -1, pipeline_model_parallel_size).unbind(0)
         group_ranks = [x.tolist() for x in group_ranks]
+        PP_group_ranks = group_ranks
         _PP = init_model_parallel_group(group_ranks,
                                         get_world_group().local_rank,
                                         backend,
@@ -176,6 +178,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                                           4).reshape(-1,
                                                      data_parallel_size).unbind(0)
         group_ranks = [x.tolist() for x in group_ranks]
+        DP_group_ranks = group_ranks
         _DP = init_model_parallel_group(group_ranks,
                                         get_world_group().local_rank,
                                         backend,
@@ -185,6 +188,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         group_ranks = all_ranks.transpose(1, 3).reshape(
             -1, data_parallel_size * tensor_model_parallel_size).unbind(0)
         group_ranks = [x.tolist() for x in group_ranks]
+        EP_group_ranks = group_ranks
         _EP = init_model_parallel_group(group_ranks,
                                         get_world_group().local_rank,
                                         backend,
@@ -196,6 +200,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         group_ranks = all_ranks.transpose(3, 4).reshape(
             -1, sequence_parallel_size).unbind(0)
         group_ranks = [x.tolist() for x in group_ranks]
+        SP_group_ranks = group_ranks
         _SP = init_model_parallel_group(group_ranks,
                                         get_world_group().local_rank,
                                         backend,
@@ -209,6 +214,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         group_ranks = all_ranks.transpose(3, 4).reshape(
             -1, shift_parallel_size).unbind(0)
         group_ranks = [x.tolist() for x in group_ranks]
+        SP_TP_group_ranks = group_ranks
         _SP_TP = init_model_parallel_group(group_ranks,
                                            get_world_group().local_rank,
                                            backend,
@@ -248,7 +254,8 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                         group_ranks.append(ranks)
             # group_ranks = [[0, 1, 2, 3], [4, 5, 6, 7]]
             # group_ranks = [[0, 2, 4, 6], [1, 3, 5, 7]]
-            print(f" ########################################## SP all-to-all group_ranks {group_ranks}")
+            # print(f" ########################################## SP all-to-all group_ranks {group_ranks}")
+            SP_AA_group_ranks = group_ranks
             _SP_AA = init_model_parallel_group(group_ranks,
                                             get_world_group().local_rank,
                                             backend,
@@ -269,7 +276,8 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                             ranks.append(k)
                         group_ranks.append(ranks)
             # group_ranks = [[0, 1], [2, 3], [4, 5], [6, 7]]
-            print(f" $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ SP all-gather group_ranks {group_ranks}")
+            # print(f" $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ SP all-gather group_ranks {group_ranks}")
+            SP_AG_group_ranks = group_ranks
             _SP_AG = init_model_parallel_group(group_ranks,
                                             get_world_group().local_rank,
                                             backend,
@@ -283,14 +291,14 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
             for i in range(get_world_group().world_size):
                 if torch.distributed.get_rank() == i:
                     print(f"UlyssesParallelStatePatch initialized: rank {i}\n"
-                            f"                               PP {_PP.rank_in_group} / {_PP.world_size}\n"
-                            f"                               TP {_TP.rank_in_group} / {_TP.world_size}\n"
-                            f"                               SP {_SP.rank_in_group} / {_SP.world_size}\n"
-                            f"                               DP {_DP.rank_in_group} / {_DP.world_size}\n"
-                            f"                               EP {_EP.rank_in_group} / {_EP.world_size}\n"
-                            f"                               SP_TP {_SP_TP.rank_in_group} / {_SP_TP.world_size}\n"
-                            f"                               SP_AA {_SP_AA.rank_in_group} / {_SP_AA.world_size}\n"
-                            f"                               SP_AG {_SP_AG.rank_in_group} / {_SP_AG.world_size}\n")
+                            f"                               PP {_PP.rank_in_group} / {_PP.world_size} ranks {PP_group_ranks}\n"
+                            f"                               TP {_TP.rank_in_group} / {_TP.world_size} ranks {TP_group_ranks}\n"
+                            f"                               SP {_SP.rank_in_group} / {_SP.world_size} ranks {SP_group_ranks}\n"
+                            f"                               DP {_DP.rank_in_group} / {_DP.world_size} ranks {DP_group_ranks}\n"
+                            f"                               EP {_EP.rank_in_group} / {_EP.world_size} ranks {EP_group_ranks}\n"
+                            f"                               SP_TP {_SP_TP.rank_in_group} / {_SP_TP.world_size} ranks {SP_TP_group_ranks}\n"
+                            f"                               SP_AA {_SP_AA.rank_in_group} / {_SP_AA.world_size} ranks {SP_AA_group_ranks}\n"
+                            f"                               SP_AG {_SP_AG.rank_in_group} / {_SP_AG.world_size} ranks {SP_AG_group_ranks}\n")
                 torch.cuda.synchronize()
                 get_world_group().barrier()
 
