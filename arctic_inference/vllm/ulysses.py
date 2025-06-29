@@ -504,9 +504,9 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                              dtype=key.dtype)
             v_ = torch.empty_like(k_)
             torch.distributed.all_gather_into_tensor(
-                k_, k__, group=self.sp_ag_device_group)
+                k_, k__.contiguous(), group=self.sp_ag_device_group)
             torch.distributed.all_gather_into_tensor(
-                v_, v__, group=self.sp_ag_device_group)
+                v_, v__.contiguous(), group=self.sp_ag_device_group)
 
             # Ulysses pack (key, value)
             # kv = torch.cat((key.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size),
