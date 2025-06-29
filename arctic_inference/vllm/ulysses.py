@@ -87,6 +87,8 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
 
     _SP = None
     _SP_TP = None
+    _SP_AA = None
+    _SP_AG = None
 
     @staticmethod
     def initialize_model_parallel(
@@ -223,10 +225,62 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         total_num_kv_heads = config.model_config.get_total_num_kv_heads()
         print(f" total_num_kv_heads: {total_num_kv_heads} ******************************************************c onfig {config}\n")
 
+        PP = _PP.world_size
+        TP = _TP.world_size
+        SP = _SP.world_size
+        SP_TP = SP * TP
+        TP_heads = total_num_kv_heads // TP
+        group_ranks = []
+        for i in range(PP):
+            # print("************** PP ****************")
+            for j in range(TP):
+                # print("-------------- SP ------------------")
+                for jj_1 in range(SP // TP_heads):
+                    # print("``````````````` SP_AA `````````````````")
+                    ranks = []
+                    for jj in range(TP_heads):
+                        k = jj * SP_TP // TP_heads + jj_1 * TP + j
+                        # print(f"{k}")
+                        ranks.append(k)
+                    group_ranks.append(ranks)
+        if torch.distributed.get_rank() == 0:
+            print(f"SP all-to-all group_ranks {group_ranks}")
+        _SP_AA = init_model_parallel_group(
+            group_ranks,
+            get_world_group().local_rank,
+                    backend="nccl",
+                    use_custom_allreduce=False,
+                    group_name="sp_aa")
+        group_ranks = []
+        for i in range(PP):
+            # print("************** PP ****************")
+            for j in range(TP):
+                # print("-------------- SP ------------------")
+                for jj_1 in range(TP_heads):
+                    # print("``````````````` SP_AG `````````````````")
+                    ranks = []
+                    for jj in range(SP // TP_heads):
+                        k = jj * TP + jj_1 * SP_TP // TP_heads + j
+                        k += i * SP_TP
+                        # print(f"PP {i} TP {j} SP {jj_1}
+                        # SP_AG {jj} k {k}")
+                        ranks.append(k)
+                    group_ranks.append(ranks)
+        if torch.distributed.get_rank() == 0:
+            print(f"SP all-gather group_ranks {group_ranks}")
+        _SP_AG = init_model_parallel_group(
+            group_ranks,
+            get_world_group().local_rank,
+            backend="nccl",
+            use_custom_allreduce=False,
+            group_name="sp_ag")
+
         parallel_state._TP = _TP
         parallel_state._PP = _PP
         parallel_state._SP = _SP
         parallel_state._SP_TP = _SP_TP
+        parallel_state._SP_AA = _SP_AA
+        parallel_state._SP_AG = _SP_AG
         parallel_state._DP = _DP
 
     from contextlib import contextmanager
