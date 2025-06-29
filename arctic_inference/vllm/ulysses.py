@@ -349,7 +349,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                 self.is_kv_replicated = True
             else:
                 self.is_kv_replicated = False
-            kwargs["num_heads"] = num_heads
+            kwargs["num_kv_heads"] = num_kv_heads
             # num_kv_heads = max(1, kwargs["num_kv_heads"] // self.sp_size)
             # kwargs["num_kv_heads"] = num_kv_heads
 
