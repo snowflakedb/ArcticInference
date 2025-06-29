@@ -245,12 +245,10 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                     group_ranks.append(ranks)
         if torch.distributed.get_rank() == 0:
             print(f"SP all-to-all group_ranks {group_ranks}")
-        _SP_AA = init_model_parallel_group(
-            group_ranks,
-            get_world_group().local_rank,
-                    backend="nccl",
-                    use_custom_allreduce=False,
-                    group_name="sp_aa")
+        _SP_AA = init_model_parallel_group(group_ranks,
+                                           get_world_group().local_rank,
+                                           backend,
+                                           group_name="sp_aa")
         group_ranks = []
         for i in range(PP):
             # print("************** PP ****************")
@@ -268,12 +266,10 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                     group_ranks.append(ranks)
         if torch.distributed.get_rank() == 0:
             print(f"SP all-gather group_ranks {group_ranks}")
-        _SP_AG = init_model_parallel_group(
-            group_ranks,
-            get_world_group().local_rank,
-            backend="nccl",
-            use_custom_allreduce=False,
-            group_name="sp_ag")
+        _SP_AG = init_model_parallel_group(group_ranks,
+                                           get_world_group().local_rank,
+                                           backend,
+                                           group_name="sp_ag")
 
         parallel_state._TP = _TP
         parallel_state._PP = _PP
