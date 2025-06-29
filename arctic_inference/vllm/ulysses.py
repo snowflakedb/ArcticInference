@@ -243,20 +243,21 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                                            backend,
                                            group_name="sp_aa")
         group_ranks = []
-        for i in range(PP):
-            # print("************** PP ****************")
-            for j in range(TP):
-                # print("-------------- SP ------------------")
-                for jj_1 in range(TP_heads):
-                    # print("``````````````` SP_AG `````````````````")
-                    ranks = []
-                    for jj in range(SP // TP_heads):
-                        k = jj * TP + jj_1 * SP_TP // TP_heads + j
-                        k += i * SP_TP
-                        # print(f"PP {i} TP {j} SP {jj_1}
-                        # SP_AG {jj} k {k}")
-                        ranks.append(k)
-                    group_ranks.append(ranks)
+        # for i in range(PP):
+        #     # print("************** PP ****************")
+        #     for j in range(TP):
+        #         # print("-------------- SP ------------------")
+        #         for jj_1 in range(TP_heads):
+        #             # print("``````````````` SP_AG `````````````````")
+        #             ranks = []
+        #             for jj in range(SP // TP_heads):
+        #                 k = jj * TP + jj_1 * SP_TP // TP_heads + j
+        #                 k += i * SP_TP
+        #                 # print(f"PP {i} TP {j} SP {jj_1}
+        #                 # SP_AG {jj} k {k}")
+        #                 ranks.append(k)
+        #             group_ranks.append(ranks)
+        ranks = [[0, 4], [1, 5], [2, 6], [3, 7]]
         print(f" $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ SP all-gather group_ranks {group_ranks}")
         _SP_AG = init_model_parallel_group(group_ranks,
                                            get_world_group().local_rank,
