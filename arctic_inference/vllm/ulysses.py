@@ -218,6 +218,9 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
             world_size, _DP.rank_in_group, _PP.rank_in_group,
             _TP.rank_in_group, _EP.rank_in_group, _SP.rank_in_group,
             _SP_TP.rank_in_group)
+        
+        if torch.distributed.get_rank() == 0:
+            print(f"config {get_current_vllm_config()}")
 
         parallel_state._TP = _TP
         parallel_state._PP = _PP
