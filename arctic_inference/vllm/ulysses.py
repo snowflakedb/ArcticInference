@@ -221,6 +221,11 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
             _TP.rank_in_group, _EP.rank_in_group, _SP.rank_in_group,
             _SP_TP.rank_in_group)
 
+        parallel_state._TP = _TP
+        parallel_state._PP = _PP
+        parallel_state._SP = _SP
+        parallel_state._SP_TP = _SP_TP
+        parallel_state._DP = _DP
 
         PP = _PP.world_size
         TP = _TP.world_size
@@ -268,13 +273,8 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                                             backend,
                                             group_name="sp_ag")
 
-        parallel_state._TP = _TP
-        parallel_state._PP = _PP
-        parallel_state._SP = _SP
-        parallel_state._SP_TP = _SP_TP
-        parallel_state._SP_AA = _SP_AA
-        parallel_state._SP_AG = _SP_AG
-        parallel_state._DP = _DP
+            parallel_state._SP_AA = _SP_AA
+            parallel_state._SP_AG = _SP_AG
 
     from contextlib import contextmanager
     @contextmanager
