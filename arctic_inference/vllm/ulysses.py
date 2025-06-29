@@ -229,7 +229,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         TP = _TP.world_size
         SP = _SP.world_size
         SP_TP = SP * TP
-        TP_heads = config.model_config._orig_get_num_kv_heads()
+        TP_heads = config.model_config._orig_get_num_kv_heads(config.parallel_config)
         group_ranks = []
         for i in range(PP):
             # print("************** PP ****************")
