@@ -398,6 +398,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             if num_kv_heads < self.sp_size:
                 self.is_kv_replicated = True
                 num_kv_heads = 1
+                self.sp_aa_size = parallel_state._SP_AA.world_size
                 self.sp_aa_device_group = parallel_state._SP_AA.device_group
                 self.sp_ag_device_group = parallel_state._SP_AG.device_group
             else:
@@ -440,11 +441,15 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                                0, 1).reshape(-1,
                                              self.num_heads * self.head_size)
             q_ = torch.empty_like(q)
+            # Ulysses all-to-all (key, value)
             torch.distributed.all_to_all_single(q_, q, group=self.sp_aa_device_group)
-            # Ulysses all-gather (key, value)
-            kv = torch.cat((key, value), dim=-1)
+            kv = torch.cat((key.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size),
+                            value.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size)),
+                           dim=-1).transpose(0, 1).reshape(
+                               -1, 2 * self.num_kv_heads * self.head_size)
             kv__ = torch.empty_like(kv)
             torch.distributed.all_to_all_single(kv__, kv, group=self.sp_aa_device_group)
+            # Ulysses all-gather (key, value)
             kv_ = torch.empty(q_.shape[0],
                               2 * self.num_kv_heads * self.head_size,
                               dtype=query.dtype,
