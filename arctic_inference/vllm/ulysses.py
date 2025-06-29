@@ -468,7 +468,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             q = query.view(-1,
                            self.sp_size, self.num_heads * self.head_size).transpose(
                                0, 1).reshape(-1,
-                                             self.num_heads * self.head_size)
+                                             self.num_heads * self.head_size).contiguous()
             q_ = torch.empty_like(q)
             torch.distributed.all_to_all_single(q_, q, group=self.sp_device_group)
 
