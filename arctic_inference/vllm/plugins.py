@@ -67,7 +67,7 @@ def arctic_inference_plugin():
 
     if (vllm.__version__ != get_compatible_vllm_version() and not
             vllm.__version__.startswith("0.1.dev") and not
-            vllm.version.startswith("0.2.dev")):  # Make it work with dev
+            vllm.__version__.startswith("0.2.dev")):  # Make it work with dev
 
         logger.warning(
             f"ArcticInference requires vllm=={get_compatible_vllm_version()} "
