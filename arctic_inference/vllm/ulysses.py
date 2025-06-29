@@ -381,22 +381,25 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             torch.cuda.synchronize()
             get_world_group().barrier()
 
-        # pack
-        qkv = (torch.cat(
-            (query.view(-1, self.sp_size, self.num_heads * self.head_size),
-             key.view(-1, self.sp_size, self.num_kv_heads * self.head_size),
-             value.view(-1, self.sp_size, self.num_kv_heads * self.head_size)),
-            dim=-1)
-               .transpose(0, 1)
-               .reshape(-1, (self.num_heads + 2 * self.num_kv_heads) * self.head_size))
-        # Ulysses all-to-all 1/2
-        qkv_ = torch.empty_like(qkv)
-        torch.distributed.all_to_all_single(qkv_, qkv, group=self.device_group)
-        # unpack
-        q_, k_, v_ = qkv_.split([
-            self.num_heads * self.head_size, self.num_kv_heads *
-            self.head_size, self.num_kv_heads * self.head_size
-        ], dim=-1)
+        if self.is_kv_replicated:
+            return query
+        else:
+            # pack
+            qkv = (torch.cat(
+                (query.view(-1, self.sp_size, self.num_heads * self.head_size),
+                key.view(-1, self.sp_size, self.num_kv_heads * self.head_size),
+                value.view(-1, self.sp_size, self.num_kv_heads * self.head_size)),
+                dim=-1)
+                .transpose(0, 1)
+                .reshape(-1, (self.num_heads + 2 * self.num_kv_heads) * self.head_size))
+            # Ulysses all-to-all 1/2
+            qkv_ = torch.empty_like(qkv)
+            torch.distributed.all_to_all_single(qkv_, qkv, group=self.device_group)
+            # unpack
+            q_, k_, v_ = qkv_.split([
+                self.num_heads * self.head_size, self.num_kv_heads *
+                self.head_size, self.num_kv_heads * self.head_size
+            ], dim=-1)
 
         # original attention
         c_ = self._orig_forward(q_, k_, v_, **kwargs)
