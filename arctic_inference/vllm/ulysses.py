@@ -349,7 +349,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                 num_kv_heads = 1
             else:
                 self.is_kv_replicated = False
-                num_kv_heads = kwargs["num_kv_heads"] // self.sp_size
+                num_kv_heads //= self.sp_size
             kwargs["num_kv_heads"] = num_kv_heads
 
         if torch.distributed.get_rank() == 0:
