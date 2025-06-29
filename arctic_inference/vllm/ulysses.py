@@ -447,11 +447,11 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
 
             k = key.view(-1, self.sp_aa_size, self.num_kv_heads *
                          self.head_size).transpose(0, 1).reshape(
-                             -1 * self.sp_aa_size,
+                             -1,
                              self.num_kv_heads * self.head_size).contiguous()
             v = value.view(-1, self.sp_aa_size, self.num_kv_heads *
                            self.head_size).transpose(0, 1).reshape(
-                               -1 * self.sp_aa_size,
+                               -1,
                                self.num_kv_heads * self.head_size).contiguous()
             k__ = torch.empty_like(k)
             v__ = torch.empty_like(v)
