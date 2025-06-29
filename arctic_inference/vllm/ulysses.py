@@ -263,7 +263,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                         # SP_AG {jj} k {k}")
                         ranks.append(k)
                     group_ranks.append(ranks)
-         print(f" $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ SP all-gather group_ranks {group_ranks}")
+        print(f" $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ SP all-gather group_ranks {group_ranks}")
         _SP_AG = init_model_parallel_group(group_ranks,
                                            get_world_group().local_rank,
                                            backend,
