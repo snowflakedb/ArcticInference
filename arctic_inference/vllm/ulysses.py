@@ -295,7 +295,9 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         from vllm.distributed.parallel_state import GraphCaptureContext
         context = GraphCaptureContext(torch.cuda.Stream(device=device))
         with parallel_state._TP.graph_capture(context), parallel_state._PP.graph_capture(
-                context), parallel_state._SP_TP.graph_capture(context):
+                context), parallel_state._SP_TP.graph_capture(context
+                ), parallel_state._SP_AA.graph_capture(context
+                                ), parallel_state._SP_AG.graph_capture(context):
             yield context
 
 
