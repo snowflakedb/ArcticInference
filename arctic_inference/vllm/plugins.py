@@ -29,6 +29,7 @@ from arctic_inference.vllm.config import (ParallelConfigPatch,
 from arctic_inference.vllm.stats import (SpecDecodingStatsPatch, 
                                          SpecDecodingLoggingPatch)
 from arctic_inference.vllm.ulysses import apply_shift_parallel_patches
+from arctic_inference.vllm.scheduler import SchedulerPatch
 
 
 logger = init_logger(__name__)
@@ -121,6 +122,7 @@ def arctic_inference_plugin():
     SpecDecodingLoggingPatch.apply_patch()
     VllmConfigPatch.apply_patch()
     MLPSpeculatorConfigPatch.apply_patch()
+    SchedulerPatch.apply_patch()
 
     # Main optimization patches.
     apply_shift_parallel_patches()
