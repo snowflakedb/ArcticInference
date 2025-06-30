@@ -484,7 +484,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
 
         # Ulysses all-to-all 2/2
         c = torch.empty_like(c_)
-        torch.distributed.all_to_all_single(c, c_, group=self.device_group)
+        torch.distributed.all_to_all_single(c, c_, group=self.sp_device_group)
         output = (c.view(self.sp_size, -1, self.num_heads * self.head_size)
                   .transpose(0, 1)
                   .reshape(-1, self.num_heads * self.sp_size * self.head_size))
