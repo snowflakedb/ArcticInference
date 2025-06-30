@@ -468,6 +468,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             # unpack (key, value)
             kv_chunk = kv_.chunk(self.sp_size)
             order = torch.arange(self.sp_size)
+            order = [0, 4, 1, 5, 2, 6, 3, 7]
             kv_ordered = torch.cat(tuple(kv_chunk[i] for i in order))
             k_, v_ = kv_ordered.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
             # k_, v_ = kv_.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
