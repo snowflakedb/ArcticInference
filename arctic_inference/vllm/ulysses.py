@@ -424,14 +424,10 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             if num_kv_heads < self.sp_size:
                 self.is_kv_replicated = True
                 num_kv_heads = 1
-                self.sp_aa_size = parallel_state._SP_AA.world_size
-                self.sp_ag_size = parallel_state._SP_AG.world_size
                 self.sp_aa_device_group = parallel_state._SP_AA.device_group
                 self.sp_ag_device_group = parallel_state._SP_AG.device_group
-                self.order = []
-                for i in range(self.sp_aa_size):
-                    for j in range(self.sp_ag_size):
-                        self.order.append(j * self.sp_aa_size + i)
+                self.sp_aa_size = parallel_state._SP_AA.world_size
+                self.sp_ag_size = parallel_state._SP_AG.world_size
                 self.order = [j * self.sp_aa_size + i 
                               for i in range(self.sp_aa_size) 
                               for j in range(self.sp_ag_size)]
