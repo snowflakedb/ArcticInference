@@ -233,51 +233,36 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         parallel_state._SP_TP = _SP_TP
         parallel_state._DP = _DP
 
-        PP = _PP.world_size
-        TP = _TP.world_size
-        SP = _SP.world_size
-        SP_TP = SP * TP
-        TP_heads = config.model_config._orig_get_num_kv_heads(config.parallel_config)
-        if TP_heads < sequence_parallel_size:
+        pp_size = _PP.world_size
+        tp_size = _TP.world_size
+        sp_size = _SP.world_size
+        sp_tp_size = sp_size * tp_size
+        num_kv_heads = config.model_config._orig_get_num_kv_heads(config.parallel_config)
+        if num_kv_heads < sequence_parallel_size:
             group_ranks = []
-            for i in range(PP):
-                # print("************** PP ****************")
-                for j in range(TP):
-                    # print("-------------- SP ------------------")
-                    for jj_1 in range(SP // TP_heads):
-                        # print("``````````````` SP_AA `````````````````")
+            for i in range(pp_size):
+                for j in range(tp_size):
+                    for jj_1 in range(sp_size // num_kv_heads):
                         ranks = []
-                        for jj in range(TP_heads):
-                            k = jj * SP_TP // TP_heads + jj_1 * TP + j
-                            # print(f"{k}")
+                        for jj in range(num_kv_heads):
+                            k = jj * sp_tp_size // num_kv_heads + jj_1 * tp_size + j
                             ranks.append(k)
                         group_ranks.append(ranks)
-            # group_ranks = [[0, 1, 2, 3], [4, 5, 6, 7]]
-            # group_ranks = [[0, 2, 4, 6], [1, 3, 5, 7]]
-            # print(f" ########################################## SP all-to-all group_ranks {group_ranks}")
             SP_AA_group_ranks = group_ranks
             _SP_AA = init_model_parallel_group(group_ranks,
                                             get_world_group().local_rank,
                                             backend,
                                             group_name="sp_aa")
             group_ranks = []
-            for i in range(PP):
-                # print("************** PP ****************")
-                for j in range(TP):
-                    # print("-------------- SP ------------------")
-                    for jj_1 in range(TP_heads):
-                       # print("``````````````` SP_AG `````````````````")
+            for i in range(pp_size):
+                for j in range(tp_size):
+                    for jj_1 in range(num_kv_heads):
                         ranks = []
-                        for jj in range(SP // TP_heads):
-                            k = jj * TP + jj_1 * SP_TP // TP_heads + j
-                            k += i * SP_TP
-                            # print(f"PP {i} TP {j} SP {jj_1}
-                            # SP_AG {jj} k {k}")
+                        for jj in range(sp_size // num_kv_heads):
+                            k = jj * tp_size + jj_1 * sp_tp_size // num_kv_heads + j
+                            k += i * sp_tp_size
                             ranks.append(k)
                         group_ranks.append(ranks)
-            # group_ranks = [[0, 4], [1, 5], [2, 6], [3, 7]]
-            # group_ranks = [[0, 1], [2, 3], [4, 5], [6, 7]]
-            # print(f" $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ SP all-gather group_ranks {group_ranks}")
             SP_AG_group_ranks = group_ranks
             _SP_AG = init_model_parallel_group(group_ranks,
                                             get_world_group().local_rank,
@@ -287,21 +272,19 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
             parallel_state._SP_AA = _SP_AA
             parallel_state._SP_AG = _SP_AG
 
-            torch.cuda.synchronize()
-            get_world_group().barrier()
-            for i in range(get_world_group().world_size):
-                if torch.distributed.get_rank() == i:
-                    print(f"UlyssesParallelStatePatch initialized: rank {i}\n"
-                            f"                               PP {_PP.rank_in_group} / {_PP.world_size} ranks {PP_group_ranks}\n"
-                            f"                               TP {_TP.rank_in_group} / {_TP.world_size} ranks {TP_group_ranks}\n"
-                            f"                               SP {_SP.rank_in_group} / {_SP.world_size} ranks {SP_group_ranks}\n"
-                            f"                               DP {_DP.rank_in_group} / {_DP.world_size} ranks {DP_group_ranks}\n"
-                            f"                               EP {_EP.rank_in_group} / {_EP.world_size} ranks {EP_group_ranks}\n"
-                            f"                               SP_TP {_SP_TP.rank_in_group} / {_SP_TP.world_size} ranks {SP_TP_group_ranks}\n"
-                            f"                               SP_AA {_SP_AA.rank_in_group} / {_SP_AA.world_size} ranks {SP_AA_group_ranks}\n"
-                            f"                               SP_AG {_SP_AG.rank_in_group} / {_SP_AG.world_size} ranks {SP_AG_group_ranks}\n")
-                torch.cuda.synchronize()
-                get_world_group().barrier()
+        torch.cuda.synchronize()
+        get_world_group().barrier()
+        if torch.distributed.get_rank() == 0:
+            print(f"UlyssesParallelStatePatch initialized:\n"
+                    f"                               PP {_PP.rank_in_group} / {_PP.world_size} ranks {PP_group_ranks}\n"
+                    f"                               TP {_TP.rank_in_group} / {_TP.world_size} ranks {TP_group_ranks}\n"
+                    f"                               SP {_SP.rank_in_group} / {_SP.world_size} ranks {SP_group_ranks}\n"
+                    f"                               DP {_DP.rank_in_group} / {_DP.world_size} ranks {DP_group_ranks}\n"
+                    f"                               EP {_EP.rank_in_group} / {_EP.world_size} ranks {EP_group_ranks}\n"
+                    f"                               SP_TP {_SP_TP.rank_in_group} / {_SP_TP.world_size} ranks {SP_TP_group_ranks}")
+            if _SP_AA is not None and _SP_AG is not None:
+                print(f"                               SP_AA {_SP_AA.rank_in_group} / {_SP_AA.world_size} ranks {SP_AA_group_ranks}\n"
+                    f"                               SP_AG {_SP_AG.rank_in_group} / {_SP_AG.world_size} ranks {SP_AG_group_ranks}\n")
 
     from contextlib import contextmanager
     @contextmanager
@@ -322,9 +305,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         from vllm.distributed.parallel_state import GraphCaptureContext
         context = GraphCaptureContext(torch.cuda.Stream(device=device))
         with parallel_state._TP.graph_capture(context), parallel_state._PP.graph_capture(
-                context), parallel_state._SP_TP.graph_capture(context
-                ): #, parallel_state._SP_AA.graph_capture(context
-                    #            ), parallel_state._SP_AG.graph_capture(context):
+                context), parallel_state._SP_TP.graph_capture(context):
             yield context
 
 
@@ -424,6 +405,8 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             if num_kv_heads < self.sp_size:
                 self.is_kv_replicated = True
                 num_kv_heads = 1
+                assert parallel_state._SP_AA is not None and parallel_state._SP_AG is not None, (
+                    "UlyssesAttentionPatch requires SP_AA and SP_AG groups to be initialized.")
                 self.sp_aa_device_group = parallel_state._SP_AA.device_group
                 self.sp_ag_device_group = parallel_state._SP_AG.device_group
                 self.sp_aa_size = parallel_state._SP_AA.world_size
@@ -480,7 +463,6 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             kv_ordered = torch.cat([kv_chunk[i] for i in self.order])
             # unpack (key, value)
             k_, v_ = kv_ordered.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
-            # k_, v_ = kv_.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
         else:
             # pack
             qkv = (torch.cat(
