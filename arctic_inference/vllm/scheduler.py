@@ -19,6 +19,7 @@ from vllm.v1.outputs import ModelRunnerOutput
 from vllm.v1.engine import (EngineCoreOutput, EngineCoreOutputs)
 from vllm.v1.spec_decode.metrics import SpecDecodingStats
 from vllm.v1.request import Request
+from vllm.v1.core.sched.utils import check_stop
 
 from arctic_inference.patching import ArcticPatch
 
