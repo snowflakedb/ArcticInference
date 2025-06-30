@@ -282,9 +282,9 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                     f"                               DP {_DP.world_size} ranks {DP_group_ranks}\n"
                     f"                               EP {_EP.world_size} ranks {EP_group_ranks}\n"
                     f"                               SP_TP {_SP_TP.world_size} ranks {SP_TP_group_ranks}")
-            if _SP_AA is not None and _SP_AG is not None:
-                print(f"                               SP_AA {_SP_AA.world_size} ranks {SP_AA_group_ranks}\n"
-                    f"                               SP_AG {_SP_AG.world_size} ranks {SP_AG_group_ranks}\n")
+            if parallel_state._SP_AA is not None and parallel_state._SP_AG is not None:
+                print(f"                               SP_AA {parallel_state._SP_AA.world_size} ranks {SP_AA_group_ranks}\n"
+                    f"                               SP_AG {parallel_state._SP_AG.world_size} ranks {SP_AG_group_ranks}\n")
 
     from contextlib import contextmanager
     @contextmanager
