@@ -428,7 +428,16 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                 self.sp_ag_size = parallel_state._SP_AG.world_size
                 self.sp_aa_device_group = parallel_state._SP_AA.device_group
                 self.sp_ag_device_group = parallel_state._SP_AG.device_group
-                self.order = [0, 4, 1, 5, 2, 6, 3, 7]
+                self.order = []
+                for i in range(self.sp_aa_size):
+                    for j in range(self.sp_ag_size):
+                        self.order.append(j * self.sp_aa_size + i)
+                # self.order = [0, 4, 1, 5, 2, 6, 3, 7]
+                if torch.distributed.get_rank() == 0:
+                    print(f"UlyssesAttentionPatch: kv heads {num_kv_heads}, "
+                          f"sp_aa_size {self.sp_aa_size}, "
+                          f"sp_ag_size {self.sp_ag_size}, "
+                          f"order {self.order}")
             else:
                 self.is_kv_replicated = False
                 num_kv_heads //= self.sp_size
