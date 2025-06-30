@@ -276,15 +276,15 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         get_world_group().barrier()
         if torch.distributed.get_rank() == 0:
             print(f"UlyssesParallelStatePatch initialized:\n"
-                    f"                               PP {_PP.rank_in_group} / {_PP.world_size} ranks {PP_group_ranks}\n"
-                    f"                               TP {_TP.rank_in_group} / {_TP.world_size} ranks {TP_group_ranks}\n"
-                    f"                               SP {_SP.rank_in_group} / {_SP.world_size} ranks {SP_group_ranks}\n"
-                    f"                               DP {_DP.rank_in_group} / {_DP.world_size} ranks {DP_group_ranks}\n"
-                    f"                               EP {_EP.rank_in_group} / {_EP.world_size} ranks {EP_group_ranks}\n"
-                    f"                               SP_TP {_SP_TP.rank_in_group} / {_SP_TP.world_size} ranks {SP_TP_group_ranks}")
+                    f"                               PP {_PP.world_size} ranks {PP_group_ranks}\n"
+                    f"                               TP {_TP.world_size} ranks {TP_group_ranks}\n"
+                    f"                               SP {_SP.world_size} ranks {SP_group_ranks}\n"
+                    f"                               DP {_DP.world_size} ranks {DP_group_ranks}\n"
+                    f"                               EP {_EP.world_size} ranks {EP_group_ranks}\n"
+                    f"                               SP_TP {_SP_TP.world_size} ranks {SP_TP_group_ranks}")
             if _SP_AA is not None and _SP_AG is not None:
-                print(f"                               SP_AA {_SP_AA.rank_in_group} / {_SP_AA.world_size} ranks {SP_AA_group_ranks}\n"
-                    f"                               SP_AG {_SP_AG.rank_in_group} / {_SP_AG.world_size} ranks {SP_AG_group_ranks}\n")
+                print(f"                               SP_AA {_SP_AA.world_size} ranks {SP_AA_group_ranks}\n"
+                    f"                               SP_AG {_SP_AG.world_size} ranks {SP_AG_group_ranks}\n")
 
     from contextlib import contextmanager
     @contextmanager
@@ -413,12 +413,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                 self.order = [j * self.sp_aa_size + i 
                               for i in range(self.sp_aa_size) 
                               for j in range(self.sp_ag_size)]
-                # self.order = [0, 4, 1, 5, 2, 6, 3, 7]
-                if torch.distributed.get_rank() == 0:
-                    print(f"UlyssesAttentionPatch: kv heads {num_kv_heads}, "
-                          f"sp_aa_size {self.sp_aa_size}, "
-                          f"sp_ag_size {self.sp_ag_size}, "
-                          f"order {self.order}")
+                # self.order = [0, 4, 1, 5, 2, 6, 3, 7] for Qwen3-30B-3B, SP=8
             else:
                 self.is_kv_replicated = False
                 num_kv_heads //= self.sp_size
