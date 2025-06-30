@@ -489,27 +489,26 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                             value.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size)),
                            dim=-1).transpose(0, 1).reshape(
                                -1, 2 * self.num_kv_heads * self.head_size)
-            kv_ = torch.empty_like(kv)
+            kv__ = torch.empty_like(kv)
             # Ulysses all-to-all (key, value)
-            torch.distributed.all_to_all_single(kv_, kv, group=self.sp_aa_device_group)
+            torch.distributed.all_to_all_single(kv__, kv, group=self.sp_aa_device_group)
             # Ulysses all-gather (key, value)
-            kv__ = torch.empty(q_.shape[0],
+            kv_ = torch.empty(q_.shape[0],
                               2 * self.num_kv_heads * self.head_size,
                               dtype=query.dtype,
                               device=query.device)
-            torch.distributed.all_gather_into_tensor(kv__,
-                                                     kv_,
+            torch.distributed.all_gather_into_tensor(kv_,
+                                                     kv__,
                                                      group=self.sp_ag_device_group)
             # TODO: Reorder the kv__ tensor to match the original SP order
-            kv_chunk = kv__.chunk(self.sp_size)
+            # unpack (key, value)
+            kv_chunk = kv_.chunk(self.sp_size)
             order = torch.arange(self.sp_size)
-            order = [0, 2, 1, 3, 4, 6, 5, 7]
+            order = [0, 2, 4, 6, 1, 3, 5, 7]
             # order = [0, 2, 1, 3]
             # order = [0, 1]
-            kv_ordered = tuple(kv_chunk[i] for i in order)
-            kv__ = torch.cat(kv_ordered).contiguous()
-            # unpack (key, value)
-            k_, v_ = kv__.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
+            kv_ordered = torch.cat(tuple(kv_chunk[i] for i in order))
+            k_, v_ = kv_ordered.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
         else:
 
         # if self.is_kv_replicated:
