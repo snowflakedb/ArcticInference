@@ -501,6 +501,10 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                                                      kv_,
                                                      group=self.sp_ag_device_group)
             # TODO: Reorder the kv__ tensor to match the original SP order
+            kv_chunk = kv__.chunk(self.sp_size)
+            order = torch.arange(self.sp_size)
+            kv_ordered = tuple(kv_chunk[i] for i in order)
+            kv__ = torch.cat(kv_ordered).contiguous()
             # unpack (key, value)
             k_, v_ = kv__.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
         else:
