@@ -526,7 +526,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             torch.distributed.all_gather_into_tensor(kv_,
                                                      kv,
                                                      group=self.sp_ag_device_group)
-            key, value = kv_.split([self.sp_size * self.num_kv_heads * self.head_size] * 2, dim=-1)
+            key, value = kv_.split([self.sp_aa_size * self.num_kv_heads * self.head_size] * 2, dim=-1)
 
         # pack
         qkv = (torch.cat(
