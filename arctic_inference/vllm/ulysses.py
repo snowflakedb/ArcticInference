@@ -418,9 +418,6 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
         self.sp_size = parallel_state._SP.world_size
         self.sp_device_group = parallel_state._SP.device_group
 
-        # if torch.distributed.get_rank() == 0:
-        #     print(f"ulysses before num_heads {num_heads} num_kv_heads {kwargs['num_kv_heads']} sp_kv size {self.sp_kv_size} ")
-
         if not is_shift_parallel_mode():
             num_heads //= self.sp_size
             num_kv_heads = kwargs["num_kv_heads"]
@@ -428,16 +425,12 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                 self.is_kv_replicated = True
                 num_kv_heads = 1
                 self.sp_aa_size = parallel_state._SP_AA.world_size
-                self.sp_ag_size = parallel_state._SP_AG.world_size
                 self.sp_aa_device_group = parallel_state._SP_AA.device_group
                 self.sp_ag_device_group = parallel_state._SP_AG.device_group
             else:
                 self.is_kv_replicated = False
                 num_kv_heads //= self.sp_size
             kwargs["num_kv_heads"] = num_kv_heads
-
-        # if torch.distributed.get_rank() == 0:
-        #     print(f"ulysses after num_heads {num_heads} num_kv_heads {kwargs['num_kv_heads']} ")
 
         return self._orig_init(num_heads, *args, **kwargs)
 
@@ -447,22 +440,6 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             return self._orig_forward(query, key, value, **kwargs)
 
         assert self.is_kv_replicated is not None
-
-        # torch.cuda.synchronize()
-        # get_world_group().barrier()
-        # for i in range(get_world_group().world_size):
-        #     if torch.distributed.get_rank() == i:
-        #         print(f"UlyssesAttentionPatch forward: rank {i}\n"
-        #               f"                               query {query.shape}\n"
-        #               f"                               key {key.shape}\n"
-        #               f"                               value {value.shape}\n"
-        #               f"                               sp_size {self.sp_size}\n"
-        #               f"                               num_heads {self.num_heads}\n"
-        #               f"                               num_kv_heads {self.num_kv_heads}\n"
-        #               f"                               head_size {self.head_size}\n"
-        #               f"                               is_kv_replicated {self.is_kv_replicated}")
-        #     torch.cuda.synchronize()
-        #     get_world_group().barrier()
 
         if self.is_kv_replicated:
             # Ulysses all-to-all 1/2 (query)
@@ -489,42 +466,8 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                                                      kv__,
                                                      group=self.sp_ag_device_group)
             # unpack (key, value)
-            # kv_chunk = kv_.chunk(self.sp_size)
-            # order = torch.arange(self.sp_size)
-            # TODO: Reorder the kv__ tensor to match the original SP order
-            # order = [0, 2, 1, 3, 4, 6, 5, 7]
-            # order = [0, 2, 1, 3]
-            # order = [0, 1]
-            # kv_ordered = torch.cat(tuple(kv_chunk[i] for i in order))
-            # k_, v_ = kv_ordered.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
             k_, v_ = kv_.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
         else:
-
-        # if self.is_kv_replicated:
-        #     if torch.distributed.get_rank() == 0:
-        #         print(f"UlyssesAttentionPatch forward: rank {torch.distributed.get_rank()}\n"
-        #               f"                               query {query.shape}\n"
-        #               f"                               key {key.shape}\n"
-        #               f"                               value {value.shape}\n"
-        #               f"                               sp_size {self.sp_size}\n"
-        #               f"                               num_heads {self.num_heads}\n"
-        #               f"                               num_kv_heads {self.num_kv_heads}\n"
-        #               f"                               head_size {self.head_size}\n"
-        #               f"                               is_kv_replicated {self.is_kv_replicated}")
-
-        #     kv = torch.cat((key, value), dim=-1).reshape(
-        #         -1, self.sp_aa_size, 2 * self.num_kv_heads * self.head_size)
-        #     kv_ = torch.empty(query.shape[0] * self.sp_ag_size,
-        #                       self.sp_aa_size * 2 * self.num_kv_heads * self.head_size,
-        #                       dtype=query.dtype,
-        #                       device=query.device)
-        #     torch.distributed.all_gather_into_tensor(kv_,
-        #                                              kv,
-        #                                              group=self.sp_ag_device_group)
-        #     key, value = kv_.split([self.sp_aa_size * self.num_kv_heads * self.head_size] * 2, dim=-1)
-        #     key = key.contiguous()
-        #     value = value.contiguous()
-
             # pack
             qkv = (torch.cat(
                 (query.view(-1, self.sp_size, self.num_heads * self.head_size),
