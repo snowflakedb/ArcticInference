@@ -504,7 +504,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             # unpack (key, value)
             kv_chunk = kv_.chunk(self.sp_size)
             order = torch.arange(self.sp_size)
-            order = [0, 2, 1, 3, 2, 6, 5, 7]
+            order = [0, 2, 1, 3, 4, 6, 5, 7]
             # order = [0, 2, 1, 3]
             # order = [0, 1]
             kv_ordered = torch.cat(tuple(kv_chunk[i] for i in order))
