@@ -276,15 +276,15 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         get_world_group().barrier()
         if torch.distributed.get_rank() == 0:
             print(f"UlyssesParallelStatePatch initialized:\n"
-                    f"                               PP {_PP.world_size} ranks {PP_group_ranks}\n"
-                    f"                               TP {_TP.world_size} ranks {TP_group_ranks}\n"
-                    f"                               SP {_SP.world_size} ranks {SP_group_ranks}\n"
-                    f"                               DP {_DP.world_size} ranks {DP_group_ranks}\n"
-                    f"                               EP {_EP.world_size} ranks {EP_group_ranks}\n"
-                    f"                               SP_TP {_SP_TP.world_size} ranks {SP_TP_group_ranks}")
+                    f"  PP {_PP.world_size} ranks {PP_group_ranks}\n"
+                    f"  TP {_TP.world_size} ranks {TP_group_ranks}\n"
+                    f"  SP {_SP.world_size} ranks {SP_group_ranks}\n"
+                    f"  DP {_DP.world_size} ranks {DP_group_ranks}\n"
+                    f"  EP {_EP.world_size} ranks {EP_group_ranks}\n"
+                    f"  SP_TP {_SP_TP.world_size} ranks {SP_TP_group_ranks}")
             if parallel_state._SP_AA is not None and parallel_state._SP_AG is not None:
-                print(f"                               SP_AA {parallel_state._SP_AA.world_size} ranks {SP_AA_group_ranks}\n"
-                    f"                               SP_AG {parallel_state._SP_AG.world_size} ranks {SP_AG_group_ranks}\n")
+                print(f"  SP_AA {parallel_state._SP_AA.world_size} ranks {SP_AA_group_ranks}\n"
+                    f"  SP_AG {parallel_state._SP_AG.world_size} ranks {SP_AG_group_ranks}\n")
 
     from contextlib import contextmanager
     @contextmanager
@@ -440,8 +440,8 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                             value.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size)),
                            dim=-1).transpose(0, 1).reshape(
                                -1, 2 * self.num_kv_heads * self.head_size)
-            kv__ = torch.empty_like(kv)
             # Ulysses all-to-all (key, value)
+            kv__ = torch.empty_like(kv)
             torch.distributed.all_to_all_single(kv__, kv, group=self.sp_aa_device_group)
             # Ulysses all-gather (key, value)
             kv_ = torch.empty(q_.shape[0],
