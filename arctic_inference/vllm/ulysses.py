@@ -425,8 +425,10 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                 self.is_kv_replicated = True
                 num_kv_heads = 1
                 self.sp_aa_size = parallel_state._SP_AA.world_size
+                self.sp_ag_size = parallel_state._SP_AG.world_size
                 self.sp_aa_device_group = parallel_state._SP_AA.device_group
                 self.sp_ag_device_group = parallel_state._SP_AG.device_group
+                self.order = [0, 4, 1, 5, 2, 6, 3, 7]
             else:
                 self.is_kv_replicated = False
                 num_kv_heads //= self.sp_size
@@ -467,9 +469,11 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                                                      group=self.sp_ag_device_group)
             # unpack (key, value)
             kv_chunk = kv_.chunk(self.sp_size)
-            order = torch.arange(self.sp_size)
-            order = [0, 4, 1, 5, 2, 6, 3, 7]
-            kv_ordered = torch.cat(tuple(kv_chunk[i] for i in order))
+            # order = torch.arange(self.sp_size)
+            # order = [0, 4, 1, 5, 2, 6, 3, 7]
+            # order = [self.sp_aa_size * i + j for i in range(self.sp_size // self.sp_aa_size)
+            #          for j in range(self.sp_ag_size)]
+            kv_ordered = torch.cat([kv_chunk[i] for i in self.order])
             k_, v_ = kv_ordered.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
             # k_, v_ = kv_.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
         else:
