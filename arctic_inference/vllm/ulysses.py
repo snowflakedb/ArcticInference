@@ -432,6 +432,9 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                 for i in range(self.sp_aa_size):
                     for j in range(self.sp_ag_size):
                         self.order.append(j * self.sp_aa_size + i)
+                self.order = [j * self.sp_aa_size + i 
+                              for i in range(self.sp_aa_size) 
+                              for j in range(self.sp_ag_size)]
                 # self.order = [0, 4, 1, 5, 2, 6, 3, 7]
                 if torch.distributed.get_rank() == 0:
                     print(f"UlyssesAttentionPatch: kv heads {num_kv_heads}, "
@@ -476,13 +479,10 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             torch.distributed.all_gather_into_tensor(kv_,
                                                      kv__,
                                                      group=self.sp_ag_device_group)
-            # unpack (key, value)
+            # reorder
             kv_chunk = kv_.chunk(self.sp_size)
-            # order = torch.arange(self.sp_size)
-            # order = [0, 4, 1, 5, 2, 6, 3, 7]
-            # order = [self.sp_aa_size * i + j for i in range(self.sp_size // self.sp_aa_size)
-            #          for j in range(self.sp_ag_size)]
             kv_ordered = torch.cat([kv_chunk[i] for i in self.order])
+            # unpack (key, value)
             k_, v_ = kv_ordered.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
             # k_, v_ = kv_.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
         else:
