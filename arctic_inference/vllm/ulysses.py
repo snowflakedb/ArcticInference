@@ -472,18 +472,6 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                                              self.num_heads * self.head_size)
             q_ = torch.empty_like(q)
             torch.distributed.all_to_all_single(q_, q, group=self.sp_device_group)
-
-        #     kv = torch.cat(key, value, dim=-1).reshape(
-        #         -1, self.sp_size, 2 * self.num_kv_heads * self.head)
-        #     kv__ = torch.empty(q_.shape[0] / self.sp_size,
-        #                       2 * self.num_kv_heads * self.head_size,
-        #                       dtype=query.dtype,
-        #                       device=query.device)
-        #     torch.distributed.all_gather_into_tensor(kv__,
-        #                                              kv,
-        #                                              group=self.sp_ag_device_group)
-
-
             # Ulysses pack (key, value)
             kv = torch.cat((key.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size),
                             value.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size)),
@@ -500,11 +488,11 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             torch.distributed.all_gather_into_tensor(kv_,
                                                      kv__,
                                                      group=self.sp_ag_device_group)
-            # TODO: Reorder the kv__ tensor to match the original SP order
             # unpack (key, value)
             kv_chunk = kv_.chunk(self.sp_size)
             order = torch.arange(self.sp_size)
-            order = [0, 2, 1, 3, 4, 6, 5, 7]
+            # TODO: Reorder the kv__ tensor to match the original SP order
+            # order = [0, 2, 1, 3, 4, 6, 5, 7]
             # order = [0, 2, 1, 3]
             # order = [0, 1]
             kv_ordered = torch.cat(tuple(kv_chunk[i] for i in order))
