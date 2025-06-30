@@ -489,14 +489,15 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                                                      kv__,
                                                      group=self.sp_ag_device_group)
             # unpack (key, value)
-            kv_chunk = kv_.chunk(self.sp_size)
-            order = torch.arange(self.sp_size)
+            # kv_chunk = kv_.chunk(self.sp_size)
+            # order = torch.arange(self.sp_size)
             # TODO: Reorder the kv__ tensor to match the original SP order
             # order = [0, 2, 1, 3, 4, 6, 5, 7]
             # order = [0, 2, 1, 3]
             # order = [0, 1]
-            kv_ordered = torch.cat(tuple(kv_chunk[i] for i in order))
-            k_, v_ = kv_ordered.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
+            # kv_ordered = torch.cat(tuple(kv_chunk[i] for i in order))
+            # k_, v_ = kv_ordered.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
+            k_, v_ = kv_.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
         else:
 
         # if self.is_kv_replicated:
