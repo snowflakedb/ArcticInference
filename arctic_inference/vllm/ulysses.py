@@ -503,6 +503,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             # TODO: Reorder the kv__ tensor to match the original SP order
             kv_chunk = kv__.chunk(self.sp_size)
             order = torch.arange(self.sp_size)
+            order = [0, 4, 1, 5, 2, 6, 3, 7]
             kv_ordered = tuple(kv_chunk[i] for i in order)
             kv__ = torch.cat(kv_ordered).contiguous()
             # unpack (key, value)
