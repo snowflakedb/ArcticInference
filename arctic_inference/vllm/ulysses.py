@@ -397,7 +397,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
     def __init__(self, num_heads, *args, **kwargs):
         from .model_runner import is_shift_parallel_mode
         self.sp_size = parallel_state._SP.world_size
-        self.device_group = parallel_state._SP.device_group
+        self.sp_device_group = parallel_state._SP.device_group
         if not is_shift_parallel_mode():
             num_heads //= self.sp_size
             num_kv_heads = kwargs["num_kv_heads"]
