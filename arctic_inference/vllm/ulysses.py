@@ -466,7 +466,11 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                                                      kv__,
                                                      group=self.sp_ag_device_group)
             # unpack (key, value)
-            k_, v_ = kv_.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
+            kv_chunk = kv_.chunk(self.sp_size)
+            order = torch.arange(self.sp_size)
+            kv_ordered = torch.cat(tuple(kv_chunk[i] for i in order))
+            k_, v_ = kv_ordered.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
+            # k_, v_ = kv_.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
         else:
             # pack
             qkv = (torch.cat(
