@@ -518,9 +518,9 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                       f"                               head_size {self.head_size}\n"
                       f"                               is_kv_replicated {self.is_kv_replicated}")
 
-            kv = torch.cat(key, value, dim=-1).reshape(
+            kv = torch.cat((key, value), dim=-1).reshape(
                 -1, self.sp_aa_size, 2 * self.num_kv_heads * self.head_size)
-            kv_ = torch.empty(query.shape[0] / self.sp_aa_size,
+            kv_ = torch.empty(query.shape[0] / self.sp_size,
                               self.sp_aa_size * 2 * self.num_kv_heads * self.head_size,
                               dtype=query.dtype,
                               device=query.device)
