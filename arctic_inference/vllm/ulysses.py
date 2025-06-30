@@ -506,7 +506,6 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
         # else:
 
         if self.is_kv_replicated:
-
             if torch.distributed.get_rank() == 0:
                 print(f"UlyssesAttentionPatch forward: rank {torch.distributed.get_rank()}\n"
                       f"                               query {query.shape}\n"
@@ -520,7 +519,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
 
             kv = torch.cat((key, value), dim=-1).reshape(
                 -1, self.sp_aa_size, 2 * self.num_kv_heads * self.head_size)
-            kv_ = torch.empty(query.shape[0],
+            kv_ = torch.empty(query.shape[0] / self.sp_size,
                               self.sp_aa_size * 2 * self.num_kv_heads * self.head_size,
                               dtype=query.dtype,
                               device=query.device)
