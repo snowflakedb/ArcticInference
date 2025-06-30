@@ -506,22 +506,34 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
         # else:
 
         if self.is_kv_replicated:
+
+            if torch.distributed.get_rank() == 0:
+                print(f"UlyssesAttentionPatch forward: rank {torch.distributed.get_rank()}\n"
+                      f"                               query {query.shape}\n"
+                      f"                               key {key.shape}\n"
+                      f"                               value {value.shape}\n"
+                      f"                               sp_size {self.sp_size}\n"
+                      f"                               num_heads {self.num_heads}\n"
+                      f"                               num_kv_heads {self.num_kv_heads}\n"
+                      f"                               head_size {self.head_size}\n"
+                      f"                               is_kv_replicated {self.is_kv_replicated}")
+
             kv = torch.cat(key, value, dim=-1).reshape(
                 -1, self.sp_size, 2 * self.num_kv_heads * self.head_size)
-            kv__ = torch.empty(query.shape[0] / self.sp_size,
+            kv_ = torch.empty(query.shape[0] / self.sp_size,
                               self.sp_size * 2 * self.num_kv_heads * self.head_size,
                               dtype=query.dtype,
                               device=query.device)
-            torch.distributed.all_gather_into_tensor(kv__,
+            torch.distributed.all_gather_into_tensor(kv_,
                                                      kv,
                                                      group=self.sp_ag_device_group)
-            k_, v_ = kv__.split([self.sp_size * self.num_kv_heads * self.head_size] * 2, dim=-1)
+            key, value = kv_.split([self.sp_size * self.num_kv_heads * self.head_size] * 2, dim=-1)
 
         # pack
         qkv = (torch.cat(
             (query.view(-1, self.sp_size, self.num_heads * self.head_size),
-            k_.view(-1, self.sp_size, self.num_kv_heads * self.head_size),
-            v_.view(-1, self.sp_size, self.num_kv_heads * self.head_size)),
+            key.view(-1, self.sp_size, self.num_kv_heads * self.head_size),
+            value.view(-1, self.sp_size, self.num_kv_heads * self.head_size)),
             dim=-1)
             .transpose(0, 1)
             .reshape(-1, (self.num_heads + 2 * self.num_kv_heads) * self.head_size))
