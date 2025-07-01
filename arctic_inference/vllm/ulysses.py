@@ -28,7 +28,6 @@ from vllm.distributed.parallel_state import (init_model_parallel_group,
 from vllm.executor.multiproc_worker_utils import (
     set_multiprocessing_worker_envs)
 from vllm.utils import get_distributed_init_method, get_open_port
-from vllm.v1.attention.backends.flash_attn import FlashAttentionImpl
 from vllm.v1.executor.abstract import FailureCallback
 from vllm.v1.executor.multiproc_executor import (MultiprocExecutor, WorkerProc,
                                                  UnreadyWorkerProcHandle)
@@ -44,7 +43,6 @@ def apply_shift_parallel_patches():
     UlyssesParallelStatePatch.apply_patch()
     UlyssesMultiprocExecutorPatch.apply_patch()
     UlyssesAttentionPatch.apply_patch()
-    UlyssesFlashAttentionImplPatch.apply_patch()
     PiecewiseCompileInterpreterPatch.apply_patch()
 
 
@@ -337,6 +335,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
     def __init__(self, num_heads, *args, **kwargs):
         from .model_runner import is_shift_parallel_mode
         self.sp_size = parallel_state._SP.world_size
+        self.device_group = parallel_state._SP.device_group
         if not is_shift_parallel_mode():
             num_heads //= self.sp_size
             kwargs["num_kv_heads"] //= self.sp_size
@@ -347,68 +346,33 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
         if self.sp_size == 1 or is_shift_parallel_mode():
             return self._orig_forward(query, key, value, **kwargs)
 
-        from vllm.forward_context import get_forward_context
-        if self.calculate_kv_scales:
-            attn_metadata = get_forward_context().attn_metadata
-            if attn_metadata.enable_kv_scales_calculation:
-                self.calc_kv_scales(key, value)
-        hidden_size = query.shape[-1]
-        output = torch.empty_like(query)
-        torch.ops.vllm.unified_attention_with_output(
-                    query, key, value, output, self.layer_name)
-        return output.view(-1, hidden_size)
-
-
-class UlyssesFlashAttentionImplPatch(ArcticPatch[FlashAttentionImpl]):
-
-    _orig_forward = FlashAttentionImpl.forward
-
-    def forward(self, layer, query, key, value, kv_cache, attn_metadata, output):
-        from .model_runner import is_shift_parallel_mode
-
-        assert output is not None, "Output tensor must be provided."
-        if attn_metadata is None:
-            # Profiling run.
-            return output
-
-        sp_size = parallel_state._SP.world_size
-        device_group = parallel_state._SP.device_group
-
-        if sp_size == 1 or is_shift_parallel_mode():
-            return self._orig_forward(layer, query, key, value, kv_cache,
-                                      attn_metadata, output)
-
-        qkv = torch.cat(
-            (query.view(-1, sp_size, self.num_heads * self.head_size),
-                key.view(-1, sp_size, self.num_kv_heads * self.head_size),
-                value.view(-1, sp_size, self.num_kv_heads * self.head_size)),
-            dim=-1).transpose(0, 1).reshape(-1,
-                (self.num_heads + 2 * self.num_kv_heads) * self.head_size)
-        # all-to-all
+        # pack
+        qkv = (torch.cat(
+            (query.view(-1, self.sp_size, self.num_heads * self.head_size),
+             key.view(-1, self.sp_size, self.num_kv_heads * self.head_size),
+             value.view(-1, self.sp_size, self.num_kv_heads * self.head_size)),
+            dim=-1)
+               .transpose(0, 1)
+               .reshape(-1, (self.num_heads + 2 * self.num_kv_heads) * self.head_size))
+        # Ulysses all-to-all 1/2
         qkv_ = torch.empty_like(qkv)
-        torch.distributed.all_to_all_single(qkv_,
-                                            qkv,
-                                            group=device_group)
+        torch.distributed.all_to_all_single(qkv_, qkv, group=self.device_group)
         # unpack
         q_, k_, v_ = qkv_.split([
             self.num_heads * self.head_size, self.num_kv_heads *
             self.head_size, self.num_kv_heads * self.head_size
         ], dim=-1)
-        # prepare
-        q_ = q_.reshape(-1, self.num_heads, self.head_size)
-        k_ = k_.reshape(-1, self.num_kv_heads, self.head_size)
-        v_ = v_.reshape(-1, self.num_kv_heads, self.head_size)
-        c_ = output.view(-1, self.num_heads, self.head_size)
 
         # original attention
-        self._orig_forward(layer, q_, k_, v_, kv_cache, attn_metadata, c_)
+        c_ = self._orig_forward(q_, k_, v_, **kwargs)
 
         # Ulysses all-to-all 2/2
         c = torch.empty_like(c_)
-        torch.distributed.all_to_all_single(c, c_, group=device_group)
-        output.copy_(c.view(sp_size, -1, self.num_heads * self.head_size)
-                     .transpose(0, 1)
-                     .reshape(-1, self.num_heads * sp_size * self.head_size))
+        torch.distributed.all_to_all_single(c, c_, group=self.device_group)
+        output = (c.view(self.sp_size, -1, self.num_heads * self.head_size)
+                  .transpose(0, 1)
+                  .reshape(-1, self.num_heads * self.sp_size * self.head_size))
+        
         return output
 
 
