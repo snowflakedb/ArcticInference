@@ -175,19 +175,20 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         sp_rank = parallel_state._SP.rank_in_group
         device_group = parallel_state._SP.device_group
         model_forward = self.model.forward
+        input_key = 'inputs_embeds' if  self.is_multimodal_model else 'input_ids'
 
         def ulysses_forward(*args, **kwargs):
             # update inputs
-            input_ids = kwargs['input_ids']
+            input_tensor = kwargs[input_key]
             positions = kwargs['positions']
             # Ulysses parameters
-            N = input_ids.shape[0]
+            N = input_tensor.shape[0]
 
             N_ulysses = N // sp_size
             N_offset = N_ulysses * sp_rank
 
             # narrow the input
-            kwargs['input_ids'] = input_ids[N_offset:N_offset + N_ulysses]
+            kwargs[input_key] = input_tensor[N_offset:N_offset + N_ulysses]
             kwargs['positions'] = positions[N_offset:N_offset + N_ulysses]
 
             with set_shift_parallel_mode(False):
@@ -195,7 +196,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
             if output.size(0) == N_ulysses:
                 # all-gather model_output
-                model_output = torch.empty((N, self.model.config.hidden_size),
+                model_output = torch.empty((N, self.hidden_size),
                                         dtype=output.dtype,
                                         device=output.device)
                 torch.distributed.all_gather_into_tensor(model_output,
