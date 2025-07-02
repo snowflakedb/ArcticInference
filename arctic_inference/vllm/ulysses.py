@@ -185,7 +185,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
 
         assert _EP is None, ("expert parallel group is already initialized")
         group_ranks = all_ranks.transpose(1, 3).reshape(
-            -1, data_parallel_size * tensor_model_parallel_size).unbind(0)
+            -1, data_parallel_size * tensor_model_parallel_size * sequence_parallel_size).unbind(0)
         group_ranks = [x.tolist() for x in group_ranks]
         EP_group_ranks = group_ranks
         _EP = init_model_parallel_group(group_ranks,
