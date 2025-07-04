@@ -43,6 +43,14 @@ from vllm.model_executor.models.utils import (AutoWeightsLoader,
 from vllm.model_executor.sampling_metadata import SamplingMetadata
 from vllm.sequence import IntermediateTensors
 
+# Add FlashInfer backend detection
+try:
+    from vllm.v1.attention.backends.flashinfer import FlashInferMetadata
+    FLASHINFER_AVAILABLE = True
+except ImportError:
+    FLASHINFER_AVAILABLE = False
+    FlashInferMetadata = None
+
 import arctic_inference.vllm.model_runner as model_runner
 from arctic_inference.common.swiftkv.configs import LlamaSwiftKVConfig
 
@@ -57,6 +65,12 @@ def get_attn_metadata_for_swiftkv():
     assert all(m is meta for m in fwd_ctx.attn_metadata.values()), \
         "All attention metadata should be the same for LlamaSwiftKV."
     return meta
+
+
+def is_flashinfer_backend(attn_metadata):
+    if attn_metadata is None:
+        return False
+    return isinstance(attn_metadata, FlashInferMetadata)
 
 
 class LlamaSwiftKVAttention(LlamaAttention):
@@ -120,6 +134,9 @@ class LlamaSwiftKVAttention(LlamaAttention):
     ) -> torch.Tensor:
         q, _ = self.q_proj_swiftkv(hidden_states)
         q, _ = self.rotary_emb(positions, q, torch.empty_like(k))
+        
+        # The attention call works the same for both FlashAttention and FlashInfer
+        # as they both use the same interface: self.attn(q, k, v)
         attn_output = self.attn(q, k, v)
         output, _ = self.o_proj(attn_output)
         return output
@@ -416,10 +433,8 @@ class LlamaSwiftKVModel(nn.Module):
         forward_context: ForwardContext = get_forward_context()
         attn_metadata = get_attn_metadata_for_swiftkv()
         if attn_metadata is None:
-            # Graph capture or profiling mode.
+            # Graph capture mode logic is fine
             if hidden_states.shape[0] <= self.cuda_graph_max_batch_size:
-                # Return the preallocated buffers so cuda graph is captured
-                # correctly.
                 inputs = self.decode_runner.inputs
                 batch_size = hidden_states.shape[0]
                 padded_size = self.vllm_config.pad_for_cudagraph(batch_size)
@@ -431,10 +446,10 @@ class LlamaSwiftKVModel(nn.Module):
             return hidden_states, residual, positions, k_states, v_states
 
         if self.use_custom_ops:
-            key_caches : List[torch.Tensor] = []
-            value_caches : List[torch.Tensor] = []
-            k_scales : List[torch.Tensor] = []
-            v_scales : List[torch.Tensor] = []
+            key_caches: List[torch.Tensor] = []
+            value_caches: List[torch.Tensor] = []
+            k_scales: List[torch.Tensor] = []
+            v_scales: List[torch.Tensor] = []
             num_heads = self.layers[-1].self_attn.attn.num_kv_heads
             head_size = self.layers[-1].self_attn.attn.head_size
             for idx, layer in enumerate(
@@ -442,19 +457,26 @@ class LlamaSwiftKVModel(nn.Module):
                 attn = layer.self_attn.attn
                 kv_cache = attn.kv_cache[forward_context.virtual_engine]
                 if kv_cache.numel():
-                    key_caches.append(kv_cache[0])
-                    value_caches.append(kv_cache[1])
+                    # different cache layouts
+                    if is_flashinfer_backend(attn_metadata):
+                        # FlashInfer: [num_blocks, 2, block_size, num_kv_heads, head_size]
+                        key_caches.append(kv_cache[:, 0])
+                        value_caches.append(kv_cache[:, 1])
+                    else:
+                        # FlashAttention: [2, num_blocks, block_size, num_kv_heads, head_size]
+                        key_caches.append(kv_cache[0])
+                        value_caches.append(kv_cache[1])
                     k_scales.append(attn._k_scale)
                     v_scales.append(attn._v_scale)
 
             if len(key_caches) > 0:
                 from arctic_inference.py_custom_ops import reshape_and_cache_flash_bulk
                 reshape_and_cache_flash_bulk(
-                    k_states, v_states, key_caches, value_caches, attn_metadata.slot_mapping,
-                    attn.kv_cache_dtype, k_scales, v_scales, num_heads, head_size)
+                    k_states, v_states, key_caches, value_caches,
+                    attn_metadata.slot_mapping, attn.kv_cache_dtype, k_scales,
+                    v_scales, num_heads, head_size)
         else:
-            num_layers = (self.config.num_hidden_layers -
-                          self.config.num_key_value_layers)
+            num_layers = (self.config.num_hidden_layers - self.config.num_key_value_layers)
 
             k_split = k_states.chunk(num_layers, dim=-1)
             v_split = v_states.chunk(num_layers, dim=-1)
@@ -464,38 +486,143 @@ class LlamaSwiftKVModel(nn.Module):
                 attn = layer.self_attn.attn
                 kv_cache = attn.kv_cache[forward_context.virtual_engine]
                 if kv_cache.numel():
-                    torch.ops._C_cache_ops.reshape_and_cache_flash(
-                        k_split[idx].view(-1, attn.num_kv_heads, attn.head_size),
-                        v_split[idx].view(-1, attn.num_kv_heads, attn.head_size),
-                        kv_cache[0],
-                        kv_cache[1],
-                        attn_metadata.slot_mapping,
-                        attn.kv_cache_dtype,
-                        attn._k_scale,
-                        attn._v_scale,
-                    )
+                    if is_flashinfer_backend(attn_metadata):
+                        # FlashInfer: [num_blocks, 2, block_size, num_kv_heads, head_size]
+                        torch.ops._C_cache_ops.reshape_and_cache_flash(
+                            k_split[idx].view(-1, attn.num_kv_heads, attn.head_size),
+                            v_split[idx].view(-1, attn.num_kv_heads, attn.head_size),
+                            kv_cache[:, 0],
+                            kv_cache[:, 1],
+                            attn_metadata.slot_mapping,
+                            attn.kv_cache_dtype,
+                            attn._k_scale,
+                            attn._v_scale,
+                        )
+                    else:
+                        # FlashAttention: [2, num_blocks, block_size, num_kv_heads, head_size]
+                        torch.ops._C_cache_ops.reshape_and_cache_flash(
+                            k_split[idx].view(-1, attn.num_kv_heads, attn.head_size),
+                            v_split[idx].view(-1, attn.num_kv_heads, attn.head_size),
+                            kv_cache[0],
+                            kv_cache[1],
+                            attn_metadata.slot_mapping,
+                            attn.kv_cache_dtype,
+                            attn._k_scale,
+                            attn._v_scale,
+                        )
 
         logits_indices = attn_metadata.swiftkv_logits_indices
+        num_surviving_tokens = logits_indices.numel()
 
-        attn_metadata.num_actual_tokens = logits_indices.numel()
-        attn_metadata.query_start_loc = torch.searchsorted(
-            logits_indices, attn_metadata.query_start_loc, out_int32=True)
-        attn_metadata.slot_mapping = attn_metadata.slot_mapping[logits_indices]
+        if is_flashinfer_backend(attn_metadata):
+            # 1. get survived requests and get their token counts.
+            original_num_tokens = attn_metadata.qo_indptr[-1].item()
+            token_to_req_id = torch.searchsorted(
+                attn_metadata.qo_indptr,
+                torch.arange(original_num_tokens,
+                             device=logits_indices.device),
+                right=True) - 1
+            surviving_tokens_flat_req_ids = token_to_req_id[logits_indices]
+            surviving_req_ids, surviving_tokens_per_req = torch.unique(surviving_tokens_flat_req_ids, return_counts=True)
+            new_num_reqs = surviving_req_ids.numel()
 
-        # TODO: Make cascade attention work with SwiftKV
-        attn_metadata.use_cascade = False
-        attn_metadata.cu_prefix_query_lens = None
-        attn_metadata.prefix_kv_lens = None
-        attn_metadata.suffix_kv_lens = None
+            # 2. build qo_indptr for surviving requests.
+            attn_metadata.qo_indptr = torch.nn.functional.pad(
+                torch.cumsum(surviving_tokens_per_req, dim=0), (1, 0))
+
+            # 3. build paged KV cache metadata for surviving requests.
+            original_num_pages_per_req = attn_metadata.paged_kv_indptr.diff()
+            new_num_pages_per_req = original_num_pages_per_req[
+                surviving_req_ids]
+            page_indices_start = attn_metadata.paged_kv_indptr[
+                surviving_req_ids]
+            page_indices_end = attn_metadata.paged_kv_indptr[
+                surviving_req_ids + 1]
+
+            if new_num_reqs > 0:
+                # create page indices for each surviving request
+                page_indices_list = []
+                for i in range(new_num_reqs):
+                    start_idx = page_indices_start[i]
+                    end_idx = page_indices_end[i]
+                    page_indices_list.append(
+                        attn_metadata.paged_kv_indices[start_idx:end_idx])
+                attn_metadata.paged_kv_indices = torch.cat(page_indices_list)
+            else:
+                # no requests survive SwiftKV selection
+                attn_metadata.paged_kv_indices = torch.empty(
+                    0,
+                    dtype=attn_metadata.paged_kv_indices.dtype,
+                    device=attn_metadata.paged_kv_indices.device)
+
+            # build paged_kv_indptr for surviving requests
+            attn_metadata.paged_kv_indptr = torch.nn.functional.pad(
+                torch.cumsum(new_num_pages_per_req, dim=0), (1, 0)).int()
+            # update last page lengths for surviving requests
+            attn_metadata.paged_kv_last_page_len = attn_metadata.paged_kv_last_page_len[
+                surviving_req_ids]
+
+            # 4. update other metadata fields.
+            attn_metadata.slot_mapping = attn_metadata.slot_mapping[logits_indices]
+            attn_metadata.num_actual_tokens = num_surviving_tokens
+            attn_metadata.num_decodes = new_num_reqs
+            attn_metadata.num_prefills = 0
+            attn_metadata.num_decode_tokens = num_surviving_tokens
+            attn_metadata.num_prefill_tokens = 0
+            attn_metadata.use_cascade = False
+
+            # cascade attention fields
+            attn_metadata.shared_qo_indptr = None
+            attn_metadata.shared_kv_page_indptr = None
+            attn_metadata.shared_kv_page_indices = None
+            attn_metadata.shared_kv_last_page_len = None
+            attn_metadata.cascade_wrapper = None
+
+            # 5. re-plan the FlashInfer attention wrapper with new metadata.
+            if attn_metadata.decode_wrapper and new_num_reqs > 0:
+                impl = self.layers[-1].self_attn.attn.impl
+                attn_metadata.decode_wrapper.plan(
+                    attn_metadata.paged_kv_indptr,
+                    attn_metadata.paged_kv_indices,
+                    attn_metadata.paged_kv_last_page_len,
+                    attn_metadata.num_qo_heads,
+                    attn_metadata.num_kv_heads,
+                    attn_metadata.head_dim,
+                    attn_metadata.page_size,
+                    pos_encoding_mode="NONE",
+                    sm_scale=impl.scale,
+                    window_left=impl.sliding_window[0],
+                    logits_soft_cap=impl.logits_soft_cap or 0.0,
+                    q_data_type=attn_metadata.q_data_type,
+                    kv_data_type=attn_metadata.data_type,
+                )
+            else:
+                attn_metadata.decode_wrapper = None
+            attn_metadata.prefill_wrapper = None
+        else:
+            # FlashAttention path
+            attn_metadata.num_actual_tokens = num_surviving_tokens
+            attn_metadata.query_start_loc = torch.searchsorted(
+                logits_indices, attn_metadata.query_start_loc, out_int32=True)
+            attn_metadata.slot_mapping = attn_metadata.slot_mapping[
+                logits_indices]
+            attn_metadata.use_cascade = False
+
+            # cascade attention fields
+            attn_metadata.cu_prefix_query_lens = None
+            attn_metadata.prefix_kv_lens = None
+            attn_metadata.suffix_kv_lens = None
+            attn_metadata.prefix_scheduler_metadata = None
 
         def index_fn(buffer_name: str, tensor: torch.Tensor,
                      indices: torch.LongTensor) -> torch.Tensor:
-            # If the batch size is smaller than the maximum batch size
-            # for cuda graph, we can use the preallocated buffer.
             batch_size = indices.numel()
-            if batch_size <= self.cuda_graph_max_batch_size:
+            if batch_size > 0 and batch_size <= self.cuda_graph_max_batch_size:
                 buffer = self.decode_runner.inputs[buffer_name]
-                torch.index_select(tensor, 0, indices, out=buffer[:batch_size])
+                torch.index_select(tensor,
+                                   0,
+                                   indices,
+                                   out=buffer[:batch_size])
                 padded_size = self.vllm_config.pad_for_cudagraph(batch_size)
                 return buffer[:padded_size]
             return tensor.index_select(0, indices)
