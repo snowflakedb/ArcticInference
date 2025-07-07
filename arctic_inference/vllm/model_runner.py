@@ -521,6 +521,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 spec_decode_metadata=spec_decode_metadata,
             )
             spec_token_ids = self.generate_draft_token_ids_arctic(
+                scheduler_output,
                 valid_sampled_token_ids, 
                 previous_hidden_states=previous_hidden_states)
         elif self.speculative_config.method == "ngram":
@@ -661,6 +662,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     
     def generate_draft_token_ids_arctic(
         self,
+        scheduler_output: "SchedulerOutput",
         sampled_token_ids: list[list[int]],
         previous_hidden_states: Optional[torch.Tensor] = None,
     ) -> list[list[int]]:
