@@ -37,10 +37,10 @@ packages = [
 [tool.setuptools.package-data]
 "arctic_inference.embedding" = ["arctic_inference/embedding/proto/*.proto"]
 
-[project.optional-dependencies]
-vllm = [
-    'vllm==0.8.4',
-]
+#[project.optional-dependencies]
+#vllm = [
+#    'vllm==0.8.4',
+#]
 
 docs = [
     "sphinx>=8.1.3",
