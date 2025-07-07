@@ -638,6 +638,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 for i in range(len(suffix_spec_token_ids))
             ]
 
+        if disable_spec_decode and spec_token_ids is None:
+            # No speculative decoding is enabled.
+            spec_token_ids = [[]] * len(orig_sampled_token_ids)
+
         valid_sampled_token_ids = orig_sampled_token_ids
 
         # Clear KVConnector state after all KVs are generated.
@@ -648,7 +652,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             req_ids=self.input_batch.req_ids,
             req_id_to_index=self.input_batch.req_id_to_index,
             sampled_token_ids=valid_sampled_token_ids,
-            spec_token_ids=spec_token_ids if spec_token_ids is not None else [[]] * len(valid_sampled_token_ids),
+            spec_token_ids=spec_token_ids,
             logprobs=logprobs_lists,
             prompt_logprobs_dict=prompt_logprobs_dict,
             finished_sending=finished_sending,
