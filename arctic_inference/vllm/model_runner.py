@@ -521,6 +521,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 spec_decode_metadata=spec_decode_metadata,
             )
             spec_token_ids = self.generate_draft_token_ids_arctic(
+                scheduler_output,
                 valid_sampled_token_ids, 
                 previous_hidden_states=previous_hidden_states)
         elif self.speculative_config.method == "ngram":
@@ -638,6 +639,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 for i in range(len(suffix_spec_token_ids))
             ]
 
+        if disable_spec_decode and spec_token_ids is None:
+            # No speculative decoding is enabled.
+            spec_token_ids = [[]] * len(orig_sampled_token_ids)
+
         valid_sampled_token_ids = orig_sampled_token_ids
 
         # Clear KVConnector state after all KVs are generated.
@@ -657,6 +662,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     
     def generate_draft_token_ids_arctic(
         self,
+        scheduler_output: "SchedulerOutput",
         sampled_token_ids: list[list[int]],
         previous_hidden_states: Optional[torch.Tensor] = None,
     ) -> list[list[int]]:
@@ -665,13 +671,16 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             num_sampled_ids = len(sampled_ids)
             
             if (num_sampled_ids == 0):
-                # uncommmon case
-                return None
+                req_id = self.input_batch.req_ids[i]
+                req_state = self.requests[req_id]
+                seq_len = (req_state.num_computed_tokens +
+                           scheduler_output.num_scheduled_tokens[req_id])
+                sampled_ids = req_state.get_token_id(seq_len)
 
             # Add sampled_token_ids to token_ids_cpu.
             start_idx = self.input_batch.num_tokens_no_spec[i]
             end_idx = start_idx + num_sampled_ids
-            self.input_batch.token_ids_cpu[i, start_idx:end_idx] = sampled_ids
+            self.input_batch.token_ids_cpu[i, start_idx:end_idx] = sampled_ids[-1]
             last_tokens.append(self.input_batch.token_ids_cpu[i, end_idx - 1])
 
         drafter_output = self.drafter.propose(
