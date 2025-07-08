@@ -330,11 +330,11 @@ def parse_args() -> argparse.Namespace:
         default="json-mode-all",
     )
 
-    parser.add_argument("--llm",
+    parser.add_argument("--model",
                         type=str,
                         required=False,
                         help="Name of the LLM to use.",
-                        default="Snowflake/Llama-3.3-SwiftKV-70B-Instruct")
+                        default="Snowflake/Llama-3.1-SwiftKV-8B-Instruct")
 
     parser.add_argument(
         "--input",
@@ -354,7 +354,7 @@ def parse_args() -> argparse.Namespace:
         "--n-samples",
         "-n",
         type=int,
-        default=25,
+        default=100,
         help="Number of samples to use from the dataset.",
     )
 
