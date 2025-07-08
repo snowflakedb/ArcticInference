@@ -782,7 +782,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         # Trigger CUDA graph capture for specific shapes.
         # Capture the large shapes first so that the smaller shapes
         # can reuse the memory pool allocated for the large shapes.
-        skip_attn = not self.vllm_config.compilation_config.full_cuda_graph
+        capture_attn_cudagraph = self.vllm_config.compilation_config.full_cuda_graph
         with parallel_state.graph_capture(device=self.device):
             sp_size = self.parallel_config.ulysses_sequence_parallel_size
             for num_tokens in reversed(self.cudagraph_batch_sizes):
@@ -791,8 +791,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                     for _ in range(self.vllm_config.compilation_config.
                                    cudagraph_num_of_warmups):
                         self._dummy_run(num_tokens * sp_size,
-                                        skip_attn=skip_attn)
-                    self._dummy_run(num_tokens * sp_size, skip_attn=skip_attn)
+                                        capture_attn_cudagraph=capture_attn_cudagraph)
+                    self._dummy_run(num_tokens * sp_size, capture_attn_cudagraph=capture_attn_cudagraph)
 
             if self.shift_model is not None:
                 orig_model, self.model = self.model, self.shift_model
@@ -806,8 +806,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                         with set_shift_parallel_mode(True):
                             for _ in range(self.vllm_config.compilation_config.
                                             cudagraph_num_of_warmups):
-                                self._dummy_run(num_tokens, skip_attn=skip_attn)
-                            self._dummy_run(num_tokens, skip_attn=skip_attn)
+                                self._dummy_run(num_tokens, capture_attn_cudagraph=capture_attn_cudagraph)
+                            self._dummy_run(num_tokens, capture_attn_cudagraph=capture_attn_cudagraph)
                 self.model = orig_model
 
         end_time = time.perf_counter()
