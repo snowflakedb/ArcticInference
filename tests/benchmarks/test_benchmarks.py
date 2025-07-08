@@ -12,7 +12,7 @@ from vllm.entrypoints.openai.api_server import (
 from vllm.utils import FlexibleArgumentParser
 
 from .benchmark_utils import (ACCURACY_TASKS, PERFORMANCE_TASKS, VLLM_CONFIGS,
-                              update_benchmark_summary)                  
+                              JSON_MODE_TASKS, update_benchmark_summary)                  
 
 
 @pytest.fixture(scope="module", params=list(VLLM_CONFIGS.keys()))
@@ -169,39 +169,41 @@ def vllm_server(request):
 #                for name, key in task.metrics.items()}
 #     update_benchmark_summary(config_name, task_name, metrics)
 
-
-def test_json_mode(request, vllm_server):
+@pytest.mark.parametrize("task_name", list(JSON_MODE_TASKS.keys()))
+def test_json_mode(request, vllm_server, task_name):
     """
     Test JSON mode using the evaluate_text_json_mode script.
     """
     from .json_mode.evaluate_text_json_mode import main as evaluate_json
 
     config_name, vllm_args = vllm_server
+    task = JSON_MODE_TASKS[task_name]
 
     with tempfile.TemporaryDirectory() as tmpdir:
         result_path = f"{tmpdir}/result.json"
 
         args = FlexibleArgumentParser()
         args.model = vllm_args.model
-        args.task = "json-mode-all"
-        args.input = "json_mode/datasets/WikiQuestions.json"
         args.output = result_path
-        args.n_samples = 100
-        args.debug = False
+        args.task = task.config["task"]
+        args.input = task.config["input"]
+        args.n_samples = task.config["n_samples"]
+        args.debug = task.config["debug"]
 
-        # Run the evaluation script
-        print("Running evaluation script with arguments:", args)
         evaluate_json(args)
 
-        # Load and process the results
         with open(result_path, "r") as f:
             result = json.load(f)
 
-    # Extract the score from the results
-    print("Evaluation result:", result)
-    score = result.get("json-mode-all")
-    assert score is not None, "The 'score' key was not found in the result."
+    # FIX: This logic now correctly processes the result based on the
+    # task definition, instead of using hardcoded values.
+    result_data = result.get("results", {})
+    
+    # This creates the dictionary to be passed to the summary function,
+    # e.g., {'score': 0.739846}
+    metrics = {
+        name: key(result_data) if callable(key) else result_data.get(key, {}).get('score')
+        for name, key in task.metrics.items()
+    }
 
-    # Update the benchmark summary with the new metric
-    metrics = {"score": score}
-    update_benchmark_summary(config_name, "json_mode", metrics)
+    update_benchmark_summary(config_name, task_name, metrics)

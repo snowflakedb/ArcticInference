@@ -204,7 +204,7 @@ def evaluate_task_outputs(
     return scores
 
 
-def save_results(results: dict[str, float], output_folder: str):
+def save_results(results: dict[str, float], output_path: str):
     """Write the results in a JSON file in output_folder."""
     # Need to follow the expected pattern:
     # {"results": {
@@ -220,16 +220,10 @@ def save_results(results: dict[str, float], output_folder: str):
             for task_name, score in results.items()
         }
     }
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"results_{timestamp}.json"
-    filepath = os.path.join(output_folder, filename)
 
-    # Make sure the output directory exists.
-    os.makedirs(output_folder, exist_ok=True)
-
-    with open(filepath, "w") as f:
+    with open(output_path, "w") as f:
         json.dump(results_to_save, f, indent=4)
-    logger.info(f"Results saved to: {filepath}")
+    logger.info(f"Results saved to: {output_path}")
 
 
 def main(args: argparse.Namespace):
@@ -278,8 +272,6 @@ def main(args: argparse.Namespace):
             options=options,
         )
 
-        # print("llm_outputs:", llm_outputs)
-
         # Get scores.
         scores = evaluate_task_outputs(
             task_name=task_name,
@@ -289,17 +281,21 @@ def main(args: argparse.Namespace):
         avg_score = sum(scores) / len(scores)
         results[task_name] = float(avg_score)  # to avoid having np.float()
 
-    logger.info("\n")  # to have a visual separation with the results section.
-    logger.info("RESULTS:")
-    logger.info("========")
+        # For dev/debug
+        logger.debug("Task: {task_name}, "
+                     f"average score: {avg_score:.3f}")
+
+    logger.debug("\n")  # to have a visual separation with the results section.
+    logger.debug("RESULTS:")
+    logger.debug("========")
     for task_name, score in results.items():
-        logger.info(f"Evaluation score for {task_name}: {score:.3f}")
+        logger.debug(f"Evaluation score for {task_name}: {score:.3f}")
     global_average = sum(results.values()) / len(results)
     results["json-mode-all"] = global_average
-    logger.info(f"Average score: {global_average:.3f}")
+    logger.debug(f"Average score: {global_average:.3f}")
 
     if output_path is not None:
-        save_results(results=results, output_folder=output_path)
+        save_results(results=results, output_path=output_path)
 
 
 def parse_args() -> argparse.Namespace:

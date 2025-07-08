@@ -76,14 +76,15 @@ TASK_DESCRIPTIONS = {
         "response_format":
         '{"answer": "string", "confidence": "int (0-5)"}',
     },
-    "GenerateAnswersWithConfidence": {
-        "task_instructions":
-        "Generate multiple answers with confidence scores."
-        "If the context does not contain sufficient information to answer "
-        'the question, respond with "NOT ENOUGH CONTEXT".',
-        "response_format":
-        '{"answers" : [{"answer": "string", "confidence": "int (0-5)"}, ...]}',
-    },
+    # Super slow in the benchmarks, so commented out for now
+    # "GenerateAnswersWithConfidence": {
+    #     "task_instructions":
+    #     "Generate multiple answers with confidence scores."
+    #     "If the context does not contain sufficient information to answer "
+    #     'the question, respond with "NOT ENOUGH CONTEXT".',
+    #     "response_format":
+    #     '{"answers" : [{"answer": "string", "confidence": "int (0-5)"}, ...]}',
+    # },
 }
 
 TASK_NAME_TO_TASK_SCHEMA = {
