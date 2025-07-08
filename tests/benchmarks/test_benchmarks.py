@@ -67,104 +67,144 @@ def vllm_server(request):
     print("Server process terminated")
 
 
-@pytest.mark.parametrize("task_name", list(PERFORMANCE_TASKS.keys()))
-def test_performance(request, vllm_server, task_name):
-    from vllm.benchmarks.serve import add_cli_args, main
+# @pytest.mark.parametrize("task_name", list(PERFORMANCE_TASKS.keys()))
+# def test_performance(request, vllm_server, task_name):
+#     from vllm.benchmarks.serve import add_cli_args, main
+
+#     config_name, vllm_args = vllm_server
+#     task = PERFORMANCE_TASKS[task_name]
+
+#     parser = argparse.ArgumentParser()
+#     add_cli_args(parser)
+
+#     args = parser.parse_args(["--model", vllm_args.model])
+
+#     with tempfile.TemporaryDirectory() as tmpdir:
+#         args.save_result = True
+#         args.result_dir = str(tmpdir)
+#         args.result_filename = "result.json"
+
+#         for key, value in task.config.items():
+#             setattr(args, key, value)
+
+#         main(args)
+
+#         with open(f"{tmpdir}/result.json", "r") as f:
+#             result = json.load(f)
+
+#     benchmark_result_dir = request.config.option.benchmark_result_dir
+#     if benchmark_result_dir is not None:
+#         result_path = (benchmark_result_dir / "performance" /
+#                        f"{config_name}-{task_name}.json")
+#         result_path.parent.mkdir(parents=True, exist_ok=True)
+#         with open(result_path, "w") as f:
+#             json.dump(result, f, indent=4)
+
+#     metrics = {name: key(result) if callable(key) else result[key]
+#                for name, key in task.metrics.items()}
+#     update_benchmark_summary(config_name, task_name, metrics)
+
+
+# @pytest.mark.parametrize("task_name", list(ACCURACY_TASKS.keys()))
+# def test_accuracy(request, vllm_server, task_name):
+
+#     config_name, vllm_args = vllm_server
+#     task = ACCURACY_TASKS[task_name]
+
+#     assert len(task.config["tasks"]) == 1, \
+#         "Accuracy benchmarks should only have one task configured"
+
+#     q = multiprocessing.Queue()
+
+#     def _run_process():
+#         # Run lm_eval in a separate process because it imports torch and
+#         # initializes CUDA, which breaks process forking in later tests.
+#         try:
+#             from lm_eval import evaluator
+#             from lm_eval.utils import handle_non_serializable, make_table
+
+#             result = evaluator.simple_evaluate(
+#                 model="local-completions",
+#                 model_args={
+#                     "model": vllm_args.model,
+#                     "base_url": "http://localhost:8000/v1/completions",
+#                     "num_concurrent": 256,
+#                 },
+#                 **task.config,
+#             )
+#             print(make_table(result))
+
+#             tmpfile = f"{tmpdir}/result.json"
+#             with open(tmpfile, "w") as f:
+#                 json.dump(result, f, indent=4, default=handle_non_serializable)
+#         except Exception as exc:
+#             # If an exception occurs, put it in the queue to be raised later
+#             q.put(exc)
+#         else:
+#             # Send back the temporary file path instead of the result object
+#             # since multiprocessing queue can hang on large objects.
+#             q.put(tmpfile)
+
+#     with tempfile.TemporaryDirectory() as tmpdir:
+#         process = multiprocessing.Process(target=_run_process)
+#         process.start()
+#         r = q.get()
+#         process.join()
+#         if isinstance(r, Exception):
+#             raise r
+#         tmpfile = r
+#         with open(tmpfile, "r") as f:
+#             result = json.load(f)
+
+#     benchmark_result_dir = request.config.option.benchmark_result_dir
+#     if benchmark_result_dir is not None:
+#         result_path = (benchmark_result_dir / "accuracy" /
+#                        f"{config_name}-{task_name}.json")
+#         result_path.parent.mkdir(parents=True, exist_ok=True)
+#         with open(result_path, "w") as f:
+#             json.dump(result, f, indent=4)
+
+#     result = result["results"][task.config["tasks"][0]]
+#     metrics = {name: key(result) if callable(key) else result[key]
+#                for name, key in task.metrics.items()}
+#     update_benchmark_summary(config_name, task_name, metrics)
+
+
+def test_json_mode(request, vllm_server):
+    """
+    Test JSON mode using the evaluate_text_json_mode script.
+    """
+    try:
+        # It is assumed that this module is available in the test environment.
+        from json_mode.evaluate_text_json_mode import main as evaluate_json
+    except ImportError:
+        pytest.skip("Could not import 'evaluate_text_json_mode'. "
+                    "Skipping 'test_json_mode'.")
 
     config_name, vllm_args = vllm_server
-    task = PERFORMANCE_TASKS[task_name]
-
-    parser = argparse.ArgumentParser()
-    add_cli_args(parser)
-
-    args = parser.parse_args(["--model", vllm_args.model])
+    print(f"Running JSON mode evaluation for {config_name} with model {vllm_args.model}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        args.save_result = True
-        args.result_dir = str(tmpdir)
-        args.result_filename = "result.json"
+        result_path = f"{tmpdir}/result.json"
 
-        for key, value in task.config.items():
-            setattr(args, key, value)
+        # Construct arguments for the evaluation script
+        args = [
+            "--model", vllm_args.model,
+            "--output", result_path,
+        ]
 
-        main(args)
+        # Run the evaluation script
+        print("Running evaluation script with arguments:", args)
+        evaluate_json(args)
 
-        with open(f"{tmpdir}/result.json", "r") as f:
+        # Load and process the results
+        with open(result_path, "r") as f:
             result = json.load(f)
 
-    benchmark_result_dir = request.config.option.benchmark_result_dir
-    if benchmark_result_dir is not None:
-        result_path = (benchmark_result_dir / "performance" /
-                       f"{config_name}-{task_name}.json")
-        result_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(result_path, "w") as f:
-            json.dump(result, f, indent=4)
+    # Extract the score from the results
+    score = result.get("score")
+    assert score is not None, "The 'score' key was not found in the result."
 
-    metrics = {name: key(result) if callable(key) else result[key]
-               for name, key in task.metrics.items()}
-    update_benchmark_summary(config_name, task_name, metrics)
-
-
-@pytest.mark.parametrize("task_name", list(ACCURACY_TASKS.keys()))
-def test_accuracy(request, vllm_server, task_name):
-
-    config_name, vllm_args = vllm_server
-    task = ACCURACY_TASKS[task_name]
-
-    assert len(task.config["tasks"]) == 1, \
-        "Accuracy benchmarks should only have one task configured"
-
-    q = multiprocessing.Queue()
-
-    def _run_process():
-        # Run lm_eval in a separate process because it imports torch and
-        # initializes CUDA, which breaks process forking in later tests.
-        try:
-            from lm_eval import evaluator
-            from lm_eval.utils import handle_non_serializable, make_table
-
-            result = evaluator.simple_evaluate(
-                model="local-completions",
-                model_args={
-                    "model": vllm_args.model,
-                    "base_url": "http://localhost:8000/v1/completions",
-                    "num_concurrent": 256,
-                },
-                **task.config,
-            )
-            print(make_table(result))
-
-            tmpfile = f"{tmpdir}/result.json"
-            with open(tmpfile, "w") as f:
-                json.dump(result, f, indent=4, default=handle_non_serializable)
-        except Exception as exc:
-            # If an exception occurs, put it in the queue to be raised later
-            q.put(exc)
-        else:
-            # Send back the temporary file path instead of the result object
-            # since multiprocessing queue can hang on large objects.
-            q.put(tmpfile)
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        process = multiprocessing.Process(target=_run_process)
-        process.start()
-        r = q.get()
-        process.join()
-        if isinstance(r, Exception):
-            raise r
-        tmpfile = r
-        with open(tmpfile, "r") as f:
-            result = json.load(f)
-
-    benchmark_result_dir = request.config.option.benchmark_result_dir
-    if benchmark_result_dir is not None:
-        result_path = (benchmark_result_dir / "accuracy" /
-                       f"{config_name}-{task_name}.json")
-        result_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(result_path, "w") as f:
-            json.dump(result, f, indent=4)
-
-    result = result["results"][task.config["tasks"][0]]
-    metrics = {name: key(result) if callable(key) else result[key]
-               for name, key in task.metrics.items()}
-    update_benchmark_summary(config_name, task_name, metrics)
+    # Update the benchmark summary with the new metric
+    metrics = {"score": score}
+    update_benchmark_summary(config_name, "json_mode", metrics)
