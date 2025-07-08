@@ -9,7 +9,6 @@ from .task_description import TASK_DESCRIPTIONS, TASK_NAME_TO_TASK_SCHEMA
 from .utils import call_vllm_complete, compute_sentence_similarity
 
 import pydantic
-from loguru import logger
 
 DATASET_WIKIQUESTIONS = "datasets/WikiQuestions.json"
 
@@ -18,10 +17,8 @@ def load_dataset_wikiquestions(
     filepath: str = DATASET_WIKIQUESTIONS, ) -> list[dict[str, str]]:
     """Load the WikiQuestions dataset from filepath. Return a list of samples."""
     try:
-        logger.info(f"Loading dataset \'{filepath}\' ...")
         with open(filepath) as dataset_file:
             data = json.load(dataset_file)
-        logger.info("Dataset successfully loaded.")
         return data
     except json.JSONDecodeError as e:
         sys.exit(f"ERROR: Can't parse {filepath} ({e})")
@@ -206,12 +203,6 @@ def evaluate_task_outputs(
 
 def save_results(results: dict[str, float], output_path: str):
     """Write the results in a JSON file in output_folder."""
-    # Need to follow the expected pattern:
-    # {"results": {
-    #   "task_1": {"score": score_1},
-    #   "task_2": {"score": score_2}
-    #   }
-    # }
     results_to_save = {
         "results": {
             task_name: {
@@ -223,7 +214,6 @@ def save_results(results: dict[str, float], output_path: str):
 
     with open(output_path, "w") as f:
         json.dump(results_to_save, f, indent=4)
-    logger.info(f"Results saved to: {output_path}")
 
 
 def main(args: argparse.Namespace):
@@ -247,8 +237,6 @@ def main(args: argparse.Namespace):
         if (task_name != evaluation_task) and (evaluation_task
                                                != "json-mode-all"):
             continue
-
-        logger.info(f"Evaluating task: {task_name} ...")
 
         expected_schema = TASK_NAME_TO_TASK_SCHEMA[task_name]
         expected_schema_json: dict[str, str | dict | list] = (
@@ -281,18 +269,8 @@ def main(args: argparse.Namespace):
         avg_score = sum(scores) / len(scores)
         results[task_name] = float(avg_score)  # to avoid having np.float()
 
-        # For dev/debug
-        logger.debug("Task: {task_name}, "
-                     f"average score: {avg_score:.3f}")
-
-    logger.debug("\n")  # to have a visual separation with the results section.
-    logger.debug("RESULTS:")
-    logger.debug("========")
-    for task_name, score in results.items():
-        logger.debug(f"Evaluation score for {task_name}: {score:.3f}")
     global_average = sum(results.values()) / len(results)
     results["json-mode-all"] = global_average
-    logger.debug(f"Average score: {global_average:.3f}")
 
     if output_path is not None:
         save_results(results=results, output_path=output_path)
@@ -341,32 +319,11 @@ def parse_args() -> argparse.Namespace:
         help="Number of samples to use from the dataset.",
     )
 
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable debug mode (extended logging).",
-    )
-
     args = parser.parse_args()
     return args
 
 
 if __name__ == "__main__":
     args = parse_args()
-
-    # loguru by default logs all .debug(). Switch to INFO level mode if debug
-    # is not activated.
-    if not args.debug:
-        logger.remove(0)
-        logger.add(sys.stderr, level="INFO")
-
-    # For dev/debug
-    # TASK_NAME = "RateContext"
-    # TASK_NAME = "GenerateAnswer"
-    # TASK_NAME = "RAGAS"
-    # TASK_NAME = "ALL"
-    # LLM_NAME = "llama3.1-70b"
-    # LLM_NAME = "claude-3-5-sonnet"
-    # main(evaluation_task=TASK_NAME, llm_name=LLM_NAME)
 
     main(args=args)

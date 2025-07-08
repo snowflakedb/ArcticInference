@@ -1,5 +1,4 @@
 import asyncio
-from loguru import logger
 import requests
 from openai import AsyncOpenAI
 from sentence_transformers import SentenceTransformer, util
