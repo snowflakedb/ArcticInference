@@ -12,7 +12,7 @@ from vllm.entrypoints.openai.api_server import (
 from vllm.utils import FlexibleArgumentParser
 
 from .benchmark_utils import (ACCURACY_TASKS, PERFORMANCE_TASKS, VLLM_CONFIGS,
-                              update_benchmark_summary)
+                              update_benchmark_summary)                  
 
 
 @pytest.fixture(scope="module", params=list(VLLM_CONFIGS.keys()))
@@ -174,24 +174,20 @@ def test_json_mode(request, vllm_server):
     """
     Test JSON mode using the evaluate_text_json_mode script.
     """
-    try:
-        # It is assumed that this module is available in the test environment.
-        from json_mode.evaluate_text_json_mode import main as evaluate_json
-    except ImportError:
-        pytest.skip("Could not import 'evaluate_text_json_mode'. "
-                    "Skipping 'test_json_mode'.")
+    from .json_mode.evaluate_text_json_mode import main as evaluate_json
 
     config_name, vllm_args = vllm_server
-    print(f"Running JSON mode evaluation for {config_name} with model {vllm_args.model}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         result_path = f"{tmpdir}/result.json"
 
-        # Construct arguments for the evaluation script
-        args = [
-            "--model", vllm_args.model,
-            "--output", result_path,
-        ]
+        args = FlexibleArgumentParser()
+        args.model = vllm_args.model
+        args.task = "json-mode-all"
+        args.input = "json_mode/datasets/WikiQuestions.json"
+        args.output = result_path
+        args.n_samples = 100
+        args.debug = False
 
         # Run the evaluation script
         print("Running evaluation script with arguments:", args)
@@ -202,7 +198,8 @@ def test_json_mode(request, vllm_server):
             result = json.load(f)
 
     # Extract the score from the results
-    score = result.get("score")
+    print("Evaluation result:", result)
+    score = result.get("json-mode-all")
     assert score is not None, "The 'score' key was not found in the result."
 
     # Update the benchmark summary with the new metric

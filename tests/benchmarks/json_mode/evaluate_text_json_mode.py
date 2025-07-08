@@ -5,8 +5,8 @@ import json
 import os
 import sys
 
-from task_description import TASK_DESCRIPTIONS, TASK_NAME_TO_TASK_SCHEMA
-from utils import call_vllm_complete, compute_sentence_similarity
+from .task_description import TASK_DESCRIPTIONS, TASK_NAME_TO_TASK_SCHEMA
+from .utils import call_vllm_complete, compute_sentence_similarity
 
 import pydantic
 from loguru import logger
@@ -113,9 +113,6 @@ def compute_answer_score(
     generated_answer: dict | None,
 ) -> float:
     """Return the score of the generated answer for the given task."""
-    # print("sample answerable:", sample["answerable"])
-    # print("sample answer:", sample["answer"])
-    # print("generated answer:", generated_answer)
 
     if generated_answer is None:
         return 0.0
@@ -198,9 +195,6 @@ def evaluate_task_outputs(
     # Each output is evaluated against its corresponding sample data.
     assert len(sample_data) == len(task_outputs)
 
-    # for i in range(len(task_outputs)):
-    #     print("llm outputs:", task_outputs[i])
-
     scores = [
         compute_answer_score(task_name=task_name,
                              sample=sample,
@@ -242,7 +236,7 @@ def main(args: argparse.Namespace):
     """Run the evaluation task(s) and aggregate results."""
 
     evaluation_task = args.task
-    llm_name = args.llm
+    llm_name = args.model
     dataset_filepath = args.input if args.input else DATASET_WIKIQUESTIONS
     output_path = args.output
     n_samples_per_task = args.n_samples
@@ -294,13 +288,6 @@ def main(args: argparse.Namespace):
         )
         avg_score = sum(scores) / len(scores)
         results[task_name] = float(avg_score)  # to avoid having np.float()
-
-        # For dev/debug
-        logger.debug(json.dumps(wiki_questions, indent=4))
-        logger.debug("=" * 60)
-        logger.debug(json.dumps(llm_outputs, indent=4))
-        logger.debug("=" * 60)
-        logger.debug(scores)
 
     logger.info("\n")  # to have a visual separation with the results section.
     logger.info("RESULTS:")

@@ -52,7 +52,8 @@ VLLM_CONFIGS = {
             "disable_by_batch_size": 64,
         },
         "enable_prefix_caching": False,
-        "distributed_executor_backend": "mp"
+        "distributed_executor_backend": "mp",
+        "enforce_eager": True,
     },
     # "llama_8b_all": {
     #     "model": "Snowflake/Llama-3.1-SwiftKV-8B-Instruct-FP8",
