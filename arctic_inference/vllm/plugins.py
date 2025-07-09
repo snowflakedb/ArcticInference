@@ -91,12 +91,13 @@ def arctic_inference_plugin():
     AutoConfig.register("llama_swiftkv", LlamaSwiftKVConfig)
 
     from vllm import ModelRegistry
-    from arctic_inference.vllm.swiftkv import LlamaSwiftKVForCausalLM
+    #from arctic_inference.vllm.swiftkv import LlamaSwiftKVForCausalLM
 
     # Register SwiftKV model definitions to vLLM.
-    ModelRegistry.register_model("LlamaSwiftKVForCausalLM",
-                                 LlamaSwiftKVForCausalLM)
-    
+    ModelRegistry.register_model(
+        "LlamaSwiftKVForCausalLM",
+        "arctic_inference.vllm.swiftkv:LlamaSwiftKVForCausalLM")
+
     # Register ArcticSpeculator models to vLLM.
     from arctic_inference.vllm.spec_dec.arctic_speculator import (
         ArcticMLPSpeculator, ArcticLSTMSpeculator)

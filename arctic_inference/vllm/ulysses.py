@@ -20,6 +20,7 @@ from typing import Optional, Any
 
 import torch
 import vllm.distributed.parallel_state as parallel_state
+import vllm.envs as envs
 from vllm.attention.layer import Attention
 from vllm.config import ModelConfig, ParallelConfig
 from vllm.distributed.device_communicators.shm_broadcast import MessageQueue
@@ -281,7 +282,10 @@ class UlyssesMultiprocExecutorPatch(ArcticPatch[MultiprocExecutor]):
 
         # Initialize worker and set up message queues for SchedulerOutputs
         # and ModelRunnerOutputs
-        self.rpc_broadcast_mq = MessageQueue(self.world_size, self.world_size)
+        max_chunk_bytes = envs.VLLM_MQ_MAX_CHUNK_BYTES_MB * 1024 * 1024
+        self.rpc_broadcast_mq = MessageQueue(self.world_size,
+                                             self.world_size,
+                                             max_chunk_bytes=max_chunk_bytes)
         scheduler_output_handle = self.rpc_broadcast_mq.export_handle()
 
         # Create workers
