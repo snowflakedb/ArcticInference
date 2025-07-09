@@ -52,6 +52,7 @@ test = [
     "lm_eval[api,ifeval]==0.4.8",
     "pandas",
     "pytest",
+    "sentence_transformers"
 ]
 
 embedding = [

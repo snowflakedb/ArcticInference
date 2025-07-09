@@ -11,7 +11,9 @@ client = AsyncOpenAI(
     base_url=openai_api_base,
 )
 
-sim_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+sim_model = SentenceTransformer(
+    'sentence-transformers/all-MiniLM-L6-v2',
+    device='cpu')
 
 
 async def get_chat_completion(

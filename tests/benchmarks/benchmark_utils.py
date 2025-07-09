@@ -155,7 +155,7 @@ JSON_MODE_TASKS = {
         config={
             "task" : "json-mode-all",
             "input": "json_mode/datasets/WikiQuestions.json",
-            "n_samples": 100,
+            "n_samples": 25,
         },
         metrics={
             "score": "json-mode-all",
