@@ -189,7 +189,6 @@ def test_json_mode(request, vllm_server, task_name):
         args.task = task.config["task"]
         args.input = task.config["input"]
         args.n_samples = task.config["n_samples"]
-        args.debug = task.config["debug"]
 
         evaluate_json(args)
 

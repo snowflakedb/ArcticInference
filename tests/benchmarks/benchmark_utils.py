@@ -44,7 +44,7 @@ VLLM_CONFIGS = {
     },
     "llama_8b_spec": {
         "model": "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic",
-        "tensor_parallel_size": 2,
+        "tensor_parallel_size": 4,
         "speculative_config": {
             "method": "arctic",
             "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.1-8B-Instruct",
