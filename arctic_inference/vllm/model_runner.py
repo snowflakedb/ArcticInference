@@ -671,6 +671,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             num_sampled_ids = len(sampled_ids)
             
             if (num_sampled_ids == 0):
+                if self.speculative_config.enable_suffix_decoding:
+                    return [[]] * len(sampled_token_ids)
                 req_id = self.input_batch.req_ids[i]
                 req_state = self.requests[req_id]
                 seq_len = (req_state.num_computed_tokens +

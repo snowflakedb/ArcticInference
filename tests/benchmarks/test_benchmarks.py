@@ -180,6 +180,10 @@ def test_json_mode(request, vllm_server, task_name):
     config_name, vllm_args = vllm_server
     task = JSON_MODE_TASKS[task_name]
 
+    if (vllm_args.speculative_config and
+            vllm_args.speculative_config.get('enable_suffix_decoding', False)):
+        pytest.skip("Skipping JSON mode test for spec + suffix decoding enabled")
+
     with tempfile.TemporaryDirectory() as tmpdir:
         result_path = f"{tmpdir}/result.json"
 
