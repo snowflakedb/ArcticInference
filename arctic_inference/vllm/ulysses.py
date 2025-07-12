@@ -94,7 +94,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
     # To implement the logic, the distributed kv heads are exchanged with a local
     # all-to-all within SP_AA group followed by an local all-gather within SP_AG
     # group. The SP_AA and SP_AG groups partitions the SP group into two orthogonal
-    # sub-groups.
+    # sub-groups and will not be initialized if max(1, num_kv_heads / TP) < SP.
 
     @staticmethod
     def initialize_model_parallel(
