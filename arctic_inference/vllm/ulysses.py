@@ -89,6 +89,12 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
     _SP_TP = None
     _SP_AA = None
     _SP_AG = None
+    # Rationale for SP_AA and SP_AG groups:
+    # When num_kv_heads > SP, the kv heads are distributed and replicated as in TP.
+    # To implement the logic, the distributed kv heads are exchanged with a local
+    # all-to-all within SP_AA group followed by an local all-gather within SP_AG
+    # group. The SP_AA and SP_AG groups partitions the SP group into two orthogonal
+    # sub-groups.
 
     @staticmethod
     def initialize_model_parallel(
