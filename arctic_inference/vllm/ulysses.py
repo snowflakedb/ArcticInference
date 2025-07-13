@@ -216,7 +216,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                                sequence_parallel_size)
         assert parallel_state._SP_TP is None, (
             "full-TP group is already initialized")
-        group_ranks = all_ranks.transpose(3, 4).reshape(
+        group_ranks = all_ranks.reshape(
             -1, shift_parallel_size).unbind(0)
         group_ranks = [x.tolist() for x in group_ranks]
         SP_TP_group_ranks = group_ranks
@@ -241,35 +241,29 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         # check if SP requires kv replication
         num_kv_heads = config.model_config._orig_get_num_kv_heads(config.parallel_config)
         if num_kv_heads < sequence_parallel_size:
-            pp_size = _PP.world_size
-            tp_size = _TP.world_size
-            sp_size = _SP.world_size
-            sp_tp_size = sp_size * tp_size
-            group_ranks = []
-            for i in range(pp_size):
-                for j in range(tp_size):
-                    for jj_1 in range(sp_size // num_kv_heads):
-                        ranks = []
-                        for jj in range(num_kv_heads):
-                            k = jj * sp_tp_size // num_kv_heads + jj_1 * tp_size + j
-                            ranks.append(k)
-                        group_ranks.append(ranks)
+
+            # divide SP group into two orthogonal sub-groups:
+            sp_aa_size = num_kv_heads
+            sp_ag_size = sequence_parallel_size // num_kv_heads
+            all_ranks_ = torch.arange(world_size).reshape(
+            -1, data_parallel_size, pipeline_model_parallel_size,
+            sp_aa_size, sp_ag_size, tensor_model_parallel_size)
+
+            group_ranks = all_ranks_.transpose(3, 5).reshape(
+                -1, sp_aa_size).unbind(0)
+            group_ranks = [x.tolist() for x in group_ranks]
             SP_AA_group_ranks = group_ranks
+            # SP_AA group is used for all-to-all communication of kv heads
             _SP_AA = init_model_parallel_group(group_ranks,
                                             get_world_group().local_rank,
                                             backend,
                                             group_name="sp_aa")
-            group_ranks = []
-            for i in range(pp_size):
-                for j in range(tp_size):
-                    for jj_1 in range(num_kv_heads):
-                        ranks = []
-                        for jj in range(sp_size // num_kv_heads):
-                            k = jj * tp_size + jj_1 * sp_tp_size // num_kv_heads + j
-                            k += i * sp_tp_size
-                            ranks.append(k)
-                        group_ranks.append(ranks)
+            
+            group_ranks = all_ranks_.transpose(4, 5).reshape(
+                -1, sp_ag_size).unbind(0)
+            group_ranks = [x.tolist() for x in group_ranks]
             SP_AG_group_ranks = group_ranks
+            # SP_AG group is used for all-gather communication of kv heads
             _SP_AG = init_model_parallel_group(group_ranks,
                                             get_world_group().local_rank,
                                             backend,
@@ -278,18 +272,18 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
             parallel_state._SP_AA = _SP_AA
             parallel_state._SP_AG = _SP_AG
 
-        torch.cuda.synchronize()
-        get_world_group().barrier()
-        if torch.distributed.get_rank() == 0:
-            print(f"UlyssesParallelStatePatch initialized:\n"
+        if get_world_group().local_rank == 0:
+            parallel_state.logger.info(
+                    f"UlyssesParallelStatePatch initialized:\n"
                     f"  PP {_PP.world_size} ranks {PP_group_ranks}\n"
                     f"  TP {_TP.world_size} ranks {TP_group_ranks}\n"
                     f"  SP {_SP.world_size} ranks {SP_group_ranks}\n"
                     f"  DP {_DP.world_size} ranks {DP_group_ranks}\n"
                     f"  EP {_EP.world_size} ranks {EP_group_ranks}\n"
                     f"  SP_TP {_SP_TP.world_size} ranks {SP_TP_group_ranks}")
-            if parallel_state._SP_AA is not None and parallel_state._SP_AG is not None:
-                print(f"  SP_AA {parallel_state._SP_AA.world_size} ranks {SP_AA_group_ranks}\n"
+            if num_kv_heads < sequence_parallel_size:
+                parallel_state.logger.info(
+                    f"  SP_AA {parallel_state._SP_AA.world_size} ranks {SP_AA_group_ranks}\n"
                     f"  SP_AG {parallel_state._SP_AG.world_size} ranks {SP_AG_group_ranks}\n")
 
     from contextlib import contextmanager
@@ -398,7 +392,6 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
 
     _orig_init = Attention.__init__
     _orig_forward = Attention.forward
-    is_kv_replicated = None
 
     def __init__(self, num_heads, *args, **kwargs):
         from .model_runner import is_shift_parallel_mode
@@ -416,10 +409,10 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                 self.sp_ag_device_group = parallel_state._SP_AG.device_group
                 self.sp_aa_size = parallel_state._SP_AA.world_size
                 self.sp_ag_size = parallel_state._SP_AG.world_size
+                # this reorders the all-gathered sequence
                 self.order = [j * self.sp_aa_size + i 
                               for i in range(self.sp_aa_size) 
                               for j in range(self.sp_ag_size)]
-                # self.order = [0, 4, 1, 5, 2, 6, 3, 7] for Qwen3-30B-3B, SP=8
             else:
                 self.is_kv_replicated = False
                 num_kv_heads //= self.sp_size
