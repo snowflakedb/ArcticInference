@@ -25,7 +25,9 @@ from vllm.attention.layer import Attention
 from vllm.config import ModelConfig, ParallelConfig
 from vllm.distributed.device_communicators.shm_broadcast import MessageQueue
 from vllm.distributed.parallel_state import (init_model_parallel_group,
-                                             get_world_group)
+                                             get_world_group,
+                                             destroy_model_parallel,
+                                             destroy_distributed_environment)
 from vllm.executor.multiproc_worker_utils import (
     set_multiprocessing_worker_envs)
 from vllm.utils import get_distributed_init_method, get_open_port
@@ -42,6 +44,7 @@ from arctic_inference.patching import ArcticPatch
 def apply_shift_parallel_patches():
     UlyssesModelConfigPatch.apply_patch()
     UlyssesParallelStatePatch.apply_patch()
+    UlyssesWorkerProcPatch.apply_patch()
     UlyssesMultiprocExecutorPatch.apply_patch()
     UlyssesAttentionPatch.apply_patch()
     PiecewiseCompileInterpreterPatch.apply_patch()
@@ -306,6 +309,32 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         with parallel_state._TP.graph_capture(context), parallel_state._PP.graph_capture(
                 context), parallel_state._SP_TP.graph_capture(context):
             yield context
+
+
+class UlyssesWorkerProcPatch(ArcticPatch[WorkerProc]):
+
+    def destroy_model_parallel(self):
+        from vllm.distributed.parallel_state import _SP, _SP_TP, _SP_AA, _SP_AG
+        if _SP:
+            _SP.destroy()
+        _SP = None
+        if _SP_TP:
+            _SP_TP.destroy()
+        _SP_TP = None
+        if _SP_AA:
+            _SP_AA.destroy()
+        _SP_AA = None
+        if _SP_AG:
+            _SP_AG.destroy()
+        _SP_AG = None
+
+    def shutdown(self):
+        self.rpc_broadcast_mq = None
+        self.worker_response_mq = None
+        destroy_model_parallel()
+        # destroy Ulysses communicators here
+        self.destroy_model_parallel()
+        destroy_distributed_environment()
 
 
 class UlyssesMultiprocExecutorPatch(ArcticPatch[MultiprocExecutor]):
