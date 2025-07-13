@@ -399,8 +399,8 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
         if not is_shift_parallel_mode():
             num_heads //= self.sp_size
             num_kv_heads = kwargs["num_kv_heads"]
-            if num_kv_heads < self.sp_size:
-                self.is_kv_replicated = True
+            self.is_kv_replicated = True if num_kv_heads < self.sp_size else False
+            if self.is_kv_replicated:
                 num_kv_heads = 1
                 assert parallel_state._SP_AA is not None and parallel_state._SP_AG is not None, (
                     "UlyssesAttentionPatch requires SP_AA and SP_AG groups to be initialized.")
@@ -413,7 +413,6 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
                               for i in range(self.sp_aa_size) 
                               for j in range(self.sp_ag_size)]
             else:
-                self.is_kv_replicated = False
                 num_kv_heads //= self.sp_size
             kwargs["num_kv_heads"] = num_kv_heads
         return self._orig_init(num_heads, *args, **kwargs)
@@ -422,8 +421,6 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
         from .model_runner import is_shift_parallel_mode
         if self.sp_size == 1 or is_shift_parallel_mode():
             return self._orig_forward(query, key, value, **kwargs)
-
-        assert self.is_kv_replicated is not None
 
         if self.is_kv_replicated:
             # Ulysses all-to-all 1/2 (query)
