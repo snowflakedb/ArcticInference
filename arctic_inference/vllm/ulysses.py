@@ -15,6 +15,7 @@
 
 import threading
 import weakref
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Any
 
@@ -96,7 +97,6 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
     # group. The SP_AA and SP_AG groups partitions the SP group into two orthogonal
     # sub-groups and will not be initialized if max(1, num_kv_heads / TP) < SP.
 
-    @staticmethod
     def initialize_model_parallel(
         tensor_model_parallel_size: int = 1,
         pipeline_model_parallel_size: int = 1,
@@ -286,7 +286,6 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                     f"  SP_AA {parallel_state._SP_AA.world_size} ranks {SP_AA_group_ranks}\n"
                     f"  SP_AG {parallel_state._SP_AG.world_size} ranks {SP_AG_group_ranks}\n")
 
-    from contextlib import contextmanager
     @contextmanager
     def graph_capture(device: torch.device):
         """
