@@ -12,7 +12,7 @@ from vllm.entrypoints.openai.api_server import (
 from vllm.utils import FlexibleArgumentParser
 
 from .benchmark_utils import (ACCURACY_TASKS, PERFORMANCE_TASKS, VLLM_CONFIGS,
-                              update_benchmark_summary)
+                              JSON_MODE_TASKS, update_benchmark_summary)                  
 
 
 @pytest.fixture(scope="module", params=list(VLLM_CONFIGS.keys()))
@@ -167,4 +167,43 @@ def test_accuracy(request, vllm_server, task_name):
     result = result["results"][task.config["tasks"][0]]
     metrics = {name: key(result) if callable(key) else result[key]
                for name, key in task.metrics.items()}
+    update_benchmark_summary(config_name, task_name, metrics)
+
+
+@pytest.mark.parametrize("task_name", list(JSON_MODE_TASKS.keys()))
+def test_json_mode(request, vllm_server, task_name):
+    """
+    Test JSON mode using the evaluate_text_json_mode script.
+    """
+    from .json_mode.evaluate_text_json_mode import main as evaluate_json
+
+    config_name, vllm_args = vllm_server
+    task = JSON_MODE_TASKS[task_name]
+
+    if (vllm_args.speculative_config and
+            vllm_args.speculative_config.get('enable_suffix_decoding', False)):
+        pytest.skip("Skipping JSON mode test for spec + suffix decoding enabled")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result_path = f"{tmpdir}/result.json"
+
+        args = FlexibleArgumentParser()
+        args.model = vllm_args.model
+        args.output = result_path
+        args.task = task.config["task"]
+        args.input = task.config["input"]
+        args.n_samples = task.config["n_samples"]
+
+        evaluate_json(args)
+
+        with open(result_path, "r") as f:
+            result = json.load(f)
+
+    result_data = result.get("results", {})
+    
+    metrics = {
+        name: key(result_data) if callable(key) else result_data.get(key, {}).get('score')
+        for name, key in task.metrics.items()
+    }
+
     update_benchmark_summary(config_name, task_name, metrics)

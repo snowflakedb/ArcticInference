@@ -15,7 +15,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "arctic_inference"
-version = "0.0.8"
+version = "0.0.9"
 description = "Snowflake LLM inference library"
 
 [project.entry-points."vllm.general_plugins"]
@@ -52,6 +52,7 @@ test = [
     "lm_eval[api,ifeval]==0.4.8",
     "pandas",
     "pytest",
+    "sentence_transformers"
 ]
 
 embedding = [

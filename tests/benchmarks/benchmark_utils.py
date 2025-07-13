@@ -150,10 +150,23 @@ ACCURACY_TASKS = {
     ),
 }
 
+JSON_MODE_TASKS = {
+    "json_mode_score": BenchmarkTask(
+        config={
+            "task" : "json-mode-all",
+            "input": "json_mode/datasets/WikiQuestions.json",
+            "n_samples": 25,
+        },
+        metrics={
+            "score": "json-mode-all",
+        },
+    ),
+}
+
 
 def init_benchmark_summary():
     tuples = []
-    for name, task in {**PERFORMANCE_TASKS, **ACCURACY_TASKS}.items():
+    for name, task in {**PERFORMANCE_TASKS, **ACCURACY_TASKS, **JSON_MODE_TASKS}.items():
         for metric in task.metrics:
             tuples.append((name, metric))
     columns = pd.MultiIndex.from_tuples(tuples, names=['task', 'metric'])
