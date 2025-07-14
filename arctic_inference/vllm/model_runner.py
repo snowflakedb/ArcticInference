@@ -575,7 +575,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 req_state = self.requests[req_id]
                 seq_len = (req_state.num_computed_tokens +
                            scheduler_output.num_scheduled_tokens[req_id])
-                sampled_ids = req_state.get_token_id(seq_len)
+                sampled_ids = [req_state.get_token_id(seq_len)]
 
             # Add sampled_token_ids to token_ids_cpu.
             start_idx = self.input_batch.num_tokens_no_spec[i]
