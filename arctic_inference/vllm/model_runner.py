@@ -18,6 +18,7 @@ import copy
 import time
 from typing import Any, Union, Optional, TYPE_CHECKING
 
+import numpy as np
 import torch
 import vllm.distributed.parallel_state as parallel_state
 import vllm.envs as envs
@@ -492,6 +493,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             spec_token_ids = self.propose_draft_token_ids(
                 scheduler_output,
                 valid_sampled_token_ids,
+                sampler_output.sampled_token_ids,
                 sampling_metadata,
                 hidden_states,
                 sample_hidden_states,
@@ -523,6 +525,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         self,
         scheduler_output: "SchedulerOutput",
         sampled_token_ids: list[list[int]],
+        original_sampled_token_ids: np.ndarray,
         sampling_metadata: SamplingMetadata,
         hidden_states: torch.Tensor,
         sample_hidden_states: torch.Tensor,
@@ -569,7 +572,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             assert isinstance(self.drafter, ArcticProposer)
             previous_hidden_states = self.drafter.prepare_hidden_states(
                 sample_hidden_states=sample_hidden_states,
-                sampled_token_ids=new_sampled_token_ids,
+                sampled_token_ids=original_sampled_token_ids,
                 spec_decode_metadata=spec_decode_metadata,
             )
             spec_token_ids = self.propose_arctic_draft_token_ids(
