@@ -70,6 +70,14 @@ class CMakeBuild(build_ext):
             f"-DTORCH_CMAKE_PREFIX_PATH={torch.utils.cmake_prefix_path}",
         ]
         build_args = []
+
+        minimal_build_env = os.environ.get("ARCTIC_MINIMAL_BUILD",
+                                           "").lower() in ("1", "true", "on")
+        if minimal_build_env and torch.cuda.is_available():
+            major, minor = torch.cuda.get_device_capability()
+            arch_string = f"{major}.{minor}"
+            cmake_args.append(f"-DTORCH_CUDA_ARCH_LIST={arch_string}")
+
         # Adding CMake arguments set as environment variable
         # (needed e.g. to build for ARM OSx on conda-forge)
         if "CMAKE_ARGS" in os.environ:
@@ -162,12 +170,15 @@ class CompileGrpc(_build_py):
         # Run the original build_py command
         _build_py.run(self)
 
+
 setup(
     ext_modules=[
         CMakeExtension("arctic_inference.common.suffix_cache._C",
                        "csrc/suffix_cache"),
-        CMakeExtension("arctic_inference.custom_ops",
-                       "csrc/custom_ops"),
+        CMakeExtension("arctic_inference.custom_ops", "csrc/custom_ops"),
     ],
-    cmdclass={"build_ext": CMakeBuild, 'build_py': CompileGrpc},
+    cmdclass={
+        "build_ext": CMakeBuild,
+        'build_py': CompileGrpc
+    },
 )
