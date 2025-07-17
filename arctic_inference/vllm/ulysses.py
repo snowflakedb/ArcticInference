@@ -529,6 +529,16 @@ class PiecewiseCompileInterpreterPatch(ArcticPatch[PiecewiseCompileInterpreter])
                         symbols.update(dim.node.expr.free_symbols)
         assert len(symbols) == 1, (
             f"Expected exactly one symbolic shape, but found {len(symbols)}: {symbols}")
+
+        rank = torch.distributed.get_rank()
+        for i, x in enumerate(args):
+            if isinstance(x, torch._subclasses.fake_tensor.FakeTensor):
+                print(f"rank {rank} symbols {symbols} x[{i}] FakeTensor {x.shape} {x.dtype}")
+            elif isinstance(x, torch.SymInt):
+                print(f"rank {rank} symbols {symbols} x[{i}] SymInt {x}")
+            else:
+                assert False
+
         return list(symbols)[0]
   
     def call_module(self, target: torch.fx.node.Target,
@@ -557,10 +567,18 @@ class PiecewiseCompileInterpreterPatch(ArcticPatch[PiecewiseCompileInterpreter])
             # symbol indices.
             sym_shape = self.find_symbolic_shape(args)
             sym_shape_indices = []
+            rank = torch.distributed.get_rank()
             for i, x in enumerate(args):
+                if isinstance(x, torch._subclasses.fake_tensor.FakeTensor):
+                    print(f"rank {rank} args[{i}] sym_shape {sym_shape} FakeTensor {x.shape} {x.dtype}")
+                elif isinstance(x, torch.SymInt):
+                    print(f"rank {rank} args[{i}] sym_shape {sym_shape} SymInt {x}")
+                else:
+                    assert False
                 if isinstance(x, torch.SymInt):
                     if sym_shape == x:
                         sym_shape_indices.append(i)
+            print(f"rank {rank} sym_shape_indices {sym_shape_indices}")
 
             global compilation_start_time
             compiled_graph_for_general_shape = self.vllm_backend.\
