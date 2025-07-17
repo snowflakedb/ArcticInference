@@ -21,6 +21,7 @@ from typing import Optional, Any
 
 import torch
 import vllm.distributed.parallel_state as parallel_state
+import vllm.envs as envs
 from vllm.attention.layer import Attention
 from vllm.config import ModelConfig, ParallelConfig
 from vllm.distributed.device_communicators.shm_broadcast import MessageQueue
@@ -99,6 +100,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
     # all-to-all within SP_AA group followed by an local all-gather within SP_AG
     # group. The SP_AA and SP_AG groups partitions the SP group into two orthogonal
     # sub-groups and will not be initialized if max(1, num_kv_heads / TP) < SP.
+    # See the figure in PR #126 https://github.com/snowflakedb/ArcticInference/pull/126
 
     def initialize_model_parallel(
         tensor_model_parallel_size: int = 1,
@@ -370,7 +372,10 @@ class UlyssesMultiprocExecutorPatch(ArcticPatch[MultiprocExecutor]):
 
         # Initialize worker and set up message queues for SchedulerOutputs
         # and ModelRunnerOutputs
-        self.rpc_broadcast_mq = MessageQueue(self.world_size, self.world_size)
+        max_chunk_bytes = envs.VLLM_MQ_MAX_CHUNK_BYTES_MB * 1024 * 1024
+        self.rpc_broadcast_mq = MessageQueue(self.world_size,
+                                             self.world_size,
+                                             max_chunk_bytes=max_chunk_bytes)
         scheduler_output_handle = self.rpc_broadcast_mq.export_handle()
 
         # Create workers

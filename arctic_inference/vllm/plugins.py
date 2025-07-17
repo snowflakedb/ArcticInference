@@ -64,14 +64,13 @@ class WorkerBasePatch(ArcticPatch[WorkerBase]):
 
 
 def arctic_inference_plugin():
-
     if (vllm.__version__ != get_compatible_vllm_version() and not
             vllm.__version__.startswith("0.1.dev")):  # Make it work with dev
         logger.warning(
             f"ArcticInference requires vllm=={get_compatible_vllm_version()} "
             f"but found vllm=={vllm.__version__}. Ignoring plugin!")
         return
-
+    
     if not vllm.platforms.current_platform.is_cuda():
         logger.warning(
             f"ArcticInference requires the cuda platform. Ignoring plugin!")
@@ -91,12 +90,13 @@ def arctic_inference_plugin():
     AutoConfig.register("llama_swiftkv", LlamaSwiftKVConfig)
 
     from vllm import ModelRegistry
-    from arctic_inference.vllm.swiftkv import LlamaSwiftKVForCausalLM
+    #from arctic_inference.vllm.swiftkv import LlamaSwiftKVForCausalLM
 
     # Register SwiftKV model definitions to vLLM.
-    ModelRegistry.register_model("LlamaSwiftKVForCausalLM",
-                                 LlamaSwiftKVForCausalLM)
-    
+    ModelRegistry.register_model(
+        "LlamaSwiftKVForCausalLM",
+        "arctic_inference.vllm.swiftkv:LlamaSwiftKVForCausalLM")
+
     # Register ArcticSpeculator models to vLLM.
     from arctic_inference.vllm.spec_dec.arctic_speculator import (
         ArcticMLPSpeculator, ArcticLSTMSpeculator)
