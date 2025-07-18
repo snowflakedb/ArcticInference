@@ -139,6 +139,7 @@ def test_accuracy(request, vllm_server, task_name):
                     "model": vllm_args.model,
                     "base_url": base_url,
                     "num_concurrent": 256,
+                    "timeout": 3600,
                 },
                 **task.config,
             )
