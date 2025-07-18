@@ -14,6 +14,7 @@ from vllm.utils import FlexibleArgumentParser
 from .benchmark_utils import (ACCURACY_TASKS, PERFORMANCE_TASKS, VLLM_CONFIGS,
                               JSON_MODE_TASKS, update_benchmark_summary)                  
 
+CUSTOM_PORT = 8080
 
 @pytest.fixture(scope="module", params=list(VLLM_CONFIGS.keys()))
 def vllm_server(request):
@@ -26,6 +27,8 @@ def vllm_server(request):
     args = parser.parse_args([])
     args.disable_log_requests = True
     args.disable_uvicorn_access_log = True
+
+    setattr(args, 'port', CUSTOM_PORT)
 
     for key, value in VLLM_CONFIGS[request.param].items():
         setattr(args, key, value)
@@ -40,12 +43,15 @@ def vllm_server(request):
     process.start()
 
     print("Waiting for server to start...")
-    timeout = 1800
+    timeout = 3600
     interval = 5
     start = time.time()
+
+    health_check_url = f"http://localhost:{CUSTOM_PORT}/v1/models"
+
     while True:
         try:
-            r = requests.get("http://localhost:8000/v1/models")
+            r = requests.get(health_check_url)
             if r.status_code == 200:
                 break
         except requests.exceptions.ConnectionError:
@@ -78,6 +84,8 @@ def test_performance(request, vllm_server, task_name):
     add_cli_args(parser)
 
     args = parser.parse_args(["--model", vllm_args.model])
+
+    setattr(args, 'port', CUSTOM_PORT)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         args.save_result = True
@@ -123,12 +131,15 @@ def test_accuracy(request, vllm_server, task_name):
             from lm_eval import evaluator
             from lm_eval.utils import handle_non_serializable, make_table
 
+            base_url = f"http://localhost:{CUSTOM_PORT}/v1/completions"
+
             result = evaluator.simple_evaluate(
                 model="local-completions",
                 model_args={
                     "model": vllm_args.model,
-                    "base_url": "http://localhost:8000/v1/completions",
+                    "base_url": base_url,
                     "num_concurrent": 256,
+                    "timeout": 3600,
                 },
                 **task.config,
             )
@@ -193,6 +204,8 @@ def test_json_mode(request, vllm_server, task_name):
         args.task = task.config["task"]
         args.input = task.config["input"]
         args.n_samples = task.config["n_samples"]
+
+        args.port = CUSTOM_PORT
 
         evaluate_json(args)
 
