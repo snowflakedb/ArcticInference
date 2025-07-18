@@ -3,7 +3,7 @@
 
 <h3 align="center">
   <img src="docs/images/arctic_inference_logo.svg" width=500px><br>
-  | <a href="https://arcticinference.readthedocs.io/en/latest/"><b>Documentation</b></a> | <a href="https://www.snowflake.com/en/engineering-blog/arctic-inference-shift-parallelism/"><b>Blog</b></a> |
+  | <a href="https://arcticinference.readthedocs.io/en/latest/"><b>Documentation</b></a> | <a href="https://www.snowflake.com/en/engineering-blog/arctic-inference-shift-parallelism/"><b>Blog</b></a> | <a href="https://arxiv.org/pdf/2507.11830"><b>Paper</b></a> |
 </h3>
 
 ## Latest news
@@ -35,7 +35,8 @@ Arctic Inference achieves high throughput and low latency through a wholistic se
     <tbody>
         <tr>
             <td align="left">
-                Arctic Ulysses (<a href="https://www.snowflake.com/en/engineering-blog/ulysses-low-latency-llm-inference/">blog</a>)
+                Arctic Ulysses (<a href="https://www.snowflake.com/en/engineering-blog/ulysses-low-latency-llm-inference/">blog</a>,
+                                <a href="https://arxiv.org/abs/2507.11830">paper</a>)
                 <br>
                 Shift Parallelism (<a href="https://www.snowflake.com/en/engineering-blog/arctic-inference-shift-parallelism/">blog</a>)
             </td>
@@ -150,6 +151,16 @@ conversation = [
 sampling_params = SamplingParams(temperature=0.0, max_tokens=800)
 
 outputs = llm.chat(conversation, sampling_params=sampling_params)
+
+print(outputs[0].outputs[0].text)
 ```
 
-
+## Citation
+```
+@misc{arcticinference2025,
+      title={Arctic Inference with Shift Parallelism: Fast and Efficient Open Source Inference System for Enterprise AI}, 
+      author={Samyam Rajbhandari and Mert Hidayetoglu and Aurick Qiao and Ye Wang and Juncheng Yang and Jeff Rasley and Michael Wyatt and Yuxiong He},
+      year={2025},
+      url={https://arxiv.org/abs/2507.11830}, 
+}
+```
