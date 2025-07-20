@@ -219,7 +219,8 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                                sequence_parallel_size)
         assert parallel_state._SP_TP is None, (
             "full-TP group is already initialized")
-        group_ranks = all_ranks.reshape(
+        # transpose(3, 4) for obtaining the correct attn head order
+        group_ranks = all_ranks.transpose(3, 4).reshape(
             -1, shift_parallel_size).unbind(0)
         group_ranks = [x.tolist() for x in group_ranks]
         SP_TP_group_ranks = group_ranks
