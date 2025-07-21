@@ -14,85 +14,33 @@ class BenchmarkTask:
     # extracting the metric from each benchmark result.
     metrics: Dict[str, str | Callable]
 
+# Llama 8B, Qwen8B ad Qwen 4B dense
 VLLM_CONFIGS = {
     "llama_8b": {
-        "model": "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic",
-        "tensor_parallel_size": 4,
-        "enable_prefix_caching": False,
+        "model": "RedHatAI/Meta-Llama-3-8B-Instruct-FP8",
+        "tensor_parallel_size": 1,
     },
-    "llama_8b_shift": {
-        "model": "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic",
-        "tensor_parallel_size": 2,
-        "ulysses_sequence_parallel_size": 2,
-        "enable_shift_parallel": True,
-        "shift_parallel_threshold": 256,
-        "enable_prefix_caching": False,
+    "qwen_8b": {
+        "model": "RedHatAI/Qwen3-8B-FP8-dynamic",
+        "tensor_parallel_size": 1,
     },
-    "llama_8b_swiftkv": {
-        "model": "Snowflake/Llama-3.1-SwiftKV-8B-Instruct-FP8",
-        "tensor_parallel_size": 4,
-        "enable_prefix_caching": False,
-    },
-    "llama_8b_suffix": {
-        "model": "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic",
-        "tensor_parallel_size": 4,
-        "speculative_config": {
-            "method": "suffix",
-            "disable_by_batch_size": 64,
-        },
-        "enable_prefix_caching": False,
-    },
-    "llama_8b_spec": {
-        "model": "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic",
-        "tensor_parallel_size": 4,
-        "speculative_config": {
-            "method": "arctic",
-            "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.1-8B-Instruct",
-            "num_speculative_tokens": 3,
-            "disable_by_batch_size": 64,
-        },
-        "enable_prefix_caching": False,
-    },
-    "llama_8b_all": {
-        "model": "Snowflake/Llama-3.1-SwiftKV-8B-Instruct-FP8",
-        "tensor_parallel_size": 2,
-        "ulysses_sequence_parallel_size": 2,
-        "enable_shift_parallel": True,
-        "speculative_config": {
-            "method": "arctic",
-            "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.1-8B-Instruct",
-            "num_speculative_tokens": 3,
-            "enable_suffix_decoding": True,
-            "disable_by_batch_size": 64,
-        },
-        "enable_prefix_caching": False,
+    "qwen_4b": {
+        "model": "RedHatAI/Qwen3-4B-FP8-dynamic",
+        "tensor_parallel_size": 1,
     },
 }
 
 PERFORMANCE_TASKS = {
-    "batch": BenchmarkTask(
+    "batch_2k_200": BenchmarkTask(
         config={
             "dataset_name": "random",
             "random_input_len": 2000,
-            "random_output_len": 250,
+            "random_output_len": 200,
             "num_prompts": 2000,
         },
         metrics={
             "throughput": "total_token_throughput",
         },
-    ),
-    "single": BenchmarkTask(
-        config={
-            "dataset_name": "random",
-            "random_input_len": 2000,
-            "random_output_len": 250,
-            "num_prompts": 20,
-            "max_concurrency": 1,
-        },
-        metrics={
-            "ttft_ms": "mean_ttft_ms",
-            "tpot_ms": "mean_tpot_ms",
-        }
     ),
 }
 
