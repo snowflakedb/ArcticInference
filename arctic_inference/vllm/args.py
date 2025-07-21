@@ -108,7 +108,7 @@ class EngineArgsPatch(ArcticPatch[EngineArgs]):
     def create_engine_config(self, *args, **kwargs):
         if (self.ulysses_sequence_parallel_size > 1 and
                 self.distributed_executor_backend is None):
-            self.distributed
+            self.distributed_executor_backend = "mp"
         vllm_config = self._orig_create_engine_config(*args, **kwargs)
         # Recreate the parallel config with Arctic parameters since they might
         # not be passed to the parallel config __init__ when first initialized.
