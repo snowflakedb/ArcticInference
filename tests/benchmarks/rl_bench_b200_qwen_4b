@@ -1,0 +1,744 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-8.1.1, pluggy-1.6.0
+rootdir: /code/users/yewang/arctic_inference_dev/ArcticInference
+configfile: pyproject.toml
+plugins: devtools-0.12.2, anyio-4.9.0, hypothesis-6.130.8, flakefinder-1.1.0, rerunfailures-15.1, shard-0.1.2, xdist-3.6.1, xdoctest-1.0.2, typeguard-4.3.0
+INFO 07-22 21:28:49 [__init__.py:244] Automatically detected platform cuda.
+collected 8 items
+Running 8 items in this shard
+
+test_benchmarks.py INFO 07-22 21:28:52 [api_server.py:1287] vLLM API server version 0.9.1
+INFO 07-22 21:28:53 [cli_args.py:309] non-default args: {'port': 8060, 'disable_uvicorn_access_log': True, 'model': 'RedHatAI/Qwen3-4B-FP8-dynamic', 'max_num_batched_tokens': 512, 'max_num_seqs': 512, 'disable_log_requests': True}
+INFO 07-22 21:29:03 [config.py:823] This model supports multiple tasks: {'score', 'embed', 'reward', 'generate', 'classify'}. Defaulting to 'generate'.
+INFO 07-22 21:29:04 [config.py:2195] Chunked prefill is enabled with max_num_batched_tokens=512.
+INFO 07-22 21:29:05 [core.py:455] Waiting for init message from front-end.
+INFO 07-22 21:29:05 [core.py:70] Initializing a V1 LLM engine (v0.9.1) with config: model='RedHatAI/Qwen3-4B-FP8-dynamic', speculative_config=None, tokenizer='RedHatAI/Qwen3-4B-FP8-dynamic', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config={}, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=40960, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=compressed-tensors, enforce_eager=False, kv_cache_dtype=auto,  device_config=cuda, decoding_config=DecodingConfig(backend='auto', disable_fallback=False, disable_any_whitespace=False, disable_additional_properties=False, reasoning_backend=''), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None), seed=0, served_model_name=RedHatAI/Qwen3-4B-FP8-dynamic, num_scheduler_steps=1, multi_step_stream_outputs=True, enable_prefix_caching=True, chunked_prefill_enabled=True, use_async_output_proc=True, pooler_config=None, compilation_config={"level":3,"debug_dump_path":"","cache_dir":"","backend":"","custom_ops":["none"],"splitting_ops":["vllm.unified_attention","vllm.unified_attention_with_output"],"use_inductor":true,"compile_sizes":[],"inductor_compile_config":{"enable_auto_functionalized_v2":false},"inductor_passes":{},"use_cudagraph":true,"cudagraph_num_of_warmups":1,"cudagraph_capture_sizes":[512,504,496,488,480,472,464,456,448,440,432,424,416,408,400,392,384,376,368,360,352,344,336,328,320,312,304,296,288,280,272,264,256,248,240,232,224,216,208,200,192,184,176,168,160,152,144,136,128,120,112,104,96,88,80,72,64,56,48,40,32,24,16,8,4,2,1],"cudagraph_copy_inputs":false,"full_cuda_graph":false,"max_capture_size":512,"local_cache_dir":null}
+WARNING 07-22 21:29:05 [utils.py:2737] Methods determine_num_available_blocks,device_config,get_cache_block_size_bytes,initialize_cache not implemented in <vllm.v1.worker.gpu_worker.Worker object at 0x7f792271a360>
+INFO 07-22 21:29:06 [parallel_state.py:1065] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, TP rank 0, EP rank 0
+INFO 07-22 21:29:06 [topk_topp_sampler.py:49] Using FlashInfer for top-p & top-k sampling.
+INFO 07-22 21:29:06 [gpu_model_runner.py:1595] Starting to load model RedHatAI/Qwen3-4B-FP8-dynamic...
+INFO 07-22 21:29:06 [gpu_model_runner.py:1600] Loading model from scratch...
+INFO 07-22 21:29:06 [cuda.py:240] Using FlashInfer backend on V1 engine by default for Blackwell (SM 10.0) GPUs.
+INFO 07-22 21:29:07 [weight_utils.py:292] Using model weights format ['*.safetensors']
+INFO 07-22 21:29:19 [weight_utils.py:308] Time spent downloading weights for RedHatAI/Qwen3-4B-FP8-dynamic: 12.151291 seconds
+INFO 07-22 21:29:20 [default_loader.py:272] Loading weights took 0.93 seconds
+INFO 07-22 21:29:20 [gpu_model_runner.py:1624] Model loading took 4.1833 GiB and 13.827227 seconds
+INFO 07-22 21:29:30 [backends.py:462] Using cache directory: /home/yak/.cache/vllm/torch_compile_cache/8314aa15e2/rank_0_0 for vLLM's torch.compile
+INFO 07-22 21:29:30 [backends.py:472] Dynamo bytecode transform time: 9.74 s
+INFO 07-22 21:29:34 [backends.py:161] Cache the graph of shape None for later use
+INFO 07-22 21:30:07 [backends.py:173] Compiling a graph for general shape takes 35.99 s
+INFO 07-22 21:30:22 [monitor.py:34] torch.compile takes 45.72 s in total
+INFO 07-22 21:30:22 [gpu_worker.py:227] Available KV cache memory: 155.15 GiB
+INFO 07-22 21:30:22 [kv_cache_utils.py:715] GPU KV cache size: 1,129,792 tokens
+INFO 07-22 21:30:22 [kv_cache_utils.py:719] Maximum concurrency for 40,960 tokens per request: 27.58x
+INFO 07-22 21:30:38 [gpu_model_runner.py:2048] Graph capturing finished in 16 secs, took 0.75 GiB
+INFO 07-22 21:30:38 [core.py:171] init engine (profile, create kv cache, warmup model) took 77.87 seconds
+INFO 07-22 21:30:39 [loggers.py:137] Engine 000: vllm cache_config_info with initialization after num_gpu_blocks is: 70612
+WARNING 07-22 21:30:39 [config.py:1363] Default sampling parameters have been overridden by the model's Hugging Face generation config recommended from the model creator. If this is not intended, please relaunch vLLM instance with `--generation-config vllm`.
+INFO 07-22 21:30:39 [serving_chat.py:118] Using default chat sampling params from model: {'temperature': 0.6, 'top_k': 20, 'top_p': 0.95}
+INFO 07-22 21:30:39 [serving_completion.py:66] Using default completion sampling params from model: {'temperature': 0.6, 'top_k': 20, 'top_p': 0.95}
+INFO 07-22 21:30:39 [api_server.py:1349] Starting vLLM API server 0 on http://0.0.0.0:8060
+INFO 07-22 21:30:39 [launcher.py:29] Available routes are:
+INFO 07-22 21:30:39 [launcher.py:37] Route: /openapi.json, Methods: GET, HEAD
+INFO 07-22 21:30:39 [launcher.py:37] Route: /docs, Methods: GET, HEAD
+INFO 07-22 21:30:39 [launcher.py:37] Route: /docs/oauth2-redirect, Methods: GET, HEAD
+INFO 07-22 21:30:39 [launcher.py:37] Route: /redoc, Methods: GET, HEAD
+INFO 07-22 21:30:39 [launcher.py:37] Route: /health, Methods: GET
+INFO 07-22 21:30:39 [launcher.py:37] Route: /load, Methods: GET
+INFO 07-22 21:30:39 [launcher.py:37] Route: /ping, Methods: POST
+INFO 07-22 21:30:39 [launcher.py:37] Route: /ping, Methods: GET
+INFO 07-22 21:30:39 [launcher.py:37] Route: /tokenize, Methods: POST
+INFO 07-22 21:30:39 [launcher.py:37] Route: /detokenize, Methods: POST
+INFO 07-22 21:30:39 [launcher.py:37] Route: /v1/models, Methods: GET
+INFO 07-22 21:30:39 [launcher.py:37] Route: /version, Methods: GET
+INFO 07-22 21:30:39 [launcher.py:37] Route: /v1/chat/completions, Methods: POST
+INFO 07-22 21:30:39 [launcher.py:37] Route: /v1/completions, Methods: POST
+INFO 07-22 21:30:39 [launcher.py:37] Route: /v1/embeddings, Methods: POST
+INFO 07-22 21:30:39 [launcher.py:37] Route: /pooling, Methods: POST
+INFO 07-22 21:30:39 [launcher.py:37] Route: /classify, Methods: POST
+INFO 07-22 21:30:39 [launcher.py:37] Route: /score, Methods: POST
+INFO 07-22 21:30:39 [launcher.py:37] Route: /v1/score, Methods: POST
+INFO 07-22 21:30:39 [launcher.py:37] Route: /v1/audio/transcriptions, Methods: POST
+INFO 07-22 21:30:39 [launcher.py:37] Route: /rerank, Methods: POST
+INFO 07-22 21:30:39 [launcher.py:37] Route: /v1/rerank, Methods: POST
+INFO 07-22 21:30:39 [launcher.py:37] Route: /v2/rerank, Methods: POST
+INFO 07-22 21:30:39 [launcher.py:37] Route: /invocations, Methods: POST
+INFO 07-22 21:30:39 [launcher.py:37] Route: /metrics, Methods: GET
+Waiting for server to start...
+Server process started
+Namespace(endpoint_type='openai', label=None, base_url=None, host='127.0.0.1', port=8060, endpoint='/v1/completions', dataset_name='random', dataset_path=None, max_concurrency=512, model='RedHatAI/Qwen3-4B-FP8-dynamic', tokenizer=None, use_beam_search=False, num_prompts=2000, logprobs=None, request_rate=inf, burstiness=1.0, seed=0, trust_remote_code=False, disable_tqdm=False, profile=False, save_result=True, save_detailed=False, append_result=False, metadata=None, result_dir='/tmp/tmplfo5d_ez', result_filename='result.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl', metric_percentiles='99', goodput=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, random_input_len=2000, random_output_len=200, random_range_ratio=0.0, random_prefix_len=0, hf_subset=None, hf_split=None, hf_output_len=None, top_p=None, top_k=None, min_p=None, temperature=None, tokenizer_mode='auto', served_model_name=None, lora_modules=None)
+INFO 07-22 21:30:43 [datasets.py:348] Sampling input_len from [2000, 2000] and output_len from [200, 200]
+INFO 07-22 21:30:59 [loggers.py:118] Engine 000: Avg prompt throughput: 200.0 tokens/s, Avg generation throughput: 7.3 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.2%, Prefix cache hit rate: 0.0%
+Starting initial single prompt test run...
+Initial test run completed. Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 512
+INFO 07-22 21:31:09 [loggers.py:118] Engine 000: Avg prompt throughput: 29493.8 tokens/s, Avg generation throughput: 2497.5 tokens/s, Running: 48 reqs, Waiting: 464 reqs, GPU KV cache usage: 8.8%, Prefix cache hit rate: 0.7%
+INFO 07-22 21:31:19 [loggers.py:118] Engine 000: Avg prompt throughput: 31154.5 tokens/s, Avg generation throughput: 3078.8 tokens/s, Running: 47 reqs, Waiting: 465 reqs, GPU KV cache usage: 8.6%, Prefix cache hit rate: 0.3%
+INFO 07-22 21:31:29 [loggers.py:118] Engine 000: Avg prompt throughput: 31127.6 tokens/s, Avg generation throughput: 3091.8 tokens/s, Running: 46 reqs, Waiting: 465 reqs, GPU KV cache usage: 8.5%, Prefix cache hit rate: 0.4%
+INFO 07-22 21:31:39 [loggers.py:118] Engine 000: Avg prompt throughput: 29924.6 tokens/s, Avg generation throughput: 2970.9 tokens/s, Running: 47 reqs, Waiting: 464 reqs, GPU KV cache usage: 8.7%, Prefix cache hit rate: 0.3%
+INFO 07-22 21:31:49 [loggers.py:118] Engine 000: Avg prompt throughput: 31330.0 tokens/s, Avg generation throughput: 3075.7 tokens/s, Running: 46 reqs, Waiting: 465 reqs, GPU KV cache usage: 8.5%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:31:59 [loggers.py:118] Engine 000: Avg prompt throughput: 31355.8 tokens/s, Avg generation throughput: 3066.3 tokens/s, Running: 48 reqs, Waiting: 463 reqs, GPU KV cache usage: 8.9%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:32:09 [loggers.py:118] Engine 000: Avg prompt throughput: 31160.2 tokens/s, Avg generation throughput: 3053.1 tokens/s, Running: 46 reqs, Waiting: 466 reqs, GPU KV cache usage: 8.4%, Prefix cache hit rate: 0.4%
+INFO 07-22 21:32:19 [loggers.py:118] Engine 000: Avg prompt throughput: 30933.4 tokens/s, Avg generation throughput: 3051.9 tokens/s, Running: 46 reqs, Waiting: 466 reqs, GPU KV cache usage: 8.5%, Prefix cache hit rate: 0.4%
+INFO 07-22 21:32:29 [loggers.py:118] Engine 000: Avg prompt throughput: 31120.0 tokens/s, Avg generation throughput: 3093.4 tokens/s, Running: 47 reqs, Waiting: 464 reqs, GPU KV cache usage: 8.7%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:32:39 [loggers.py:118] Engine 000: Avg prompt throughput: 31120.3 tokens/s, Avg generation throughput: 3062.8 tokens/s, Running: 47 reqs, Waiting: 452 reqs, GPU KV cache usage: 8.7%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:32:49 [loggers.py:118] Engine 000: Avg prompt throughput: 31152.8 tokens/s, Avg generation throughput: 3059.9 tokens/s, Running: 47 reqs, Waiting: 296 reqs, GPU KV cache usage: 8.7%, Prefix cache hit rate: 0.4%
+INFO 07-22 21:32:59 [loggers.py:118] Engine 000: Avg prompt throughput: 30915.9 tokens/s, Avg generation throughput: 3091.0 tokens/s, Running: 47 reqs, Waiting: 141 reqs, GPU KV cache usage: 8.7%, Prefix cache hit rate: 0.4%
+INFO 07-22 21:33:09 [loggers.py:118] Engine 000: Avg prompt throughput: 28361.4 tokens/s, Avg generation throughput: 3179.9 tokens/s, Running: 21 reqs, Waiting: 0 reqs, GPU KV cache usage: 4.0%, Prefix cache hit rate: 0.4%
+============ Serving Benchmark Result ============
+Successful requests:                     2000      
+Benchmark duration (s):                  129.97    
+Total input tokens:                      4000000   
+Total generated tokens:                  394665    
+Request throughput (req/s):              15.39     
+Output token throughput (tok/s):         3036.47   
+Total Token throughput (tok/s):          33811.64  
+---------------Time to First Token----------------
+Mean TTFT (ms):                          26484.43  
+Median TTFT (ms):                        29895.00  
+P99 TTFT (ms):                           31321.27  
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          14.97     
+Median TPOT (ms):                        15.03     
+P99 TPOT (ms):                           16.91     
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           14.98     
+Median ITL (ms):                         15.05     
+P99 ITL (ms):                            16.12     
+==================================================
+.Namespace(endpoint_type='openai', label=None, base_url=None, host='127.0.0.1', port=8060, endpoint='/v1/completions', dataset_name='random', dataset_path=None, max_concurrency=512, model='RedHatAI/Qwen3-4B-FP8-dynamic', tokenizer=None, use_beam_search=False, num_prompts=2000, logprobs=None, request_rate=inf, burstiness=1.0, seed=0, trust_remote_code=False, disable_tqdm=False, profile=False, save_result=True, save_detailed=False, append_result=False, metadata=None, result_dir='/tmp/tmp6j_w_r6y', result_filename='result.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl', metric_percentiles='99', goodput=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, random_input_len=1200, random_output_len=1500, random_range_ratio=0.0, random_prefix_len=0, hf_subset=None, hf_split=None, hf_output_len=None, top_p=None, top_k=None, min_p=None, temperature=None, tokenizer_mode='auto', served_model_name=None, lora_modules=None)
+INFO 07-22 21:33:10 [datasets.py:348] Sampling input_len from [1200, 1200] and output_len from [1500, 1500]
+INFO 07-22 21:33:19 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 102.1 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 0.4%
+Starting initial single prompt test run...
+Initial test run completed. Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 512
+INFO 07-22 21:33:29 [loggers.py:118] Engine 000: Avg prompt throughput: 9572.4 tokens/s, Avg generation throughput: 954.2 tokens/s, Running: 78 reqs, Waiting: 434 reqs, GPU KV cache usage: 9.0%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:33:39 [loggers.py:118] Engine 000: Avg prompt throughput: 16974.0 tokens/s, Avg generation throughput: 7131.2 tokens/s, Running: 219 reqs, Waiting: 293 reqs, GPU KV cache usage: 30.3%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:33:49 [loggers.py:118] Engine 000: Avg prompt throughput: 8507.2 tokens/s, Avg generation throughput: 8419.8 tokens/s, Running: 289 reqs, Waiting: 223 reqs, GPU KV cache usage: 45.2%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:33:59 [loggers.py:118] Engine 000: Avg prompt throughput: 5158.0 tokens/s, Avg generation throughput: 7944.6 tokens/s, Running: 332 reqs, Waiting: 180 reqs, GPU KV cache usage: 56.8%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:34:09 [loggers.py:118] Engine 000: Avg prompt throughput: 3933.7 tokens/s, Avg generation throughput: 7924.3 tokens/s, Running: 365 reqs, Waiting: 147 reqs, GPU KV cache usage: 67.2%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:34:19 [loggers.py:118] Engine 000: Avg prompt throughput: 3701.1 tokens/s, Avg generation throughput: 7535.7 tokens/s, Running: 316 reqs, Waiting: 195 reqs, GPU KV cache usage: 58.1%, Prefix cache hit rate: 0.6%
+INFO 07-22 21:34:29 [loggers.py:118] Engine 000: Avg prompt throughput: 5515.5 tokens/s, Avg generation throughput: 7366.9 tokens/s, Running: 279 reqs, Waiting: 232 reqs, GPU KV cache usage: 50.0%, Prefix cache hit rate: 0.6%
+INFO 07-22 21:34:39 [loggers.py:118] Engine 000: Avg prompt throughput: 6330.0 tokens/s, Avg generation throughput: 7038.5 tokens/s, Running: 263 reqs, Waiting: 248 reqs, GPU KV cache usage: 45.5%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:34:49 [loggers.py:118] Engine 000: Avg prompt throughput: 6941.3 tokens/s, Avg generation throughput: 7179.1 tokens/s, Running: 263 reqs, Waiting: 248 reqs, GPU KV cache usage: 44.1%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:34:59 [loggers.py:118] Engine 000: Avg prompt throughput: 6585.9 tokens/s, Avg generation throughput: 7203.2 tokens/s, Running: 272 reqs, Waiting: 240 reqs, GPU KV cache usage: 45.5%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:35:09 [loggers.py:118] Engine 000: Avg prompt throughput: 6585.8 tokens/s, Avg generation throughput: 7570.8 tokens/s, Running: 287 reqs, Waiting: 225 reqs, GPU KV cache usage: 48.8%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:35:19 [loggers.py:118] Engine 000: Avg prompt throughput: 5756.2 tokens/s, Avg generation throughput: 7522.2 tokens/s, Running: 294 reqs, Waiting: 217 reqs, GPU KV cache usage: 50.9%, Prefix cache hit rate: 0.6%
+INFO 07-22 21:35:29 [loggers.py:118] Engine 000: Avg prompt throughput: 5384.6 tokens/s, Avg generation throughput: 7309.5 tokens/s, Running: 294 reqs, Waiting: 218 reqs, GPU KV cache usage: 51.3%, Prefix cache hit rate: 0.6%
+INFO 07-22 21:35:39 [loggers.py:118] Engine 000: Avg prompt throughput: 5507.9 tokens/s, Avg generation throughput: 7124.4 tokens/s, Running: 289 reqs, Waiting: 222 reqs, GPU KV cache usage: 50.3%, Prefix cache hit rate: 0.6%
+INFO 07-22 21:35:49 [loggers.py:118] Engine 000: Avg prompt throughput: 5390.6 tokens/s, Avg generation throughput: 6799.6 tokens/s, Running: 285 reqs, Waiting: 227 reqs, GPU KV cache usage: 49.5%, Prefix cache hit rate: 0.6%
+INFO 07-22 21:35:59 [loggers.py:118] Engine 000: Avg prompt throughput: 5878.7 tokens/s, Avg generation throughput: 7210.8 tokens/s, Running: 280 reqs, Waiting: 232 reqs, GPU KV cache usage: 48.3%, Prefix cache hit rate: 0.6%
+INFO 07-22 21:36:09 [loggers.py:118] Engine 000: Avg prompt throughput: 6234.7 tokens/s, Avg generation throughput: 7304.4 tokens/s, Running: 280 reqs, Waiting: 232 reqs, GPU KV cache usage: 48.2%, Prefix cache hit rate: 0.6%
+INFO 07-22 21:36:19 [loggers.py:118] Engine 000: Avg prompt throughput: 6119.5 tokens/s, Avg generation throughput: 7332.6 tokens/s, Running: 282 reqs, Waiting: 229 reqs, GPU KV cache usage: 48.3%, Prefix cache hit rate: 0.6%
+INFO 07-22 21:36:29 [loggers.py:118] Engine 000: Avg prompt throughput: 5856.0 tokens/s, Avg generation throughput: 7341.3 tokens/s, Running: 283 reqs, Waiting: 228 reqs, GPU KV cache usage: 48.8%, Prefix cache hit rate: 0.6%
+INFO 07-22 21:36:39 [loggers.py:118] Engine 000: Avg prompt throughput: 5988.5 tokens/s, Avg generation throughput: 7264.6 tokens/s, Running: 285 reqs, Waiting: 227 reqs, GPU KV cache usage: 49.2%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:36:49 [loggers.py:118] Engine 000: Avg prompt throughput: 5519.9 tokens/s, Avg generation throughput: 6873.5 tokens/s, Running: 284 reqs, Waiting: 228 reqs, GPU KV cache usage: 49.2%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:36:59 [loggers.py:118] Engine 000: Avg prompt throughput: 5987.7 tokens/s, Avg generation throughput: 7285.2 tokens/s, Running: 283 reqs, Waiting: 229 reqs, GPU KV cache usage: 48.9%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:37:09 [loggers.py:118] Engine 000: Avg prompt throughput: 5963.9 tokens/s, Avg generation throughput: 7286.3 tokens/s, Running: 282 reqs, Waiting: 229 reqs, GPU KV cache usage: 48.6%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:37:19 [loggers.py:118] Engine 000: Avg prompt throughput: 6116.7 tokens/s, Avg generation throughput: 7330.4 tokens/s, Running: 283 reqs, Waiting: 228 reqs, GPU KV cache usage: 48.4%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:37:29 [loggers.py:118] Engine 000: Avg prompt throughput: 5975.2 tokens/s, Avg generation throughput: 7296.7 tokens/s, Running: 282 reqs, Waiting: 229 reqs, GPU KV cache usage: 48.3%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:37:39 [loggers.py:118] Engine 000: Avg prompt throughput: 5856.6 tokens/s, Avg generation throughput: 7215.3 tokens/s, Running: 284 reqs, Waiting: 227 reqs, GPU KV cache usage: 48.9%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:37:49 [loggers.py:118] Engine 000: Avg prompt throughput: 5617.7 tokens/s, Avg generation throughput: 6924.9 tokens/s, Running: 284 reqs, Waiting: 228 reqs, GPU KV cache usage: 48.9%, Prefix cache hit rate: 0.4%
+INFO 07-22 21:37:59 [loggers.py:118] Engine 000: Avg prompt throughput: 5993.3 tokens/s, Avg generation throughput: 7288.5 tokens/s, Running: 283 reqs, Waiting: 229 reqs, GPU KV cache usage: 48.7%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:38:09 [loggers.py:118] Engine 000: Avg prompt throughput: 5981.7 tokens/s, Avg generation throughput: 7376.8 tokens/s, Running: 283 reqs, Waiting: 229 reqs, GPU KV cache usage: 48.9%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:38:19 [loggers.py:118] Engine 000: Avg prompt throughput: 6100.3 tokens/s, Avg generation throughput: 7323.5 tokens/s, Running: 281 reqs, Waiting: 230 reqs, GPU KV cache usage: 48.3%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:38:29 [loggers.py:118] Engine 000: Avg prompt throughput: 5993.6 tokens/s, Avg generation throughput: 7254.8 tokens/s, Running: 283 reqs, Waiting: 229 reqs, GPU KV cache usage: 48.6%, Prefix cache hit rate: 0.4%
+INFO 07-22 21:38:39 [loggers.py:118] Engine 000: Avg prompt throughput: 5499.6 tokens/s, Avg generation throughput: 6722.7 tokens/s, Running: 283 reqs, Waiting: 229 reqs, GPU KV cache usage: 48.7%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:38:49 [loggers.py:118] Engine 000: Avg prompt throughput: 5875.4 tokens/s, Avg generation throughput: 7271.6 tokens/s, Running: 284 reqs, Waiting: 228 reqs, GPU KV cache usage: 49.1%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:38:59 [loggers.py:118] Engine 000: Avg prompt throughput: 5978.6 tokens/s, Avg generation throughput: 7330.7 tokens/s, Running: 283 reqs, Waiting: 209 reqs, GPU KV cache usage: 48.8%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:39:09 [loggers.py:118] Engine 000: Avg prompt throughput: 5979.1 tokens/s, Avg generation throughput: 7366.8 tokens/s, Running: 284 reqs, Waiting: 159 reqs, GPU KV cache usage: 49.1%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:39:19 [loggers.py:118] Engine 000: Avg prompt throughput: 5992.8 tokens/s, Avg generation throughput: 7372.8 tokens/s, Running: 282 reqs, Waiting: 109 reqs, GPU KV cache usage: 48.7%, Prefix cache hit rate: 0.4%
+INFO 07-22 21:39:29 [loggers.py:118] Engine 000: Avg prompt throughput: 6118.0 tokens/s, Avg generation throughput: 7308.9 tokens/s, Running: 283 reqs, Waiting: 58 reqs, GPU KV cache usage: 48.6%, Prefix cache hit rate: 0.4%
+INFO 07-22 21:39:39 [loggers.py:118] Engine 000: Avg prompt throughput: 5619.4 tokens/s, Avg generation throughput: 6870.0 tokens/s, Running: 286 reqs, Waiting: 11 reqs, GPU KV cache usage: 49.2%, Prefix cache hit rate: 0.4%
+INFO 07-22 21:39:49 [loggers.py:118] Engine 000: Avg prompt throughput: 1439.7 tokens/s, Avg generation throughput: 7579.9 tokens/s, Running: 243 reqs, Waiting: 0 reqs, GPU KV cache usage: 44.3%, Prefix cache hit rate: 0.4%
+INFO 07-22 21:39:59 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 6956.6 tokens/s, Running: 182 reqs, Waiting: 0 reqs, GPU KV cache usage: 35.9%, Prefix cache hit rate: 0.4%
+INFO 07-22 21:40:09 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5704.0 tokens/s, Running: 107 reqs, Waiting: 0 reqs, GPU KV cache usage: 23.0%, Prefix cache hit rate: 0.4%
+============ Serving Benchmark Result ============
+Successful requests:                     2000      
+Benchmark duration (s):                  410.36    
+Total input tokens:                      2400000   
+Total generated tokens:                  2942982   
+Request throughput (req/s):              4.87      
+Output token throughput (tok/s):         7171.79   
+Total Token throughput (tok/s):          13020.37  
+---------------Time to First Token----------------
+Mean TTFT (ms):                          40877.29  
+Median TTFT (ms):                        46396.75  
+P99 TTFT (ms):                           71991.70  
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          37.76     
+Median TPOT (ms):                        39.01     
+P99 TPOT (ms):                           40.17     
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           37.78     
+Median ITL (ms):                         38.52     
+P99 ITL (ms):                            46.13     
+==================================================
+.Namespace(endpoint_type='openai', label=None, base_url=None, host='127.0.0.1', port=8060, endpoint='/v1/completions', dataset_name='random', dataset_path=None, max_concurrency=512, model='RedHatAI/Qwen3-4B-FP8-dynamic', tokenizer=None, use_beam_search=False, num_prompts=2000, logprobs=None, request_rate=inf, burstiness=1.0, seed=0, trust_remote_code=False, disable_tqdm=False, profile=False, save_result=True, save_detailed=False, append_result=False, metadata=None, result_dir='/tmp/tmpablwv75u', result_filename='result.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl', metric_percentiles='99', goodput=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, random_input_len=2000, random_output_len=3000, random_range_ratio=0.0, random_prefix_len=0, hf_subset=None, hf_split=None, hf_output_len=None, top_p=None, top_k=None, min_p=None, temperature=None, tokenizer_mode='auto', served_model_name=None, lora_modules=None)
+INFO 07-22 21:40:18 [datasets.py:348] Sampling input_len from [2000, 2000] and output_len from [3000, 3000]
+INFO 07-22 21:40:19 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 2982.7 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 0.4%
+INFO 07-22 21:40:29 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 0.0 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 0.4%
+INFO 07-22 21:40:39 [loggers.py:118] Engine 000: Avg prompt throughput: 200.0 tokens/s, Avg generation throughput: 140.5 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.3%, Prefix cache hit rate: 0.4%
+Starting initial single prompt test run...
+Initial test run completed. Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 512
+INFO 07-22 21:40:49 [loggers.py:118] Engine 000: Avg prompt throughput: 9158.4 tokens/s, Avg generation throughput: 601.7 tokens/s, Running: 46 reqs, Waiting: 380 reqs, GPU KV cache usage: 8.4%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:40:59 [loggers.py:118] Engine 000: Avg prompt throughput: 18546.8 tokens/s, Avg generation throughput: 4152.3 tokens/s, Running: 139 reqs, Waiting: 373 reqs, GPU KV cache usage: 28.6%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:41:09 [loggers.py:118] Engine 000: Avg prompt throughput: 11755.1 tokens/s, Avg generation throughput: 5449.2 tokens/s, Running: 192 reqs, Waiting: 320 reqs, GPU KV cache usage: 42.6%, Prefix cache hit rate: 0.6%
+INFO 07-22 21:41:19 [loggers.py:118] Engine 000: Avg prompt throughput: 8187.0 tokens/s, Avg generation throughput: 5800.7 tokens/s, Running: 233 reqs, Waiting: 279 reqs, GPU KV cache usage: 55.1%, Prefix cache hit rate: 0.6%
+INFO 07-22 21:41:29 [loggers.py:118] Engine 000: Avg prompt throughput: 6195.8 tokens/s, Avg generation throughput: 5847.7 tokens/s, Running: 264 reqs, Waiting: 248 reqs, GPU KV cache usage: 65.8%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:41:39 [loggers.py:118] Engine 000: Avg prompt throughput: 4999.0 tokens/s, Avg generation throughput: 5808.3 tokens/s, Running: 288 reqs, Waiting: 224 reqs, GPU KV cache usage: 75.1%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:41:49 [loggers.py:118] Engine 000: Avg prompt throughput: 3999.1 tokens/s, Avg generation throughput: 5388.4 tokens/s, Running: 306 reqs, Waiting: 206 reqs, GPU KV cache usage: 82.8%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:41:59 [loggers.py:118] Engine 000: Avg prompt throughput: 3395.5 tokens/s, Avg generation throughput: 5550.6 tokens/s, Running: 323 reqs, Waiting: 189 reqs, GPU KV cache usage: 90.9%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:42:09 [loggers.py:118] Engine 000: Avg prompt throughput: 2999.2 tokens/s, Avg generation throughput: 5341.4 tokens/s, Running: 338 reqs, Waiting: 174 reqs, GPU KV cache usage: 98.2%, Prefix cache hit rate: 0.5%
+INFO 07-22 21:42:19 [loggers.py:118] Engine 000: Avg prompt throughput: 599.8 tokens/s, Avg generation throughput: 5289.6 tokens/s, Running: 322 reqs, Waiting: 190 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 6.0%
+INFO 07-22 21:42:29 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5046.9 tokens/s, Running: 302 reqs, Waiting: 210 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 12.9%
+INFO 07-22 21:42:39 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4891.1 tokens/s, Running: 285 reqs, Waiting: 227 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 18.9%
+INFO 07-22 21:42:49 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4600.0 tokens/s, Running: 270 reqs, Waiting: 242 reqs, GPU KV cache usage: 99.8%, Prefix cache hit rate: 23.6%
+INFO 07-22 21:42:59 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4397.5 tokens/s, Running: 256 reqs, Waiting: 255 reqs, GPU KV cache usage: 98.5%, Prefix cache hit rate: 27.0%
+INFO 07-22 21:43:09 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4012.5 tokens/s, Running: 231 reqs, Waiting: 281 reqs, GPU KV cache usage: 89.2%, Prefix cache hit rate: 26.9%
+INFO 07-22 21:43:19 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3925.5 tokens/s, Running: 209 reqs, Waiting: 303 reqs, GPU KV cache usage: 79.6%, Prefix cache hit rate: 26.8%
+INFO 07-22 21:43:29 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3694.2 tokens/s, Running: 194 reqs, Waiting: 318 reqs, GPU KV cache usage: 72.1%, Prefix cache hit rate: 26.7%
+INFO 07-22 21:43:39 [loggers.py:118] Engine 000: Avg prompt throughput: 399.9 tokens/s, Avg generation throughput: 3688.6 tokens/s, Running: 189 reqs, Waiting: 323 reqs, GPU KV cache usage: 65.9%, Prefix cache hit rate: 26.6%
+INFO 07-22 21:43:49 [loggers.py:118] Engine 000: Avg prompt throughput: 6765.4 tokens/s, Avg generation throughput: 3888.1 tokens/s, Running: 188 reqs, Waiting: 324 reqs, GPU KV cache usage: 60.3%, Prefix cache hit rate: 26.4%
+INFO 07-22 21:43:59 [loggers.py:118] Engine 000: Avg prompt throughput: 7343.7 tokens/s, Avg generation throughput: 4191.5 tokens/s, Running: 190 reqs, Waiting: 322 reqs, GPU KV cache usage: 55.2%, Prefix cache hit rate: 26.3%
+INFO 07-22 21:44:09 [loggers.py:118] Engine 000: Avg prompt throughput: 7394.0 tokens/s, Avg generation throughput: 4383.2 tokens/s, Running: 196 reqs, Waiting: 316 reqs, GPU KV cache usage: 51.8%, Prefix cache hit rate: 26.1%
+INFO 07-22 21:44:19 [loggers.py:118] Engine 000: Avg prompt throughput: 6588.5 tokens/s, Avg generation throughput: 4380.4 tokens/s, Running: 217 reqs, Waiting: 295 reqs, GPU KV cache usage: 56.6%, Prefix cache hit rate: 26.0%
+INFO 07-22 21:44:29 [loggers.py:118] Engine 000: Avg prompt throughput: 6178.4 tokens/s, Avg generation throughput: 4930.9 tokens/s, Running: 242 reqs, Waiting: 270 reqs, GPU KV cache usage: 63.7%, Prefix cache hit rate: 25.9%
+INFO 07-22 21:44:39 [loggers.py:118] Engine 000: Avg prompt throughput: 5187.8 tokens/s, Avg generation throughput: 5083.9 tokens/s, Running: 261 reqs, Waiting: 251 reqs, GPU KV cache usage: 69.8%, Prefix cache hit rate: 25.8%
+INFO 07-22 21:44:49 [loggers.py:118] Engine 000: Avg prompt throughput: 4799.2 tokens/s, Avg generation throughput: 5180.7 tokens/s, Running: 278 reqs, Waiting: 234 reqs, GPU KV cache usage: 75.7%, Prefix cache hit rate: 25.8%
+INFO 07-22 21:44:59 [loggers.py:118] Engine 000: Avg prompt throughput: 4196.0 tokens/s, Avg generation throughput: 5226.4 tokens/s, Running: 293 reqs, Waiting: 219 reqs, GPU KV cache usage: 81.4%, Prefix cache hit rate: 25.8%
+INFO 07-22 21:45:09 [loggers.py:118] Engine 000: Avg prompt throughput: 3599.8 tokens/s, Avg generation throughput: 5152.6 tokens/s, Running: 304 reqs, Waiting: 208 reqs, GPU KV cache usage: 86.4%, Prefix cache hit rate: 25.8%
+INFO 07-22 21:45:19 [loggers.py:118] Engine 000: Avg prompt throughput: 3399.5 tokens/s, Avg generation throughput: 5210.4 tokens/s, Running: 314 reqs, Waiting: 198 reqs, GPU KV cache usage: 91.3%, Prefix cache hit rate: 25.6%
+INFO 07-22 21:45:29 [loggers.py:118] Engine 000: Avg prompt throughput: 3187.0 tokens/s, Avg generation throughput: 5183.4 tokens/s, Running: 323 reqs, Waiting: 188 reqs, GPU KV cache usage: 95.6%, Prefix cache hit rate: 25.3%
+INFO 07-22 21:45:39 [loggers.py:118] Engine 000: Avg prompt throughput: 2799.1 tokens/s, Avg generation throughput: 5165.4 tokens/s, Running: 330 reqs, Waiting: 182 reqs, GPU KV cache usage: 99.7%, Prefix cache hit rate: 25.2%
+INFO 07-22 21:45:49 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5078.1 tokens/s, Running: 315 reqs, Waiting: 197 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 25.8%
+INFO 07-22 21:45:59 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4491.1 tokens/s, Running: 302 reqs, Waiting: 210 reqs, GPU KV cache usage: 99.8%, Prefix cache hit rate: 26.6%
+INFO 07-22 21:46:09 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4668.7 tokens/s, Running: 290 reqs, Waiting: 222 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 27.4%
+INFO 07-22 21:46:19 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4515.8 tokens/s, Running: 280 reqs, Waiting: 232 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 28.1%
+INFO 07-22 21:46:29 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4282.6 tokens/s, Running: 268 reqs, Waiting: 244 reqs, GPU KV cache usage: 96.5%, Prefix cache hit rate: 28.2%
+INFO 07-22 21:46:39 [loggers.py:118] Engine 000: Avg prompt throughput: 399.9 tokens/s, Avg generation throughput: 4254.6 tokens/s, Running: 260 reqs, Waiting: 252 reqs, GPU KV cache usage: 92.4%, Prefix cache hit rate: 28.0%
+INFO 07-22 21:46:49 [loggers.py:118] Engine 000: Avg prompt throughput: 4195.9 tokens/s, Avg generation throughput: 4234.5 tokens/s, Running: 255 reqs, Waiting: 257 reqs, GPU KV cache usage: 88.4%, Prefix cache hit rate: 27.7%
+INFO 07-22 21:46:59 [loggers.py:118] Engine 000: Avg prompt throughput: 4388.2 tokens/s, Avg generation throughput: 4211.4 tokens/s, Running: 249 reqs, Waiting: 263 reqs, GPU KV cache usage: 83.9%, Prefix cache hit rate: 27.4%
+INFO 07-22 21:47:09 [loggers.py:118] Engine 000: Avg prompt throughput: 4585.2 tokens/s, Avg generation throughput: 4202.1 tokens/s, Running: 244 reqs, Waiting: 268 reqs, GPU KV cache usage: 79.5%, Prefix cache hit rate: 27.2%
+INFO 07-22 21:47:19 [loggers.py:118] Engine 000: Avg prompt throughput: 4774.4 tokens/s, Avg generation throughput: 4244.6 tokens/s, Running: 242 reqs, Waiting: 270 reqs, GPU KV cache usage: 76.2%, Prefix cache hit rate: 26.9%
+INFO 07-22 21:47:29 [loggers.py:118] Engine 000: Avg prompt throughput: 4995.5 tokens/s, Avg generation throughput: 4349.9 tokens/s, Running: 241 reqs, Waiting: 270 reqs, GPU KV cache usage: 72.9%, Prefix cache hit rate: 26.6%
+INFO 07-22 21:47:39 [loggers.py:118] Engine 000: Avg prompt throughput: 4990.4 tokens/s, Avg generation throughput: 4494.6 tokens/s, Running: 242 reqs, Waiting: 269 reqs, GPU KV cache usage: 71.0%, Prefix cache hit rate: 26.3%
+INFO 07-22 21:47:49 [loggers.py:118] Engine 000: Avg prompt throughput: 4977.2 tokens/s, Avg generation throughput: 4560.9 tokens/s, Running: 245 reqs, Waiting: 267 reqs, GPU KV cache usage: 69.8%, Prefix cache hit rate: 26.0%
+INFO 07-22 21:47:59 [loggers.py:118] Engine 000: Avg prompt throughput: 5196.0 tokens/s, Avg generation throughput: 4722.5 tokens/s, Running: 249 reqs, Waiting: 263 reqs, GPU KV cache usage: 68.7%, Prefix cache hit rate: 25.8%
+INFO 07-22 21:48:09 [loggers.py:118] Engine 000: Avg prompt throughput: 4798.7 tokens/s, Avg generation throughput: 4584.0 tokens/s, Running: 256 reqs, Waiting: 256 reqs, GPU KV cache usage: 69.5%, Prefix cache hit rate: 25.5%
+INFO 07-22 21:48:19 [loggers.py:118] Engine 000: Avg prompt throughput: 4993.0 tokens/s, Avg generation throughput: 5029.1 tokens/s, Running: 265 reqs, Waiting: 247 reqs, GPU KV cache usage: 71.3%, Prefix cache hit rate: 25.3%
+INFO 07-22 21:48:29 [loggers.py:118] Engine 000: Avg prompt throughput: 4598.8 tokens/s, Avg generation throughput: 5103.0 tokens/s, Running: 284 reqs, Waiting: 228 reqs, GPU KV cache usage: 78.4%, Prefix cache hit rate: 25.1%
+INFO 07-22 21:48:39 [loggers.py:118] Engine 000: Avg prompt throughput: 3999.1 tokens/s, Avg generation throughput: 5133.0 tokens/s, Running: 299 reqs, Waiting: 213 reqs, GPU KV cache usage: 84.8%, Prefix cache hit rate: 24.9%
+INFO 07-22 21:48:49 [loggers.py:118] Engine 000: Avg prompt throughput: 3399.6 tokens/s, Avg generation throughput: 5144.9 tokens/s, Running: 311 reqs, Waiting: 200 reqs, GPU KV cache usage: 90.5%, Prefix cache hit rate: 24.7%
+INFO 07-22 21:48:59 [loggers.py:118] Engine 000: Avg prompt throughput: 3199.2 tokens/s, Avg generation throughput: 5036.9 tokens/s, Running: 323 reqs, Waiting: 189 reqs, GPU KV cache usage: 96.0%, Prefix cache hit rate: 24.5%
+INFO 07-22 21:49:09 [loggers.py:118] Engine 000: Avg prompt throughput: 2199.3 tokens/s, Avg generation throughput: 5084.4 tokens/s, Running: 325 reqs, Waiting: 187 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 24.6%
+INFO 07-22 21:49:19 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4919.1 tokens/s, Running: 308 reqs, Waiting: 204 reqs, GPU KV cache usage: 100.0%, Prefix cache hit rate: 25.3%
+INFO 07-22 21:49:29 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4765.3 tokens/s, Running: 293 reqs, Waiting: 219 reqs, GPU KV cache usage: 100.0%, Prefix cache hit rate: 26.2%
+INFO 07-22 21:49:39 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4388.9 tokens/s, Running: 287 reqs, Waiting: 224 reqs, GPU KV cache usage: 98.1%, Prefix cache hit rate: 26.2%
+INFO 07-22 21:49:49 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4297.4 tokens/s, Running: 285 reqs, Waiting: 227 reqs, GPU KV cache usage: 97.0%, Prefix cache hit rate: 26.4%
+INFO 07-22 21:49:59 [loggers.py:118] Engine 000: Avg prompt throughput: 3398.5 tokens/s, Avg generation throughput: 4383.7 tokens/s, Running: 282 reqs, Waiting: 230 reqs, GPU KV cache usage: 95.2%, Prefix cache hit rate: 26.6%
+INFO 07-22 21:50:09 [loggers.py:118] Engine 000: Avg prompt throughput: 3784.6 tokens/s, Avg generation throughput: 4404.6 tokens/s, Running: 281 reqs, Waiting: 231 reqs, GPU KV cache usage: 93.5%, Prefix cache hit rate: 26.7%
+INFO 07-22 21:50:19 [loggers.py:118] Engine 000: Avg prompt throughput: 3600.2 tokens/s, Avg generation throughput: 4403.5 tokens/s, Running: 279 reqs, Waiting: 233 reqs, GPU KV cache usage: 91.8%, Prefix cache hit rate: 26.8%
+INFO 07-22 21:50:29 [loggers.py:118] Engine 000: Avg prompt throughput: 3790.2 tokens/s, Avg generation throughput: 4446.3 tokens/s, Running: 276 reqs, Waiting: 236 reqs, GPU KV cache usage: 89.3%, Prefix cache hit rate: 26.9%
+INFO 07-22 21:50:39 [loggers.py:118] Engine 000: Avg prompt throughput: 3990.0 tokens/s, Avg generation throughput: 4480.0 tokens/s, Running: 273 reqs, Waiting: 238 reqs, GPU KV cache usage: 86.9%, Prefix cache hit rate: 27.0%
+INFO 07-22 21:50:49 [loggers.py:118] Engine 000: Avg prompt throughput: 3997.9 tokens/s, Avg generation throughput: 4524.5 tokens/s, Running: 271 reqs, Waiting: 241 reqs, GPU KV cache usage: 84.7%, Prefix cache hit rate: 27.0%
+INFO 07-22 21:50:59 [loggers.py:118] Engine 000: Avg prompt throughput: 3982.4 tokens/s, Avg generation throughput: 4493.2 tokens/s, Running: 270 reqs, Waiting: 242 reqs, GPU KV cache usage: 83.0%, Prefix cache hit rate: 27.0%
+INFO 07-22 21:51:09 [loggers.py:118] Engine 000: Avg prompt throughput: 4200.0 tokens/s, Avg generation throughput: 4530.0 tokens/s, Running: 268 reqs, Waiting: 243 reqs, GPU KV cache usage: 80.5%, Prefix cache hit rate: 27.1%
+INFO 07-22 21:51:19 [loggers.py:118] Engine 000: Avg prompt throughput: 3990.6 tokens/s, Avg generation throughput: 4299.4 tokens/s, Running: 266 reqs, Waiting: 246 reqs, GPU KV cache usage: 78.6%, Prefix cache hit rate: 27.0%
+INFO 07-22 21:51:29 [loggers.py:118] Engine 000: Avg prompt throughput: 4395.7 tokens/s, Avg generation throughput: 4653.2 tokens/s, Running: 266 reqs, Waiting: 246 reqs, GPU KV cache usage: 76.8%, Prefix cache hit rate: 27.0%
+INFO 07-22 21:51:39 [loggers.py:118] Engine 000: Avg prompt throughput: 4399.1 tokens/s, Avg generation throughput: 4803.9 tokens/s, Running: 267 reqs, Waiting: 245 reqs, GPU KV cache usage: 76.0%, Prefix cache hit rate: 27.0%
+INFO 07-22 21:51:49 [loggers.py:118] Engine 000: Avg prompt throughput: 4582.0 tokens/s, Avg generation throughput: 4917.2 tokens/s, Running: 269 reqs, Waiting: 242 reqs, GPU KV cache usage: 75.3%, Prefix cache hit rate: 26.9%
+INFO 07-22 21:51:59 [loggers.py:118] Engine 000: Avg prompt throughput: 4383.6 tokens/s, Avg generation throughput: 5009.8 tokens/s, Running: 283 reqs, Waiting: 229 reqs, GPU KV cache usage: 80.3%, Prefix cache hit rate: 26.0%
+INFO 07-22 21:52:09 [loggers.py:118] Engine 000: Avg prompt throughput: 3995.1 tokens/s, Avg generation throughput: 5076.1 tokens/s, Running: 298 reqs, Waiting: 214 reqs, GPU KV cache usage: 86.0%, Prefix cache hit rate: 24.5%
+INFO 07-22 21:52:20 [loggers.py:118] Engine 000: Avg prompt throughput: 3399.0 tokens/s, Avg generation throughput: 5046.2 tokens/s, Running: 311 reqs, Waiting: 201 reqs, GPU KV cache usage: 91.8%, Prefix cache hit rate: 22.3%
+INFO 07-22 21:52:30 [loggers.py:118] Engine 000: Avg prompt throughput: 3199.3 tokens/s, Avg generation throughput: 4982.7 tokens/s, Running: 321 reqs, Waiting: 191 reqs, GPU KV cache usage: 96.6%, Prefix cache hit rate: 19.6%
+INFO 07-22 21:52:40 [loggers.py:118] Engine 000: Avg prompt throughput: 1995.7 tokens/s, Avg generation throughput: 4624.2 tokens/s, Running: 323 reqs, Waiting: 188 reqs, GPU KV cache usage: 99.6%, Prefix cache hit rate: 16.9%
+INFO 07-22 21:52:50 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4877.4 tokens/s, Running: 309 reqs, Waiting: 203 reqs, GPU KV cache usage: 100.0%, Prefix cache hit rate: 18.1%
+INFO 07-22 21:53:00 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4653.8 tokens/s, Running: 304 reqs, Waiting: 208 reqs, GPU KV cache usage: 99.1%, Prefix cache hit rate: 18.4%
+INFO 07-22 21:53:10 [loggers.py:118] Engine 000: Avg prompt throughput: 3173.7 tokens/s, Avg generation throughput: 4553.4 tokens/s, Running: 302 reqs, Waiting: 209 reqs, GPU KV cache usage: 98.0%, Prefix cache hit rate: 18.4%
+INFO 07-22 21:53:20 [loggers.py:118] Engine 000: Avg prompt throughput: 3164.4 tokens/s, Avg generation throughput: 4628.9 tokens/s, Running: 300 reqs, Waiting: 211 reqs, GPU KV cache usage: 97.0%, Prefix cache hit rate: 18.5%
+INFO 07-22 21:53:30 [loggers.py:118] Engine 000: Avg prompt throughput: 3396.1 tokens/s, Avg generation throughput: 4632.9 tokens/s, Running: 299 reqs, Waiting: 213 reqs, GPU KV cache usage: 96.1%, Prefix cache hit rate: 18.6%
+INFO 07-22 21:53:40 [loggers.py:118] Engine 000: Avg prompt throughput: 3394.4 tokens/s, Avg generation throughput: 4650.0 tokens/s, Running: 295 reqs, Waiting: 216 reqs, GPU KV cache usage: 94.6%, Prefix cache hit rate: 18.6%
+INFO 07-22 21:53:50 [loggers.py:118] Engine 000: Avg prompt throughput: 3378.2 tokens/s, Avg generation throughput: 4621.0 tokens/s, Running: 295 reqs, Waiting: 217 reqs, GPU KV cache usage: 94.2%, Prefix cache hit rate: 18.7%
+INFO 07-22 21:54:00 [loggers.py:118] Engine 000: Avg prompt throughput: 3387.7 tokens/s, Avg generation throughput: 4613.0 tokens/s, Running: 290 reqs, Waiting: 221 reqs, GPU KV cache usage: 92.0%, Prefix cache hit rate: 18.8%
+INFO 07-22 21:54:10 [loggers.py:118] Engine 000: Avg prompt throughput: 3585.2 tokens/s, Avg generation throughput: 4633.3 tokens/s, Running: 289 reqs, Waiting: 223 reqs, GPU KV cache usage: 91.2%, Prefix cache hit rate: 18.9%
+INFO 07-22 21:54:20 [loggers.py:118] Engine 000: Avg prompt throughput: 3391.0 tokens/s, Avg generation throughput: 4311.1 tokens/s, Running: 287 reqs, Waiting: 224 reqs, GPU KV cache usage: 89.6%, Prefix cache hit rate: 18.9%
+INFO 07-22 21:54:30 [loggers.py:118] Engine 000: Avg prompt throughput: 3799.4 tokens/s, Avg generation throughput: 4588.6 tokens/s, Running: 288 reqs, Waiting: 224 reqs, GPU KV cache usage: 88.9%, Prefix cache hit rate: 19.0%
+INFO 07-22 21:54:40 [loggers.py:118] Engine 000: Avg prompt throughput: 3796.9 tokens/s, Avg generation throughput: 4635.6 tokens/s, Running: 287 reqs, Waiting: 224 reqs, GPU KV cache usage: 87.3%, Prefix cache hit rate: 19.1%
+INFO 07-22 21:54:50 [loggers.py:118] Engine 000: Avg prompt throughput: 3584.5 tokens/s, Avg generation throughput: 4649.2 tokens/s, Running: 285 reqs, Waiting: 226 reqs, GPU KV cache usage: 85.9%, Prefix cache hit rate: 19.1%
+INFO 07-22 21:55:00 [loggers.py:118] Engine 000: Avg prompt throughput: 3794.2 tokens/s, Avg generation throughput: 4690.6 tokens/s, Running: 285 reqs, Waiting: 227 reqs, GPU KV cache usage: 85.1%, Prefix cache hit rate: 19.1%
+INFO 07-22 21:55:10 [loggers.py:118] Engine 000: Avg prompt throughput: 3796.9 tokens/s, Avg generation throughput: 4719.9 tokens/s, Running: 285 reqs, Waiting: 226 reqs, GPU KV cache usage: 84.3%, Prefix cache hit rate: 19.1%
+INFO 07-22 21:55:20 [loggers.py:118] Engine 000: Avg prompt throughput: 3786.0 tokens/s, Avg generation throughput: 4823.9 tokens/s, Running: 285 reqs, Waiting: 226 reqs, GPU KV cache usage: 83.6%, Prefix cache hit rate: 19.1%
+INFO 07-22 21:55:30 [loggers.py:118] Engine 000: Avg prompt throughput: 3792.5 tokens/s, Avg generation throughput: 4825.6 tokens/s, Running: 287 reqs, Waiting: 225 reqs, GPU KV cache usage: 83.7%, Prefix cache hit rate: 19.1%
+INFO 07-22 21:55:40 [loggers.py:118] Engine 000: Avg prompt throughput: 3595.5 tokens/s, Avg generation throughput: 4609.2 tokens/s, Running: 293 reqs, Waiting: 219 reqs, GPU KV cache usage: 85.6%, Prefix cache hit rate: 19.1%
+INFO 07-22 21:55:50 [loggers.py:118] Engine 000: Avg prompt throughput: 3597.1 tokens/s, Avg generation throughput: 4954.1 tokens/s, Running: 306 reqs, Waiting: 206 reqs, GPU KV cache usage: 91.2%, Prefix cache hit rate: 19.1%
+INFO 07-22 21:56:00 [loggers.py:118] Engine 000: Avg prompt throughput: 3199.0 tokens/s, Avg generation throughput: 4906.4 tokens/s, Running: 317 reqs, Waiting: 195 reqs, GPU KV cache usage: 96.2%, Prefix cache hit rate: 18.1%
+INFO 07-22 21:56:10 [loggers.py:118] Engine 000: Avg prompt throughput: 2599.3 tokens/s, Avg generation throughput: 4858.9 tokens/s, Running: 323 reqs, Waiting: 189 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 16.9%
+INFO 07-22 21:56:20 [loggers.py:118] Engine 000: Avg prompt throughput: 2784.8 tokens/s, Avg generation throughput: 4845.0 tokens/s, Running: 319 reqs, Waiting: 193 reqs, GPU KV cache usage: 99.2%, Prefix cache hit rate: 15.3%
+INFO 07-22 21:56:30 [loggers.py:118] Engine 000: Avg prompt throughput: 2996.3 tokens/s, Avg generation throughput: 4811.2 tokens/s, Running: 319 reqs, Waiting: 192 reqs, GPU KV cache usage: 99.4%, Prefix cache hit rate: 13.4%
+INFO 07-22 21:56:40 [loggers.py:118] Engine 000: Avg prompt throughput: 2799.3 tokens/s, Avg generation throughput: 4786.5 tokens/s, Running: 316 reqs, Waiting: 196 reqs, GPU KV cache usage: 99.0%, Prefix cache hit rate: 11.9%
+INFO 07-22 21:56:50 [loggers.py:118] Engine 000: Avg prompt throughput: 2997.2 tokens/s, Avg generation throughput: 4794.8 tokens/s, Running: 316 reqs, Waiting: 196 reqs, GPU KV cache usage: 99.2%, Prefix cache hit rate: 11.9%
+INFO 07-22 21:57:00 [loggers.py:118] Engine 000: Avg prompt throughput: 2999.4 tokens/s, Avg generation throughput: 4745.9 tokens/s, Running: 314 reqs, Waiting: 198 reqs, GPU KV cache usage: 98.6%, Prefix cache hit rate: 11.9%
+INFO 07-22 21:57:10 [loggers.py:118] Engine 000: Avg prompt throughput: 2994.7 tokens/s, Avg generation throughput: 4699.0 tokens/s, Running: 313 reqs, Waiting: 198 reqs, GPU KV cache usage: 98.3%, Prefix cache hit rate: 12.0%
+INFO 07-22 21:57:20 [loggers.py:118] Engine 000: Avg prompt throughput: 2997.2 tokens/s, Avg generation throughput: 4462.4 tokens/s, Running: 314 reqs, Waiting: 198 reqs, GPU KV cache usage: 98.8%, Prefix cache hit rate: 12.0%
+INFO 07-22 21:57:30 [loggers.py:118] Engine 000: Avg prompt throughput: 2995.5 tokens/s, Avg generation throughput: 4688.9 tokens/s, Running: 311 reqs, Waiting: 201 reqs, GPU KV cache usage: 97.9%, Prefix cache hit rate: 12.0%
+INFO 07-22 21:57:40 [loggers.py:118] Engine 000: Avg prompt throughput: 2999.8 tokens/s, Avg generation throughput: 4690.6 tokens/s, Running: 307 reqs, Waiting: 203 reqs, GPU KV cache usage: 96.4%, Prefix cache hit rate: 12.1%
+INFO 07-22 21:57:50 [loggers.py:118] Engine 000: Avg prompt throughput: 3168.0 tokens/s, Avg generation throughput: 4713.3 tokens/s, Running: 306 reqs, Waiting: 203 reqs, GPU KV cache usage: 95.8%, Prefix cache hit rate: 12.1%
+INFO 07-22 21:58:00 [loggers.py:118] Engine 000: Avg prompt throughput: 3171.5 tokens/s, Avg generation throughput: 4692.0 tokens/s, Running: 305 reqs, Waiting: 187 reqs, GPU KV cache usage: 95.3%, Prefix cache hit rate: 12.2%
+INFO 07-22 21:58:10 [loggers.py:118] Engine 000: Avg prompt throughput: 3391.2 tokens/s, Avg generation throughput: 4698.5 tokens/s, Running: 304 reqs, Waiting: 170 reqs, GPU KV cache usage: 94.5%, Prefix cache hit rate: 12.2%
+INFO 07-22 21:58:20 [loggers.py:118] Engine 000: Avg prompt throughput: 3198.5 tokens/s, Avg generation throughput: 4647.4 tokens/s, Running: 302 reqs, Waiting: 154 reqs, GPU KV cache usage: 93.6%, Prefix cache hit rate: 12.2%
+INFO 07-22 21:58:30 [loggers.py:118] Engine 000: Avg prompt throughput: 3194.9 tokens/s, Avg generation throughput: 4658.5 tokens/s, Running: 301 reqs, Waiting: 138 reqs, GPU KV cache usage: 93.1%, Prefix cache hit rate: 12.3%
+INFO 07-22 21:58:40 [loggers.py:118] Engine 000: Avg prompt throughput: 3394.2 tokens/s, Avg generation throughput: 4668.7 tokens/s, Running: 300 reqs, Waiting: 121 reqs, GPU KV cache usage: 92.2%, Prefix cache hit rate: 12.3%
+INFO 07-22 21:58:50 [loggers.py:118] Engine 000: Avg prompt throughput: 3197.8 tokens/s, Avg generation throughput: 4414.2 tokens/s, Running: 299 reqs, Waiting: 105 reqs, GPU KV cache usage: 91.4%, Prefix cache hit rate: 12.3%
+INFO 07-22 21:59:00 [loggers.py:118] Engine 000: Avg prompt throughput: 3398.9 tokens/s, Avg generation throughput: 4762.2 tokens/s, Running: 299 reqs, Waiting: 88 reqs, GPU KV cache usage: 91.1%, Prefix cache hit rate: 12.3%
+INFO 07-22 21:59:10 [loggers.py:118] Engine 000: Avg prompt throughput: 3396.2 tokens/s, Avg generation throughput: 4743.9 tokens/s, Running: 300 reqs, Waiting: 71 reqs, GPU KV cache usage: 91.2%, Prefix cache hit rate: 12.3%
+INFO 07-22 21:59:20 [loggers.py:118] Engine 000: Avg prompt throughput: 3399.4 tokens/s, Avg generation throughput: 4792.7 tokens/s, Running: 302 reqs, Waiting: 54 reqs, GPU KV cache usage: 91.8%, Prefix cache hit rate: 12.3%
+INFO 07-22 21:59:30 [loggers.py:118] Engine 000: Avg prompt throughput: 3196.7 tokens/s, Avg generation throughput: 4823.2 tokens/s, Running: 306 reqs, Waiting: 38 reqs, GPU KV cache usage: 93.7%, Prefix cache hit rate: 12.3%
+INFO 07-22 21:59:40 [loggers.py:118] Engine 000: Avg prompt throughput: 3384.6 tokens/s, Avg generation throughput: 4803.5 tokens/s, Running: 308 reqs, Waiting: 21 reqs, GPU KV cache usage: 94.2%, Prefix cache hit rate: 12.3%
+INFO 07-22 21:59:50 [loggers.py:118] Engine 000: Avg prompt throughput: 3199.3 tokens/s, Avg generation throughput: 4809.7 tokens/s, Running: 308 reqs, Waiting: 5 reqs, GPU KV cache usage: 94.5%, Prefix cache hit rate: 10.6%
+INFO 07-22 22:00:00 [loggers.py:118] Engine 000: Avg prompt throughput: 1199.8 tokens/s, Avg generation throughput: 4913.3 tokens/s, Running: 298 reqs, Waiting: 0 reqs, GPU KV cache usage: 93.5%, Prefix cache hit rate: 7.7%
+INFO 07-22 22:00:10 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4836.7 tokens/s, Running: 281 reqs, Waiting: 0 reqs, GPU KV cache usage: 90.2%, Prefix cache hit rate: 4.8%
+INFO 07-22 22:00:20 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4384.8 tokens/s, Running: 266 reqs, Waiting: 0 reqs, GPU KV cache usage: 87.4%, Prefix cache hit rate: 4.9%
+INFO 07-22 22:00:30 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4608.9 tokens/s, Running: 249 reqs, Waiting: 0 reqs, GPU KV cache usage: 84.0%, Prefix cache hit rate: 4.9%
+INFO 07-22 22:00:40 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4472.0 tokens/s, Running: 230 reqs, Waiting: 0 reqs, GPU KV cache usage: 79.5%, Prefix cache hit rate: 5.0%
+INFO 07-22 22:00:50 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4264.5 tokens/s, Running: 210 reqs, Waiting: 0 reqs, GPU KV cache usage: 74.5%, Prefix cache hit rate: 5.1%
+INFO 07-22 22:01:00 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4081.6 tokens/s, Running: 188 reqs, Waiting: 0 reqs, GPU KV cache usage: 68.4%, Prefix cache hit rate: 5.3%
+INFO 07-22 22:01:10 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3908.0 tokens/s, Running: 165 reqs, Waiting: 0 reqs, GPU KV cache usage: 61.6%, Prefix cache hit rate: 5.4%
+INFO 07-22 22:01:20 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3705.3 tokens/s, Running: 140 reqs, Waiting: 0 reqs, GPU KV cache usage: 53.8%, Prefix cache hit rate: 5.5%
+INFO 07-22 22:01:30 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3168.2 tokens/s, Running: 113 reqs, Waiting: 0 reqs, GPU KV cache usage: 44.7%, Prefix cache hit rate: 5.6%
+INFO 07-22 22:01:40 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 2697.7 tokens/s, Running: 83 reqs, Waiting: 0 reqs, GPU KV cache usage: 33.8%, Prefix cache hit rate: 5.6%
+INFO 07-22 22:01:50 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 2893.4 tokens/s, Running: 31 reqs, Waiting: 0 reqs, GPU KV cache usage: 13.3%, Prefix cache hit rate: 5.6%
+============ Serving Benchmark Result ============
+Successful requests:                     2000      
+Benchmark duration (s):                  1265.50   
+Total input tokens:                      4000000   
+Total generated tokens:                  5868926   
+Request throughput (req/s):              1.58      
+Output token throughput (tok/s):         4637.62   
+Total Token throughput (tok/s):          7798.41   
+---------------Time to First Token----------------
+Mean TTFT (ms):                          123600.69 
+Median TTFT (ms):                        125018.83 
+P99 TTFT (ms):                           212556.81 
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          59.44     
+Median TPOT (ms):                        60.59     
+P99 TPOT (ms):                           77.20     
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           59.55     
+Median ITL (ms):                         60.93     
+P99 ITL (ms):                            66.94     
+==================================================
+.Namespace(endpoint_type='openai', label=None, base_url=None, host='127.0.0.1', port=8060, endpoint='/v1/completions', dataset_name='random', dataset_path=None, max_concurrency=512, model='RedHatAI/Qwen3-4B-FP8-dynamic', tokenizer=None, use_beam_search=False, num_prompts=2000, logprobs=None, request_rate=inf, burstiness=1.0, seed=0, trust_remote_code=False, disable_tqdm=False, profile=False, save_result=True, save_detailed=False, append_result=False, metadata=None, result_dir='/tmp/tmpswoheszj', result_filename='result.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl', metric_percentiles='99', goodput=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, random_input_len=10, random_output_len=500, random_range_ratio=0.0, random_prefix_len=0, hf_subset=None, hf_split=None, hf_output_len=None, top_p=None, top_k=None, min_p=None, temperature=None, tokenizer_mode='auto', served_model_name=None, lora_modules=None)
+INFO 07-22 22:01:54 [datasets.py:348] Sampling input_len from [10, 10] and output_len from [500, 500]
+Starting initial single prompt test run...
+Initial test run completed. Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 512
+INFO 07-22 22:02:00 [loggers.py:118] Engine 000: Avg prompt throughput: 533.3 tokens/s, Avg generation throughput: 9641.9 tokens/s, Running: 511 reqs, Waiting: 0 reqs, GPU KV cache usage: 8.7%, Prefix cache hit rate: 5.8%
+INFO 07-22 22:02:10 [loggers.py:118] Engine 000: Avg prompt throughput: 524.0 tokens/s, Avg generation throughput: 24975.2 tokens/s, Running: 512 reqs, Waiting: 0 reqs, GPU KV cache usage: 8.2%, Prefix cache hit rate: 6.2%
+INFO 07-22 22:02:20 [loggers.py:118] Engine 000: Avg prompt throughput: 528.8 tokens/s, Avg generation throughput: 24901.2 tokens/s, Running: 511 reqs, Waiting: 0 reqs, GPU KV cache usage: 7.7%, Prefix cache hit rate: 6.4%
+INFO 07-22 22:02:30 [loggers.py:118] Engine 000: Avg prompt throughput: 409.6 tokens/s, Avg generation throughput: 25865.2 tokens/s, Running: 396 reqs, Waiting: 0 reqs, GPU KV cache usage: 7.8%, Prefix cache hit rate: 0.6%
+============ Serving Benchmark Result ============
+Successful requests:                     2000      
+Benchmark duration (s):                  38.62     
+Total input tokens:                      20000     
+Total generated tokens:                  964565    
+Request throughput (req/s):              51.79     
+Output token throughput (tok/s):         24976.39  
+Total Token throughput (tok/s):          25494.27  
+---------------Time to First Token----------------
+Mean TTFT (ms):                          380.07    
+Median TTFT (ms):                        251.64    
+P99 TTFT (ms):                           1385.05   
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          18.47     
+Median TPOT (ms):                        18.95     
+P99 TPOT (ms):                           20.28     
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           18.54     
+Median ITL (ms):                         17.75     
+P99 ITL (ms):                            30.33     
+==================================================
+.INFO 07-22 22:02:35 [launcher.py:80] Shutting down FastAPI HTTP server.
+Terminating server process
+Server process terminated
+INFO 07-22 22:02:37 [api_server.py:1287] vLLM API server version 0.9.1
+INFO 07-22 22:02:37 [cli_args.py:309] non-default args: {'port': 8060, 'disable_uvicorn_access_log': True, 'model': 'RedHatAI/Qwen3-4B-FP8-dynamic', 'max_num_batched_tokens': 1024, 'max_num_seqs': 1024, 'disable_log_requests': True}
+INFO 07-22 22:02:48 [config.py:823] This model supports multiple tasks: {'score', 'embed', 'reward', 'generate', 'classify'}. Defaulting to 'generate'.
+INFO 07-22 22:02:48 [config.py:2195] Chunked prefill is enabled with max_num_batched_tokens=1024.
+INFO 07-22 22:02:49 [core.py:455] Waiting for init message from front-end.
+INFO 07-22 22:02:49 [core.py:70] Initializing a V1 LLM engine (v0.9.1) with config: model='RedHatAI/Qwen3-4B-FP8-dynamic', speculative_config=None, tokenizer='RedHatAI/Qwen3-4B-FP8-dynamic', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config={}, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=40960, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=compressed-tensors, enforce_eager=False, kv_cache_dtype=auto,  device_config=cuda, decoding_config=DecodingConfig(backend='auto', disable_fallback=False, disable_any_whitespace=False, disable_additional_properties=False, reasoning_backend=''), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None), seed=0, served_model_name=RedHatAI/Qwen3-4B-FP8-dynamic, num_scheduler_steps=1, multi_step_stream_outputs=True, enable_prefix_caching=True, chunked_prefill_enabled=True, use_async_output_proc=True, pooler_config=None, compilation_config={"level":3,"debug_dump_path":"","cache_dir":"","backend":"","custom_ops":["none"],"splitting_ops":["vllm.unified_attention","vllm.unified_attention_with_output"],"use_inductor":true,"compile_sizes":[],"inductor_compile_config":{"enable_auto_functionalized_v2":false},"inductor_passes":{},"use_cudagraph":true,"cudagraph_num_of_warmups":1,"cudagraph_capture_sizes":[512,504,496,488,480,472,464,456,448,440,432,424,416,408,400,392,384,376,368,360,352,344,336,328,320,312,304,296,288,280,272,264,256,248,240,232,224,216,208,200,192,184,176,168,160,152,144,136,128,120,112,104,96,88,80,72,64,56,48,40,32,24,16,8,4,2,1],"cudagraph_copy_inputs":false,"full_cuda_graph":false,"max_capture_size":512,"local_cache_dir":null}
+WARNING 07-22 22:02:50 [utils.py:2737] Methods determine_num_available_blocks,device_config,get_cache_block_size_bytes,initialize_cache not implemented in <vllm.v1.worker.gpu_worker.Worker object at 0x7f7917d8a360>
+INFO 07-22 22:02:50 [parallel_state.py:1065] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, TP rank 0, EP rank 0
+INFO 07-22 22:02:50 [topk_topp_sampler.py:49] Using FlashInfer for top-p & top-k sampling.
+INFO 07-22 22:02:50 [gpu_model_runner.py:1595] Starting to load model RedHatAI/Qwen3-4B-FP8-dynamic...
+INFO 07-22 22:02:50 [gpu_model_runner.py:1600] Loading model from scratch...
+INFO 07-22 22:02:51 [cuda.py:240] Using FlashInfer backend on V1 engine by default for Blackwell (SM 10.0) GPUs.
+INFO 07-22 22:02:51 [weight_utils.py:292] Using model weights format ['*.safetensors']
+INFO 07-22 22:02:52 [default_loader.py:272] Loading weights took 1.13 seconds
+INFO 07-22 22:02:52 [gpu_model_runner.py:1624] Model loading took 4.1824 GiB and 2.011896 seconds
+INFO 07-22 22:03:02 [backends.py:462] Using cache directory: /home/yak/.cache/vllm/torch_compile_cache/8314aa15e2/rank_0_0 for vLLM's torch.compile
+INFO 07-22 22:03:02 [backends.py:472] Dynamo bytecode transform time: 9.62 s
+INFO 07-22 22:03:08 [backends.py:135] Directly load the compiled graph(s) for shape None from the cache, took 5.522 s
+INFO 07-22 22:03:09 [monitor.py:34] torch.compile takes 9.62 s in total
+INFO 07-22 22:03:10 [gpu_worker.py:227] Available KV cache memory: 154.14 GiB
+INFO 07-22 22:03:10 [kv_cache_utils.py:715] GPU KV cache size: 1,122,384 tokens
+INFO 07-22 22:03:10 [kv_cache_utils.py:719] Maximum concurrency for 40,960 tokens per request: 27.40x
+INFO 07-22 22:03:15 [gpu_model_runner.py:2048] Graph capturing finished in 5 secs, took 0.75 GiB
+INFO 07-22 22:03:15 [core.py:171] init engine (profile, create kv cache, warmup model) took 22.53 seconds
+INFO 07-22 22:03:16 [loggers.py:137] Engine 000: vllm cache_config_info with initialization after num_gpu_blocks is: 70149
+WARNING 07-22 22:03:16 [config.py:1363] Default sampling parameters have been overridden by the model's Hugging Face generation config recommended from the model creator. If this is not intended, please relaunch vLLM instance with `--generation-config vllm`.
+INFO 07-22 22:03:16 [serving_chat.py:118] Using default chat sampling params from model: {'temperature': 0.6, 'top_k': 20, 'top_p': 0.95}
+INFO 07-22 22:03:16 [serving_completion.py:66] Using default completion sampling params from model: {'temperature': 0.6, 'top_k': 20, 'top_p': 0.95}
+INFO 07-22 22:03:16 [api_server.py:1349] Starting vLLM API server 0 on http://0.0.0.0:8060
+INFO 07-22 22:03:16 [launcher.py:29] Available routes are:
+INFO 07-22 22:03:16 [launcher.py:37] Route: /openapi.json, Methods: GET, HEAD
+INFO 07-22 22:03:16 [launcher.py:37] Route: /docs, Methods: GET, HEAD
+INFO 07-22 22:03:16 [launcher.py:37] Route: /docs/oauth2-redirect, Methods: GET, HEAD
+INFO 07-22 22:03:16 [launcher.py:37] Route: /redoc, Methods: GET, HEAD
+INFO 07-22 22:03:16 [launcher.py:37] Route: /health, Methods: GET
+INFO 07-22 22:03:16 [launcher.py:37] Route: /load, Methods: GET
+INFO 07-22 22:03:16 [launcher.py:37] Route: /ping, Methods: POST
+INFO 07-22 22:03:16 [launcher.py:37] Route: /ping, Methods: GET
+INFO 07-22 22:03:16 [launcher.py:37] Route: /tokenize, Methods: POST
+INFO 07-22 22:03:16 [launcher.py:37] Route: /detokenize, Methods: POST
+INFO 07-22 22:03:16 [launcher.py:37] Route: /v1/models, Methods: GET
+INFO 07-22 22:03:16 [launcher.py:37] Route: /version, Methods: GET
+INFO 07-22 22:03:16 [launcher.py:37] Route: /v1/chat/completions, Methods: POST
+INFO 07-22 22:03:16 [launcher.py:37] Route: /v1/completions, Methods: POST
+INFO 07-22 22:03:16 [launcher.py:37] Route: /v1/embeddings, Methods: POST
+INFO 07-22 22:03:16 [launcher.py:37] Route: /pooling, Methods: POST
+INFO 07-22 22:03:16 [launcher.py:37] Route: /classify, Methods: POST
+INFO 07-22 22:03:16 [launcher.py:37] Route: /score, Methods: POST
+INFO 07-22 22:03:16 [launcher.py:37] Route: /v1/score, Methods: POST
+INFO 07-22 22:03:16 [launcher.py:37] Route: /v1/audio/transcriptions, Methods: POST
+INFO 07-22 22:03:16 [launcher.py:37] Route: /rerank, Methods: POST
+INFO 07-22 22:03:16 [launcher.py:37] Route: /v1/rerank, Methods: POST
+INFO 07-22 22:03:16 [launcher.py:37] Route: /v2/rerank, Methods: POST
+INFO 07-22 22:03:16 [launcher.py:37] Route: /invocations, Methods: POST
+INFO 07-22 22:03:16 [launcher.py:37] Route: /metrics, Methods: GET
+Waiting for server to start...
+Server process started
+Namespace(endpoint_type='openai', label=None, base_url=None, host='127.0.0.1', port=8060, endpoint='/v1/completions', dataset_name='random', dataset_path=None, max_concurrency=512, model='RedHatAI/Qwen3-4B-FP8-dynamic', tokenizer=None, use_beam_search=False, num_prompts=2000, logprobs=None, request_rate=inf, burstiness=1.0, seed=0, trust_remote_code=False, disable_tqdm=False, profile=False, save_result=True, save_detailed=False, append_result=False, metadata=None, result_dir='/tmp/tmp34bhbkqh', result_filename='result.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl', metric_percentiles='99', goodput=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, random_input_len=2000, random_output_len=200, random_range_ratio=0.0, random_prefix_len=0, hf_subset=None, hf_split=None, hf_output_len=None, top_p=None, top_k=None, min_p=None, temperature=None, tokenizer_mode='auto', served_model_name=None, lora_modules=None)
+INFO 07-22 22:03:17 [datasets.py:348] Sampling input_len from [2000, 2000] and output_len from [200, 200]
+Starting initial single prompt test run...
+Initial test run completed. Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 512
+INFO 07-22 22:03:36 [loggers.py:118] Engine 000: Avg prompt throughput: 11357.9 tokens/s, Avg generation throughput: 344.9 tokens/s, Running: 57 reqs, Waiting: 261 reqs, GPU KV cache usage: 10.4%, Prefix cache hit rate: 1.7%
+INFO 07-22 22:03:46 [loggers.py:118] Engine 000: Avg prompt throughput: 33907.3 tokens/s, Avg generation throughput: 3226.4 tokens/s, Running: 91 reqs, Waiting: 420 reqs, GPU KV cache usage: 16.9%, Prefix cache hit rate: 0.4%
+INFO 07-22 22:03:56 [loggers.py:118] Engine 000: Avg prompt throughput: 33147.5 tokens/s, Avg generation throughput: 3274.5 tokens/s, Running: 93 reqs, Waiting: 418 reqs, GPU KV cache usage: 17.4%, Prefix cache hit rate: 0.5%
+INFO 07-22 22:04:06 [loggers.py:118] Engine 000: Avg prompt throughput: 32296.2 tokens/s, Avg generation throughput: 3204.8 tokens/s, Running: 93 reqs, Waiting: 418 reqs, GPU KV cache usage: 17.3%, Prefix cache hit rate: 0.4%
+INFO 07-22 22:04:16 [loggers.py:118] Engine 000: Avg prompt throughput: 32769.3 tokens/s, Avg generation throughput: 3225.0 tokens/s, Running: 92 reqs, Waiting: 419 reqs, GPU KV cache usage: 17.2%, Prefix cache hit rate: 0.6%
+INFO 07-22 22:04:26 [loggers.py:118] Engine 000: Avg prompt throughput: 32516.7 tokens/s, Avg generation throughput: 3206.7 tokens/s, Running: 93 reqs, Waiting: 418 reqs, GPU KV cache usage: 17.3%, Prefix cache hit rate: 0.5%
+INFO 07-22 22:04:36 [loggers.py:118] Engine 000: Avg prompt throughput: 32776.5 tokens/s, Avg generation throughput: 3223.6 tokens/s, Running: 93 reqs, Waiting: 418 reqs, GPU KV cache usage: 17.4%, Prefix cache hit rate: 0.5%
+INFO 07-22 22:04:46 [loggers.py:118] Engine 000: Avg prompt throughput: 32747.7 tokens/s, Avg generation throughput: 3221.0 tokens/s, Running: 92 reqs, Waiting: 419 reqs, GPU KV cache usage: 17.2%, Prefix cache hit rate: 0.4%
+INFO 07-22 22:04:56 [loggers.py:118] Engine 000: Avg prompt throughput: 32693.0 tokens/s, Avg generation throughput: 3214.4 tokens/s, Running: 93 reqs, Waiting: 418 reqs, GPU KV cache usage: 17.4%, Prefix cache hit rate: 0.5%
+INFO 07-22 22:05:06 [loggers.py:118] Engine 000: Avg prompt throughput: 32712.0 tokens/s, Avg generation throughput: 3251.5 tokens/s, Running: 94 reqs, Waiting: 417 reqs, GPU KV cache usage: 17.6%, Prefix cache hit rate: 0.5%
+INFO 07-22 22:05:16 [loggers.py:118] Engine 000: Avg prompt throughput: 32552.0 tokens/s, Avg generation throughput: 3208.9 tokens/s, Running: 94 reqs, Waiting: 299 reqs, GPU KV cache usage: 17.5%, Prefix cache hit rate: 0.5%
+INFO 07-22 22:05:26 [loggers.py:118] Engine 000: Avg prompt throughput: 32306.3 tokens/s, Avg generation throughput: 3230.0 tokens/s, Running: 94 reqs, Waiting: 137 reqs, GPU KV cache usage: 17.5%, Prefix cache hit rate: 0.4%
+INFO 07-22 22:05:36 [loggers.py:118] Engine 000: Avg prompt throughput: 27571.9 tokens/s, Avg generation throughput: 3460.5 tokens/s, Running: 41 reqs, Waiting: 0 reqs, GPU KV cache usage: 7.9%, Prefix cache hit rate: 0.4%
+============ Serving Benchmark Result ============
+Successful requests:                     2000      
+Benchmark duration (s):                  122.96    
+Total input tokens:                      4000000   
+Total generated tokens:                  394637    
+Request throughput (req/s):              16.27     
+Output token throughput (tok/s):         3209.39   
+Total Token throughput (tok/s):          35739.40  
+---------------Time to First Token----------------
+Mean TTFT (ms):                          22733.29  
+Median TTFT (ms):                        25681.36  
+P99 TTFT (ms):                           28344.42  
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          28.19     
+Median TPOT (ms):                        28.68     
+P99 TPOT (ms):                           29.16     
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           28.19     
+Median ITL (ms):                         28.58     
+P99 ITL (ms):                            31.25     
+==================================================
+.Namespace(endpoint_type='openai', label=None, base_url=None, host='127.0.0.1', port=8060, endpoint='/v1/completions', dataset_name='random', dataset_path=None, max_concurrency=512, model='RedHatAI/Qwen3-4B-FP8-dynamic', tokenizer=None, use_beam_search=False, num_prompts=2000, logprobs=None, request_rate=inf, burstiness=1.0, seed=0, trust_remote_code=False, disable_tqdm=False, profile=False, save_result=True, save_detailed=False, append_result=False, metadata=None, result_dir='/tmp/tmpsmcvrjud', result_filename='result.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl', metric_percentiles='99', goodput=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, random_input_len=1200, random_output_len=1500, random_range_ratio=0.0, random_prefix_len=0, hf_subset=None, hf_split=None, hf_output_len=None, top_p=None, top_k=None, min_p=None, temperature=None, tokenizer_mode='auto', served_model_name=None, lora_modules=None)
+INFO 07-22 22:05:37 [datasets.py:348] Sampling input_len from [1200, 1200] and output_len from [1500, 1500]
+INFO 07-22 22:05:46 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 187.7 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 0.4%
+Starting initial single prompt test run...
+Initial test run completed. Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 512
+INFO 07-22 22:05:56 [loggers.py:118] Engine 000: Avg prompt throughput: 13648.4 tokens/s, Avg generation throughput: 940.9 tokens/s, Running: 112 reqs, Waiting: 400 reqs, GPU KV cache usage: 12.7%, Prefix cache hit rate: 0.5%
+INFO 07-22 22:06:06 [loggers.py:118] Engine 000: Avg prompt throughput: 26572.7 tokens/s, Avg generation throughput: 7507.5 tokens/s, Running: 332 reqs, Waiting: 180 reqs, GPU KV cache usage: 43.0%, Prefix cache hit rate: 0.5%
+INFO 07-22 22:06:16 [loggers.py:118] Engine 000: Avg prompt throughput: 14828.1 tokens/s, Avg generation throughput: 9135.2 tokens/s, Running: 452 reqs, Waiting: 60 reqs, GPU KV cache usage: 63.7%, Prefix cache hit rate: 0.5%
+INFO 07-22 22:06:26 [loggers.py:118] Engine 000: Avg prompt throughput: 7408.2 tokens/s, Avg generation throughput: 9424.5 tokens/s, Running: 512 reqs, Waiting: 0 reqs, GPU KV cache usage: 78.6%, Prefix cache hit rate: 0.5%
+INFO 07-22 22:06:36 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 9677.2 tokens/s, Running: 512 reqs, Waiting: 0 reqs, GPU KV cache usage: 87.2%, Prefix cache hit rate: 0.5%
+INFO 07-22 22:06:46 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 9008.7 tokens/s, Running: 512 reqs, Waiting: 0 reqs, GPU KV cache usage: 95.3%, Prefix cache hit rate: 0.5%
+INFO 07-22 22:06:56 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 8583.8 tokens/s, Running: 493 reqs, Waiting: 19 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 2.5%
+INFO 07-22 22:07:06 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 7331.9 tokens/s, Running: 435 reqs, Waiting: 76 reqs, GPU KV cache usage: 91.5%, Prefix cache hit rate: 4.8%
+INFO 07-22 22:07:16 [loggers.py:118] Engine 000: Avg prompt throughput: 8484.9 tokens/s, Avg generation throughput: 6824.8 tokens/s, Running: 391 reqs, Waiting: 120 reqs, GPU KV cache usage: 76.7%, Prefix cache hit rate: 4.9%
+INFO 07-22 22:07:26 [loggers.py:118] Engine 000: Avg prompt throughput: 11744.5 tokens/s, Avg generation throughput: 6806.4 tokens/s, Running: 373 reqs, Waiting: 138 reqs, GPU KV cache usage: 65.8%, Prefix cache hit rate: 5.2%
+INFO 07-22 22:07:36 [loggers.py:118] Engine 000: Avg prompt throughput: 13171.0 tokens/s, Avg generation throughput: 7388.8 tokens/s, Running: 374 reqs, Waiting: 137 reqs, GPU KV cache usage: 58.0%, Prefix cache hit rate: 5.4%
+INFO 07-22 22:07:46 [loggers.py:118] Engine 000: Avg prompt throughput: 13310.7 tokens/s, Avg generation throughput: 8041.8 tokens/s, Running: 415 reqs, Waiting: 97 reqs, GPU KV cache usage: 60.4%, Prefix cache hit rate: 5.5%
+INFO 07-22 22:07:56 [loggers.py:118] Engine 000: Avg prompt throughput: 11271.8 tokens/s, Avg generation throughput: 8741.2 tokens/s, Running: 485 reqs, Waiting: 27 reqs, GPU KV cache usage: 72.8%, Prefix cache hit rate: 5.3%
+INFO 07-22 22:08:06 [loggers.py:118] Engine 000: Avg prompt throughput: 4183.0 tokens/s, Avg generation throughput: 9304.7 tokens/s, Running: 512 reqs, Waiting: 0 reqs, GPU KV cache usage: 83.1%, Prefix cache hit rate: 5.2%
+INFO 07-22 22:08:16 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 9162.1 tokens/s, Running: 512 reqs, Waiting: 0 reqs, GPU KV cache usage: 91.2%, Prefix cache hit rate: 5.2%
+INFO 07-22 22:08:26 [loggers.py:118] Engine 000: Avg prompt throughput: 120.0 tokens/s, Avg generation throughput: 8752.7 tokens/s, Running: 512 reqs, Waiting: 0 reqs, GPU KV cache usage: 98.9%, Prefix cache hit rate: 5.2%
+INFO 07-22 22:08:36 [loggers.py:118] Engine 000: Avg prompt throughput: 4182.9 tokens/s, Avg generation throughput: 7559.0 tokens/s, Running: 492 reqs, Waiting: 19 reqs, GPU KV cache usage: 96.4%, Prefix cache hit rate: 5.5%
+INFO 07-22 22:08:46 [loggers.py:118] Engine 000: Avg prompt throughput: 8038.2 tokens/s, Avg generation throughput: 7218.0 tokens/s, Running: 477 reqs, Waiting: 34 reqs, GPU KV cache usage: 90.5%, Prefix cache hit rate: 5.2%
+INFO 07-22 22:08:56 [loggers.py:118] Engine 000: Avg prompt throughput: 8728.7 tokens/s, Avg generation throughput: 7377.7 tokens/s, Running: 464 reqs, Waiting: 47 reqs, GPU KV cache usage: 84.5%, Prefix cache hit rate: 5.0%
+INFO 07-22 22:09:06 [loggers.py:118] Engine 000: Avg prompt throughput: 9220.3 tokens/s, Avg generation throughput: 7311.3 tokens/s, Running: 452 reqs, Waiting: 58 reqs, GPU KV cache usage: 77.9%, Prefix cache hit rate: 4.8%
+INFO 07-22 22:09:16 [loggers.py:118] Engine 000: Avg prompt throughput: 9927.6 tokens/s, Avg generation throughput: 7669.9 tokens/s, Running: 441 reqs, Waiting: 70 reqs, GPU KV cache usage: 71.5%, Prefix cache hit rate: 4.5%
+INFO 07-22 22:09:26 [loggers.py:118] Engine 000: Avg prompt throughput: 10517.6 tokens/s, Avg generation throughput: 7960.9 tokens/s, Running: 445 reqs, Waiting: 66 reqs, GPU KV cache usage: 67.8%, Prefix cache hit rate: 4.3%
+INFO 07-22 22:09:36 [loggers.py:118] Engine 000: Avg prompt throughput: 10415.2 tokens/s, Avg generation throughput: 8523.8 tokens/s, Running: 497 reqs, Waiting: 15 reqs, GPU KV cache usage: 76.5%, Prefix cache hit rate: 4.4%
+INFO 07-22 22:09:46 [loggers.py:118] Engine 000: Avg prompt throughput: 2028.4 tokens/s, Avg generation throughput: 9030.7 tokens/s, Running: 512 reqs, Waiting: 0 reqs, GPU KV cache usage: 86.2%, Prefix cache hit rate: 4.6%
+INFO 07-22 22:09:56 [loggers.py:118] Engine 000: Avg prompt throughput: 359.9 tokens/s, Avg generation throughput: 8906.2 tokens/s, Running: 512 reqs, Waiting: 0 reqs, GPU KV cache usage: 94.0%, Prefix cache hit rate: 4.9%
+INFO 07-22 22:10:06 [loggers.py:118] Engine 000: Avg prompt throughput: 3715.8 tokens/s, Avg generation throughput: 7718.4 tokens/s, Running: 512 reqs, Waiting: 0 reqs, GPU KV cache usage: 96.5%, Prefix cache hit rate: 5.0%
+INFO 07-22 22:10:16 [loggers.py:118] Engine 000: Avg prompt throughput: 7415.5 tokens/s, Avg generation throughput: 7288.1 tokens/s, Running: 509 reqs, Waiting: 2 reqs, GPU KV cache usage: 94.0%, Prefix cache hit rate: 5.1%
+INFO 07-22 22:10:26 [loggers.py:118] Engine 000: Avg prompt throughput: 7677.2 tokens/s, Avg generation throughput: 7450.5 tokens/s, Running: 505 reqs, Waiting: 6 reqs, GPU KV cache usage: 91.5%, Prefix cache hit rate: 5.0%
+INFO 07-22 22:10:36 [loggers.py:118] Engine 000: Avg prompt throughput: 7776.1 tokens/s, Avg generation throughput: 7462.3 tokens/s, Running: 499 reqs, Waiting: 12 reqs, GPU KV cache usage: 88.3%, Prefix cache hit rate: 4.8%
+INFO 07-22 22:10:46 [loggers.py:118] Engine 000: Avg prompt throughput: 7896.4 tokens/s, Avg generation throughput: 7429.9 tokens/s, Running: 494 reqs, Waiting: 17 reqs, GPU KV cache usage: 84.9%, Prefix cache hit rate: 4.6%
+INFO 07-22 22:10:56 [loggers.py:118] Engine 000: Avg prompt throughput: 8510.3 tokens/s, Avg generation throughput: 7754.7 tokens/s, Running: 489 reqs, Waiting: 22 reqs, GPU KV cache usage: 81.3%, Prefix cache hit rate: 4.0%
+INFO 07-22 22:11:06 [loggers.py:118] Engine 000: Avg prompt throughput: 8378.8 tokens/s, Avg generation throughput: 7683.1 tokens/s, Running: 482 reqs, Waiting: 0 reqs, GPU KV cache usage: 77.4%, Prefix cache hit rate: 1.0%
+INFO 07-22 22:11:16 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 8889.5 tokens/s, Running: 427 reqs, Waiting: 0 reqs, GPU KV cache usage: 72.1%, Prefix cache hit rate: 1.0%
+INFO 07-22 22:11:26 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 8594.6 tokens/s, Running: 424 reqs, Waiting: 0 reqs, GPU KV cache usage: 79.0%, Prefix cache hit rate: 1.0%
+INFO 07-22 22:11:36 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 8081.0 tokens/s, Running: 391 reqs, Waiting: 0 reqs, GPU KV cache usage: 78.3%, Prefix cache hit rate: 1.0%
+INFO 07-22 22:11:46 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 7340.9 tokens/s, Running: 301 reqs, Waiting: 0 reqs, GPU KV cache usage: 63.1%, Prefix cache hit rate: 1.2%
+INFO 07-22 22:11:56 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 6813.0 tokens/s, Running: 181 reqs, Waiting: 0 reqs, GPU KV cache usage: 40.3%, Prefix cache hit rate: 1.2%
+============ Serving Benchmark Result ============
+Successful requests:                     2000      
+Benchmark duration (s):                  370.72    
+Total input tokens:                      2400000   
+Total generated tokens:                  2943329   
+Request throughput (req/s):              5.39      
+Output token throughput (tok/s):         7939.39   
+Total Token throughput (tok/s):          14413.20  
+---------------Time to First Token----------------
+Mean TTFT (ms):                          7706.66   
+Median TTFT (ms):                        7386.21   
+P99 TTFT (ms):                           26773.55  
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          55.88     
+Median TPOT (ms):                        56.60     
+P99 TPOT (ms):                           63.46     
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           55.90     
+Median ITL (ms):                         55.70     
+P99 ITL (ms):                            74.74     
+==================================================
+.Namespace(endpoint_type='openai', label=None, base_url=None, host='127.0.0.1', port=8060, endpoint='/v1/completions', dataset_name='random', dataset_path=None, max_concurrency=512, model='RedHatAI/Qwen3-4B-FP8-dynamic', tokenizer=None, use_beam_search=False, num_prompts=2000, logprobs=None, request_rate=inf, burstiness=1.0, seed=0, trust_remote_code=False, disable_tqdm=False, profile=False, save_result=True, save_detailed=False, append_result=False, metadata=None, result_dir='/tmp/tmpe5akxj7p', result_filename='result.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl', metric_percentiles='99', goodput=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, random_input_len=2000, random_output_len=3000, random_range_ratio=0.0, random_prefix_len=0, hf_subset=None, hf_split=None, hf_output_len=None, top_p=None, top_k=None, min_p=None, temperature=None, tokenizer_mode='auto', served_model_name=None, lora_modules=None)
+INFO 07-22 22:12:05 [datasets.py:348] Sampling input_len from [2000, 2000] and output_len from [3000, 3000]
+INFO 07-22 22:12:06 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3728.2 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 1.2%
+INFO 07-22 22:12:16 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 0.0 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 1.2%
+INFO 07-22 22:12:26 [loggers.py:118] Engine 000: Avg prompt throughput: 200.0 tokens/s, Avg generation throughput: 124.1 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.3%, Prefix cache hit rate: 1.2%
+Starting initial single prompt test run...
+Initial test run completed. Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 512
+INFO 07-22 22:12:36 [loggers.py:118] Engine 000: Avg prompt throughput: 9958.2 tokens/s, Avg generation throughput: 425.9 tokens/s, Running: 51 reqs, Waiting: 256 reqs, GPU KV cache usage: 9.2%, Prefix cache hit rate: 1.3%
+INFO 07-22 22:12:46 [loggers.py:118] Engine 000: Avg prompt throughput: 30304.5 tokens/s, Avg generation throughput: 4288.4 tokens/s, Running: 200 reqs, Waiting: 312 reqs, GPU KV cache usage: 39.6%, Prefix cache hit rate: 1.1%
+INFO 07-22 22:12:56 [loggers.py:118] Engine 000: Avg prompt throughput: 18182.5 tokens/s, Avg generation throughput: 5773.5 tokens/s, Running: 291 reqs, Waiting: 221 reqs, GPU KV cache usage: 61.1%, Prefix cache hit rate: 0.5%
+INFO 07-22 22:13:06 [loggers.py:118] Engine 000: Avg prompt throughput: 13579.2 tokens/s, Avg generation throughput: 6253.0 tokens/s, Running: 358 reqs, Waiting: 154 reqs, GPU KV cache usage: 78.5%, Prefix cache hit rate: 0.5%
+INFO 07-22 22:13:16 [loggers.py:118] Engine 000: Avg prompt throughput: 10551.7 tokens/s, Avg generation throughput: 6270.5 tokens/s, Running: 411 reqs, Waiting: 101 reqs, GPU KV cache usage: 93.4%, Prefix cache hit rate: 0.6%
+INFO 07-22 22:13:26 [loggers.py:118] Engine 000: Avg prompt throughput: 4566.1 tokens/s, Avg generation throughput: 6748.5 tokens/s, Running: 414 reqs, Waiting: 98 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 3.5%
+INFO 07-22 22:13:36 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 6659.5 tokens/s, Running: 385 reqs, Waiting: 127 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 9.3%
+INFO 07-22 22:13:46 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 6212.2 tokens/s, Running: 360 reqs, Waiting: 152 reqs, GPU KV cache usage: 99.8%, Prefix cache hit rate: 15.0%
+INFO 07-22 22:13:56 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5923.2 tokens/s, Running: 338 reqs, Waiting: 174 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 20.1%
+INFO 07-22 22:14:06 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5548.9 tokens/s, Running: 319 reqs, Waiting: 193 reqs, GPU KV cache usage: 99.8%, Prefix cache hit rate: 23.6%
+INFO 07-22 22:14:16 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5164.5 tokens/s, Running: 303 reqs, Waiting: 209 reqs, GPU KV cache usage: 99.8%, Prefix cache hit rate: 26.5%
+INFO 07-22 22:14:26 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5055.3 tokens/s, Running: 289 reqs, Waiting: 223 reqs, GPU KV cache usage: 100.0%, Prefix cache hit rate: 29.4%
+INFO 07-22 22:14:36 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4788.0 tokens/s, Running: 275 reqs, Waiting: 237 reqs, GPU KV cache usage: 99.7%, Prefix cache hit rate: 32.2%
+INFO 07-22 22:14:46 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4601.3 tokens/s, Running: 263 reqs, Waiting: 249 reqs, GPU KV cache usage: 99.7%, Prefix cache hit rate: 34.5%
+INFO 07-22 22:14:56 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4405.5 tokens/s, Running: 252 reqs, Waiting: 260 reqs, GPU KV cache usage: 99.7%, Prefix cache hit rate: 36.3%
+INFO 07-22 22:15:06 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4129.9 tokens/s, Running: 243 reqs, Waiting: 269 reqs, GPU KV cache usage: 100.0%, Prefix cache hit rate: 37.8%
+INFO 07-22 22:15:16 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3903.1 tokens/s, Running: 223 reqs, Waiting: 288 reqs, GPU KV cache usage: 94.4%, Prefix cache hit rate: 38.9%
+INFO 07-22 22:15:26 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3201.4 tokens/s, Running: 178 reqs, Waiting: 333 reqs, GPU KV cache usage: 74.3%, Prefix cache hit rate: 38.2%
+INFO 07-22 22:15:36 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 2949.6 tokens/s, Running: 145 reqs, Waiting: 366 reqs, GPU KV cache usage: 55.2%, Prefix cache hit rate: 37.3%
+INFO 07-22 22:15:46 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 2965.7 tokens/s, Running: 159 reqs, Waiting: 353 reqs, GPU KV cache usage: 48.5%, Prefix cache hit rate: 36.3%
+INFO 07-22 22:15:56 [loggers.py:118] Engine 000: Avg prompt throughput: 9984.8 tokens/s, Avg generation throughput: 3949.3 tokens/s, Running: 232 reqs, Waiting: 279 reqs, GPU KV cache usage: 63.3%, Prefix cache hit rate: 35.5%
+INFO 07-22 22:16:06 [loggers.py:118] Engine 000: Avg prompt throughput: 13365.9 tokens/s, Avg generation throughput: 4571.3 tokens/s, Running: 292 reqs, Waiting: 220 reqs, GPU KV cache usage: 76.2%, Prefix cache hit rate: 34.8%
+INFO 07-22 22:16:16 [loggers.py:118] Engine 000: Avg prompt throughput: 11393.2 tokens/s, Avg generation throughput: 5054.9 tokens/s, Running: 342 reqs, Waiting: 170 reqs, GPU KV cache usage: 87.7%, Prefix cache hit rate: 34.3%
+INFO 07-22 22:16:26 [loggers.py:118] Engine 000: Avg prompt throughput: 9786.8 tokens/s, Avg generation throughput: 5268.1 tokens/s, Running: 379 reqs, Waiting: 133 reqs, GPU KV cache usage: 97.1%, Prefix cache hit rate: 33.8%
+INFO 07-22 22:16:36 [loggers.py:118] Engine 000: Avg prompt throughput: 2399.2 tokens/s, Avg generation throughput: 5687.6 tokens/s, Running: 376 reqs, Waiting: 136 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 33.8%
+INFO 07-22 22:16:46 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5647.8 tokens/s, Running: 359 reqs, Waiting: 153 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 34.0%
+INFO 07-22 22:16:56 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5450.0 tokens/s, Running: 344 reqs, Waiting: 167 reqs, GPU KV cache usage: 99.6%, Prefix cache hit rate: 34.2%
+INFO 07-22 22:17:06 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5070.7 tokens/s, Running: 332 reqs, Waiting: 179 reqs, GPU KV cache usage: 99.6%, Prefix cache hit rate: 34.4%
+INFO 07-22 22:17:16 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5058.6 tokens/s, Running: 321 reqs, Waiting: 191 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 34.5%
+INFO 07-22 22:17:26 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4894.5 tokens/s, Running: 310 reqs, Waiting: 201 reqs, GPU KV cache usage: 99.5%, Prefix cache hit rate: 34.6%
+INFO 07-22 22:17:36 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4824.1 tokens/s, Running: 301 reqs, Waiting: 211 reqs, GPU KV cache usage: 100.0%, Prefix cache hit rate: 34.8%
+INFO 07-22 22:17:46 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4592.0 tokens/s, Running: 292 reqs, Waiting: 219 reqs, GPU KV cache usage: 99.6%, Prefix cache hit rate: 35.0%
+INFO 07-22 22:17:56 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4556.3 tokens/s, Running: 284 reqs, Waiting: 227 reqs, GPU KV cache usage: 99.5%, Prefix cache hit rate: 35.1%
+INFO 07-22 22:18:06 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4421.4 tokens/s, Running: 280 reqs, Waiting: 232 reqs, GPU KV cache usage: 99.8%, Prefix cache hit rate: 35.1%
+INFO 07-22 22:18:16 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4349.1 tokens/s, Running: 276 reqs, Waiting: 236 reqs, GPU KV cache usage: 99.8%, Prefix cache hit rate: 35.1%
+INFO 07-22 22:18:26 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4207.8 tokens/s, Running: 272 reqs, Waiting: 240 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 35.1%
+INFO 07-22 22:18:36 [loggers.py:118] Engine 000: Avg prompt throughput: 1797.1 tokens/s, Avg generation throughput: 4189.9 tokens/s, Running: 269 reqs, Waiting: 243 reqs, GPU KV cache usage: 99.8%, Prefix cache hit rate: 35.0%
+INFO 07-22 22:18:46 [loggers.py:118] Engine 000: Avg prompt throughput: 2591.1 tokens/s, Avg generation throughput: 4060.1 tokens/s, Running: 269 reqs, Waiting: 243 reqs, GPU KV cache usage: 99.7%, Prefix cache hit rate: 35.0%
+INFO 07-22 22:18:56 [loggers.py:118] Engine 000: Avg prompt throughput: 2196.9 tokens/s, Avg generation throughput: 3963.7 tokens/s, Running: 268 reqs, Waiting: 244 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 35.1%
+INFO 07-22 22:19:06 [loggers.py:118] Engine 000: Avg prompt throughput: 6177.7 tokens/s, Avg generation throughput: 3769.2 tokens/s, Running: 266 reqs, Waiting: 245 reqs, GPU KV cache usage: 94.3%, Prefix cache hit rate: 34.9%
+INFO 07-22 22:19:16 [loggers.py:118] Engine 000: Avg prompt throughput: 11370.8 tokens/s, Avg generation throughput: 3940.1 tokens/s, Running: 264 reqs, Waiting: 247 reqs, GPU KV cache usage: 81.9%, Prefix cache hit rate: 34.6%
+INFO 07-22 22:19:26 [loggers.py:118] Engine 000: Avg prompt throughput: 12574.5 tokens/s, Avg generation throughput: 4365.5 tokens/s, Running: 267 reqs, Waiting: 244 reqs, GPU KV cache usage: 70.8%, Prefix cache hit rate: 34.2%
+INFO 07-22 22:19:36 [loggers.py:118] Engine 000: Avg prompt throughput: 13391.7 tokens/s, Avg generation throughput: 4775.1 tokens/s, Running: 278 reqs, Waiting: 233 reqs, GPU KV cache usage: 62.1%, Prefix cache hit rate: 33.8%
+INFO 07-22 22:19:46 [loggers.py:118] Engine 000: Avg prompt throughput: 13199.0 tokens/s, Avg generation throughput: 5632.9 tokens/s, Running: 340 reqs, Waiting: 172 reqs, GPU KV cache usage: 77.9%, Prefix cache hit rate: 33.4%
+INFO 07-22 22:19:56 [loggers.py:118] Engine 000: Avg prompt throughput: 10382.1 tokens/s, Avg generation throughput: 5765.3 tokens/s, Running: 391 reqs, Waiting: 121 reqs, GPU KV cache usage: 91.9%, Prefix cache hit rate: 33.2%
+INFO 07-22 22:20:06 [loggers.py:118] Engine 000: Avg prompt throughput: 5580.9 tokens/s, Avg generation throughput: 6222.6 tokens/s, Running: 405 reqs, Waiting: 107 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 33.5%
+INFO 07-22 22:20:16 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 6293.0 tokens/s, Running: 378 reqs, Waiting: 134 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 34.1%
+INFO 07-22 22:20:26 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5965.4 tokens/s, Running: 356 reqs, Waiting: 156 reqs, GPU KV cache usage: 100.0%, Prefix cache hit rate: 34.6%
+INFO 07-22 22:20:36 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5494.6 tokens/s, Running: 337 reqs, Waiting: 174 reqs, GPU KV cache usage: 99.7%, Prefix cache hit rate: 35.2%
+INFO 07-22 22:20:46 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5321.6 tokens/s, Running: 321 reqs, Waiting: 191 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 35.7%
+INFO 07-22 22:20:56 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5049.0 tokens/s, Running: 307 reqs, Waiting: 205 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 36.2%
+INFO 07-22 22:21:06 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4861.9 tokens/s, Running: 294 reqs, Waiting: 218 reqs, GPU KV cache usage: 99.7%, Prefix cache hit rate: 36.6%
+INFO 07-22 22:21:16 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4607.3 tokens/s, Running: 283 reqs, Waiting: 229 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 36.7%
+INFO 07-22 22:21:26 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4513.5 tokens/s, Running: 272 reqs, Waiting: 240 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 36.9%
+INFO 07-22 22:21:36 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4319.2 tokens/s, Running: 262 reqs, Waiting: 250 reqs, GPU KV cache usage: 99.8%, Prefix cache hit rate: 37.0%
+INFO 07-22 22:21:46 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4101.5 tokens/s, Running: 254 reqs, Waiting: 257 reqs, GPU KV cache usage: 99.5%, Prefix cache hit rate: 36.9%
+INFO 07-22 22:21:56 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3923.2 tokens/s, Running: 249 reqs, Waiting: 263 reqs, GPU KV cache usage: 100.0%, Prefix cache hit rate: 36.8%
+INFO 07-22 22:22:06 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3700.8 tokens/s, Running: 244 reqs, Waiting: 268 reqs, GPU KV cache usage: 99.8%, Prefix cache hit rate: 36.7%
+INFO 07-22 22:22:16 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3480.9 tokens/s, Running: 230 reqs, Waiting: 281 reqs, GPU KV cache usage: 91.6%, Prefix cache hit rate: 36.1%
+INFO 07-22 22:22:26 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3516.6 tokens/s, Running: 225 reqs, Waiting: 287 reqs, GPU KV cache usage: 80.9%, Prefix cache hit rate: 35.3%
+INFO 07-22 22:22:36 [loggers.py:118] Engine 000: Avg prompt throughput: 8180.0 tokens/s, Avg generation throughput: 3729.4 tokens/s, Running: 227 reqs, Waiting: 285 reqs, GPU KV cache usage: 68.3%, Prefix cache hit rate: 34.4%
+INFO 07-22 22:22:46 [loggers.py:118] Engine 000: Avg prompt throughput: 14785.3 tokens/s, Avg generation throughput: 4215.3 tokens/s, Running: 236 reqs, Waiting: 276 reqs, GPU KV cache usage: 56.5%, Prefix cache hit rate: 33.4%
+INFO 07-22 22:22:56 [loggers.py:118] Engine 000: Avg prompt throughput: 13566.8 tokens/s, Avg generation throughput: 4806.4 tokens/s, Running: 300 reqs, Waiting: 212 reqs, GPU KV cache usage: 71.7%, Prefix cache hit rate: 32.2%
+INFO 07-22 22:23:06 [loggers.py:118] Engine 000: Avg prompt throughput: 11589.6 tokens/s, Avg generation throughput: 5333.2 tokens/s, Running: 354 reqs, Waiting: 158 reqs, GPU KV cache usage: 85.1%, Prefix cache hit rate: 31.7%
+INFO 07-22 22:23:16 [loggers.py:118] Engine 000: Avg prompt throughput: 9340.9 tokens/s, Avg generation throughput: 5431.9 tokens/s, Running: 397 reqs, Waiting: 115 reqs, GPU KV cache usage: 96.8%, Prefix cache hit rate: 31.7%
+INFO 07-22 22:23:26 [loggers.py:118] Engine 000: Avg prompt throughput: 2393.3 tokens/s, Avg generation throughput: 6056.9 tokens/s, Running: 388 reqs, Waiting: 124 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 32.2%
+INFO 07-22 22:23:36 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5864.1 tokens/s, Running: 364 reqs, Waiting: 148 reqs, GPU KV cache usage: 99.8%, Prefix cache hit rate: 32.7%
+INFO 07-22 22:23:46 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5537.8 tokens/s, Running: 346 reqs, Waiting: 166 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 33.3%
+INFO 07-22 22:23:56 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5201.1 tokens/s, Running: 330 reqs, Waiting: 182 reqs, GPU KV cache usage: 99.8%, Prefix cache hit rate: 33.9%
+INFO 07-22 22:24:06 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5042.9 tokens/s, Running: 319 reqs, Waiting: 193 reqs, GPU KV cache usage: 100.0%, Prefix cache hit rate: 34.3%
+INFO 07-22 22:24:16 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4885.1 tokens/s, Running: 306 reqs, Waiting: 206 reqs, GPU KV cache usage: 99.7%, Prefix cache hit rate: 34.9%
+INFO 07-22 22:24:26 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4706.9 tokens/s, Running: 295 reqs, Waiting: 217 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 35.4%
+INFO 07-22 22:24:36 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4465.7 tokens/s, Running: 285 reqs, Waiting: 227 reqs, GPU KV cache usage: 99.7%, Prefix cache hit rate: 35.5%
+INFO 07-22 22:24:46 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4437.6 tokens/s, Running: 277 reqs, Waiting: 235 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 35.6%
+INFO 07-22 22:24:56 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4284.0 tokens/s, Running: 270 reqs, Waiting: 242 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 35.6%
+INFO 07-22 22:25:06 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4199.2 tokens/s, Running: 263 reqs, Waiting: 249 reqs, GPU KV cache usage: 100.0%, Prefix cache hit rate: 35.6%
+INFO 07-22 22:25:16 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3978.3 tokens/s, Running: 259 reqs, Waiting: 253 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 35.6%
+INFO 07-22 22:25:26 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4042.2 tokens/s, Running: 254 reqs, Waiting: 258 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 35.6%
+INFO 07-22 22:25:36 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3862.7 tokens/s, Running: 253 reqs, Waiting: 259 reqs, GPU KV cache usage: 100.0%, Prefix cache hit rate: 35.5%
+INFO 07-22 22:25:46 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3697.7 tokens/s, Running: 249 reqs, Waiting: 262 reqs, GPU KV cache usage: 91.8%, Prefix cache hit rate: 35.1%
+INFO 07-22 22:25:56 [loggers.py:118] Engine 000: Avg prompt throughput: 10746.9 tokens/s, Avg generation throughput: 3791.6 tokens/s, Running: 248 reqs, Waiting: 264 reqs, GPU KV cache usage: 79.4%, Prefix cache hit rate: 34.7%
+INFO 07-22 22:26:06 [loggers.py:118] Engine 000: Avg prompt throughput: 12788.7 tokens/s, Avg generation throughput: 3949.5 tokens/s, Running: 250 reqs, Waiting: 261 reqs, GPU KV cache usage: 67.1%, Prefix cache hit rate: 34.4%
+INFO 07-22 22:26:16 [loggers.py:118] Engine 000: Avg prompt throughput: 14161.8 tokens/s, Avg generation throughput: 4679.6 tokens/s, Running: 268 reqs, Waiting: 244 reqs, GPU KV cache usage: 60.4%, Prefix cache hit rate: 33.9%
+INFO 07-22 22:26:26 [loggers.py:118] Engine 000: Avg prompt throughput: 13184.0 tokens/s, Avg generation throughput: 5374.6 tokens/s, Running: 331 reqs, Waiting: 181 reqs, GPU KV cache usage: 76.0%, Prefix cache hit rate: 33.6%
+INFO 07-22 22:26:36 [loggers.py:118] Engine 000: Avg prompt throughput: 10581.7 tokens/s, Avg generation throughput: 5611.8 tokens/s, Running: 382 reqs, Waiting: 130 reqs, GPU KV cache usage: 89.9%, Prefix cache hit rate: 33.3%
+INFO 07-22 22:26:46 [loggers.py:118] Engine 000: Avg prompt throughput: 7196.1 tokens/s, Avg generation throughput: 5972.6 tokens/s, Running: 409 reqs, Waiting: 103 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 33.1%
+INFO 07-22 22:26:56 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 6254.4 tokens/s, Running: 383 reqs, Waiting: 129 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 33.2%
+INFO 07-22 22:27:06 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5805.3 tokens/s, Running: 361 reqs, Waiting: 151 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 33.8%
+INFO 07-22 22:27:16 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5621.5 tokens/s, Running: 342 reqs, Waiting: 170 reqs, GPU KV cache usage: 99.8%, Prefix cache hit rate: 34.3%
+INFO 07-22 22:27:26 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5368.5 tokens/s, Running: 325 reqs, Waiting: 187 reqs, GPU KV cache usage: 99.7%, Prefix cache hit rate: 34.9%
+INFO 07-22 22:27:36 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5179.0 tokens/s, Running: 311 reqs, Waiting: 201 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 35.5%
+INFO 07-22 22:27:46 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4809.2 tokens/s, Running: 299 reqs, Waiting: 213 reqs, GPU KV cache usage: 100.0%, Prefix cache hit rate: 36.0%
+INFO 07-22 22:27:56 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4792.3 tokens/s, Running: 287 reqs, Waiting: 224 reqs, GPU KV cache usage: 99.6%, Prefix cache hit rate: 36.6%
+INFO 07-22 22:28:06 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4580.4 tokens/s, Running: 276 reqs, Waiting: 236 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 36.7%
+INFO 07-22 22:28:16 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4390.2 tokens/s, Running: 265 reqs, Waiting: 246 reqs, GPU KV cache usage: 99.3%, Prefix cache hit rate: 36.8%
+INFO 07-22 22:28:26 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4086.4 tokens/s, Running: 258 reqs, Waiting: 254 reqs, GPU KV cache usage: 99.7%, Prefix cache hit rate: 36.8%
+INFO 07-22 22:28:36 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4051.1 tokens/s, Running: 251 reqs, Waiting: 260 reqs, GPU KV cache usage: 99.4%, Prefix cache hit rate: 36.8%
+INFO 07-22 22:28:46 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3907.4 tokens/s, Running: 245 reqs, Waiting: 266 reqs, GPU KV cache usage: 99.4%, Prefix cache hit rate: 36.7%
+INFO 07-22 22:28:56 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3715.1 tokens/s, Running: 237 reqs, Waiting: 274 reqs, GPU KV cache usage: 96.2%, Prefix cache hit rate: 36.5%
+INFO 07-22 22:29:06 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3476.2 tokens/s, Running: 226 reqs, Waiting: 285 reqs, GPU KV cache usage: 85.2%, Prefix cache hit rate: 36.0%
+INFO 07-22 22:29:16 [loggers.py:118] Engine 000: Avg prompt throughput: 4594.7 tokens/s, Avg generation throughput: 3575.8 tokens/s, Running: 224 reqs, Waiting: 263 reqs, GPU KV cache usage: 71.8%, Prefix cache hit rate: 35.3%
+INFO 07-22 22:29:26 [loggers.py:118] Engine 000: Avg prompt throughput: 13735.6 tokens/s, Avg generation throughput: 3906.3 tokens/s, Running: 228 reqs, Waiting: 194 reqs, GPU KV cache usage: 58.9%, Prefix cache hit rate: 34.6%
+INFO 07-22 22:29:36 [loggers.py:118] Engine 000: Avg prompt throughput: 15173.0 tokens/s, Avg generation throughput: 4799.7 tokens/s, Running: 280 reqs, Waiting: 118 reqs, GPU KV cache usage: 66.0%, Prefix cache hit rate: 33.7%
+INFO 07-22 22:29:46 [loggers.py:118] Engine 000: Avg prompt throughput: 12195.0 tokens/s, Avg generation throughput: 5293.9 tokens/s, Running: 339 reqs, Waiting: 57 reqs, GPU KV cache usage: 80.8%, Prefix cache hit rate: 33.2%
+INFO 07-22 22:29:56 [loggers.py:118] Engine 000: Avg prompt throughput: 10178.5 tokens/s, Avg generation throughput: 5549.3 tokens/s, Running: 386 reqs, Waiting: 6 reqs, GPU KV cache usage: 93.5%, Prefix cache hit rate: 32.7%
+INFO 07-22 22:30:06 [loggers.py:118] Engine 000: Avg prompt throughput: 1399.7 tokens/s, Avg generation throughput: 6240.6 tokens/s, Running: 389 reqs, Waiting: 0 reqs, GPU KV cache usage: 98.9%, Prefix cache hit rate: 32.8%
+INFO 07-22 22:30:16 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 6058.4 tokens/s, Running: 370 reqs, Waiting: 17 reqs, GPU KV cache usage: 100.0%, Prefix cache hit rate: 33.3%
+INFO 07-22 22:30:26 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5609.8 tokens/s, Running: 351 reqs, Waiting: 32 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 33.8%
+INFO 07-22 22:30:36 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5430.1 tokens/s, Running: 333 reqs, Waiting: 47 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 34.5%
+INFO 07-22 22:30:46 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 5198.6 tokens/s, Running: 318 reqs, Waiting: 58 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 35.0%
+INFO 07-22 22:30:56 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4949.0 tokens/s, Running: 305 reqs, Waiting: 65 reqs, GPU KV cache usage: 99.8%, Prefix cache hit rate: 35.5%
+INFO 07-22 22:31:06 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4680.2 tokens/s, Running: 295 reqs, Waiting: 67 reqs, GPU KV cache usage: 99.8%, Prefix cache hit rate: 35.9%
+INFO 07-22 22:31:16 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4640.4 tokens/s, Running: 285 reqs, Waiting: 69 reqs, GPU KV cache usage: 99.8%, Prefix cache hit rate: 36.2%
+INFO 07-22 22:31:26 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4464.1 tokens/s, Running: 277 reqs, Waiting: 67 reqs, GPU KV cache usage: 99.8%, Prefix cache hit rate: 36.3%
+INFO 07-22 22:31:36 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4332.3 tokens/s, Running: 269 reqs, Waiting: 65 reqs, GPU KV cache usage: 99.9%, Prefix cache hit rate: 36.3%
+INFO 07-22 22:31:46 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4112.9 tokens/s, Running: 263 reqs, Waiting: 60 reqs, GPU KV cache usage: 100.0%, Prefix cache hit rate: 36.2%
+INFO 07-22 22:31:56 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 4091.6 tokens/s, Running: 256 reqs, Waiting: 56 reqs, GPU KV cache usage: 99.8%, Prefix cache hit rate: 36.3%
+INFO 07-22 22:32:06 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3928.6 tokens/s, Running: 252 reqs, Waiting: 48 reqs, GPU KV cache usage: 100.0%, Prefix cache hit rate: 36.2%
+INFO 07-22 22:32:16 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3822.4 tokens/s, Running: 248 reqs, Waiting: 40 reqs, GPU KV cache usage: 100.0%, Prefix cache hit rate: 36.1%
+INFO 07-22 22:32:26 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3610.5 tokens/s, Running: 241 reqs, Waiting: 2 reqs, GPU KV cache usage: 91.2%, Prefix cache hit rate: 35.7%
+INFO 07-22 22:32:36 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3940.2 tokens/s, Running: 165 reqs, Waiting: 0 reqs, GPU KV cache usage: 60.4%, Prefix cache hit rate: 35.5%
+INFO 07-22 22:32:46 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3509.5 tokens/s, Running: 69 reqs, Waiting: 0 reqs, GPU KV cache usage: 20.8%, Prefix cache hit rate: 35.3%
+INFO 07-22 22:32:56 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3570.0 tokens/s, Running: 65 reqs, Waiting: 0 reqs, GPU KV cache usage: 22.2%, Prefix cache hit rate: 35.3%
+INFO 07-22 22:33:06 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 3197.7 tokens/s, Running: 57 reqs, Waiting: 0 reqs, GPU KV cache usage: 21.4%, Prefix cache hit rate: 36.6%
+INFO 07-22 22:33:16 [loggers.py:118] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 2964.8 tokens/s, Running: 40 reqs, Waiting: 0 reqs, GPU KV cache usage: 16.5%, Prefix cache hit rate: 37.9%
+============ Serving Benchmark Result ============
+Successful requests:                     2000      
+Benchmark duration (s):                  1248.96   
+Total input tokens:                      4000000   
+Total generated tokens:                  5867968   
+Request throughput (req/s):              1.60      
+Output token throughput (tok/s):         4698.29   
+Total Token throughput (tok/s):          7900.95   
+---------------Time to First Token----------------
+Mean TTFT (ms):                          85175.97  
+Median TTFT (ms):                        48830.54  
+P99 TTFT (ms):                           205686.68 
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          70.87     
+Median TPOT (ms):                        63.16     
+P99 TPOT (ms):                           111.42    
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           71.03     
+Median ITL (ms):                         61.25     
+P99 ITL (ms):                            72.30     
+==================================================
+.Namespace(endpoint_type='openai', label=None, base_url=None, host='127.0.0.1', port=8060, endpoint='/v1/completions', dataset_name='random', dataset_path=None, max_concurrency=512, model='RedHatAI/Qwen3-4B-FP8-dynamic', tokenizer=None, use_beam_search=False, num_prompts=2000, logprobs=None, request_rate=inf, burstiness=1.0, seed=0, trust_remote_code=False, disable_tqdm=False, profile=False, save_result=True, save_detailed=False, append_result=False, metadata=None, result_dir='/tmp/tmp2ky0v3jq', result_filename='result.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl', metric_percentiles='99', goodput=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, random_input_len=10, random_output_len=500, random_range_ratio=0.0, random_prefix_len=0, hf_subset=None, hf_split=None, hf_output_len=None, top_p=None, top_k=None, min_p=None, temperature=None, tokenizer_mode='auto', served_model_name=None, lora_modules=None)
+INFO 07-22 22:33:25 [datasets.py:348] Sampling input_len from [10, 10] and output_len from [500, 500]
+INFO 07-22 22:33:26 [loggers.py:118] Engine 000: Avg prompt throughput: 1.0 tokens/s, Avg generation throughput: 1515.6 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 36.5%
+Starting initial single prompt test run...
+Initial test run completed. Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 512
+INFO 07-22 22:33:36 [loggers.py:118] Engine 000: Avg prompt throughput: 540.9 tokens/s, Avg generation throughput: 24116.2 tokens/s, Running: 512 reqs, Waiting: 0 reqs, GPU KV cache usage: 21.9%, Prefix cache hit rate: 34.6%
+INFO 07-22 22:33:46 [loggers.py:118] Engine 000: Avg prompt throughput: 617.6 tokens/s, Avg generation throughput: 25701.4 tokens/s, Running: 497 reqs, Waiting: 0 reqs, GPU KV cache usage: 17.3%, Prefix cache hit rate: 34.9%
+INFO 07-22 22:33:56 [loggers.py:118] Engine 000: Avg prompt throughput: 591.1 tokens/s, Avg generation throughput: 25543.8 tokens/s, Running: 501 reqs, Waiting: 0 reqs, GPU KV cache usage: 14.9%, Prefix cache hit rate: 37.8%
+============ Serving Benchmark Result ============
+Successful requests:                     2000      
+Benchmark duration (s):                  38.19     
+Total input tokens:                      20000     
+Total generated tokens:                  962780    
+Request throughput (req/s):              52.37     
+Output token throughput (tok/s):         25209.87  
+Total Token throughput (tok/s):          25733.56  
+---------------Time to First Token----------------
+Mean TTFT (ms):                          313.93    
+Median TTFT (ms):                        284.89    
+P99 TTFT (ms):                           887.71    
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          18.40     
+Median TPOT (ms):                        18.59     
+P99 TPOT (ms):                           19.86     
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           18.46     
+Median ITL (ms):                         17.43     
+P99 ITL (ms):                            36.49     
+==================================================
+.INFO 07-22 22:34:06 [launcher.py:80] Shutting down FastAPI HTTP server.
+INFO 07-22 22:34:06 [loggers.py:118] Engine 000: Avg prompt throughput: 239.2 tokens/s, Avg generation throughput: 20364.6 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 39.8%
+Terminating server process
+Server process terminated
+
+
+=============================== warnings summary ===============================
+tests/benchmarks/test_benchmarks.py::test_performance[qwen_4b_512-batch_1]
+tests/benchmarks/test_benchmarks.py::test_performance[qwen_4b_1024-batch_1]
+  /usr/lib/python3.12/multiprocessing/popen_fork.py:66: DeprecationWarning: This process (pid=18347) is multi-threaded, use of fork() may lead to deadlocks in the child.
+    self.pid = os.fork()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== Final Benchmark Summary ============================
+task               batch_1       batch_2      batch_3       batch_4
+metric          throughput    throughput   throughput    throughput
+qwen_4b_512   33811.643969  13020.374365  7798.410338  25494.267003
+qwen_4b_1024  35739.397825  14413.201393  7900.952263  25733.557632
+================== 8 passed, 2 warnings in 3923.67s (1:05:23) ==================

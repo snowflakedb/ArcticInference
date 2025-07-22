@@ -22,29 +22,29 @@ VLLM_CONFIGS = {
         "max_num_batched_tokens": 512,
         "max_num_seqs": 512,
     },
-    "qwen_8b_512": {
-        "model": "RedHatAI/Qwen3-8B-FP8-dynamic",
-        "tensor_parallel_size": 1,
-        "max_num_batched_tokens": 512,
-        "max_num_seqs": 512,
-    },
-    "qwen_4b_512": {
-        "model": "RedHatAI/Qwen3-4B-FP8-dynamic",
-        "tensor_parallel_size": 1,
-        "max_num_batched_tokens": 512,
-        "max_num_seqs": 512,
-    },
     "llama_8b_1024": {
         "model": "RedHatAI/Meta-Llama-3-8B-Instruct-FP8",
         "tensor_parallel_size": 1,
         "max_num_batched_tokens": 1024,
         "max_num_seqs": 1024,
     },
+    "qwen_8b_512": {
+        "model": "RedHatAI/Qwen3-8B-FP8-dynamic",
+        "tensor_parallel_size": 1,
+        "max_num_batched_tokens": 512,
+        "max_num_seqs": 512,
+    },
     "qwen_8b_1024": {
         "model": "RedHatAI/Qwen3-8B-FP8-dynamic",
         "tensor_parallel_size": 1,
         "max_num_batched_tokens": 1024,
         "max_num_seqs": 1024,
+    },
+    "qwen_4b_512": {
+        "model": "RedHatAI/Qwen3-4B-FP8-dynamic",
+        "tensor_parallel_size": 1,
+        "max_num_batched_tokens": 512,
+        "max_num_seqs": 512,
     },
     "qwen_4b_1024": {
         "model": "RedHatAI/Qwen3-4B-FP8-dynamic",
