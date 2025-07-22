@@ -19,24 +19,65 @@ VLLM_CONFIGS = {
     "llama_8b": {
         "model": "RedHatAI/Meta-Llama-3-8B-Instruct-FP8",
         "tensor_parallel_size": 1,
+        "max_num_batched_tokens": 512,
     },
     "qwen_8b": {
         "model": "RedHatAI/Qwen3-8B-FP8-dynamic",
         "tensor_parallel_size": 1,
+        "max_num_batched_tokens": 512,
     },
     "qwen_4b": {
         "model": "RedHatAI/Qwen3-4B-FP8-dynamic",
         "tensor_parallel_size": 1,
+        "max_num_batched_tokens": 512,
     },
 }
 
 PERFORMANCE_TASKS = {
-    "batch_2k_200": BenchmarkTask(
+    # Input-Output → (2K, 200) (1.2K, 1.5K), (2K, 3K), (10,500)
+    "batch_1": BenchmarkTask(
         config={
             "dataset_name": "random",
             "random_input_len": 2000,
             "random_output_len": 200,
             "num_prompts": 2000,
+            "max_concurrency": 512,
+        },
+        metrics={
+            "throughput": "total_token_throughput",
+        },
+    ),
+    "batch_2": BenchmarkTask(
+        config={
+            "dataset_name": "random",
+            "random_input_len": 1200,
+            "random_output_len": 1500,
+            "num_prompts": 2000,
+            "max_concurrency": 512,
+        },
+        metrics={
+            "throughput": "total_token_throughput",
+        },
+    ),
+    "batch_3": BenchmarkTask(
+        config={
+            "dataset_name": "random",
+            "random_input_len": 2000,
+            "random_output_len": 3000,
+            "num_prompts": 2000,
+            "max_concurrency": 512,
+        },
+        metrics={
+            "throughput": "total_token_throughput",
+        },
+    ),
+    "batch_4": BenchmarkTask(
+        config={
+            "dataset_name": "random",
+            "random_input_len": 10,
+            "random_output_len": 500,
+            "num_prompts": 2000,
+            "max_concurrency": 512,
         },
         metrics={
             "throughput": "total_token_throughput",
