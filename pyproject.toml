@@ -9,7 +9,7 @@ requires = [
     "protobuf==4.25.8",
     "pybind11_global",
     "grpcio-tools",
-    "torch == 2.6.0",
+    "torch==2.7.0",
 ]
 build-backend = "setuptools.build_meta"
 
