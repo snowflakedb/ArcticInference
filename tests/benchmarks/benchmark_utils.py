@@ -16,47 +16,153 @@ class BenchmarkTask:
 
 # Llama 8B, Qwen8B ad Qwen 4B dense
 VLLM_CONFIGS = {
-    "llama_8b_512": {
-        "model": "RedHatAI/Meta-Llama-3-8B-Instruct-FP8",
-        "tensor_parallel_size": 1,
-        "max_num_batched_tokens": 512,
-        "max_num_seqs": 512,
-    },
     "llama_8b_1024": {
         "model": "RedHatAI/Meta-Llama-3-8B-Instruct-FP8",
         "tensor_parallel_size": 1,
         "max_num_batched_tokens": 1024,
         "max_num_seqs": 1024,
+        "enable_prefix_caching": False,
+        "ignore_eos": True,
     },
-    "qwen_8b_512": {
-        "model": "RedHatAI/Qwen3-8B-FP8-dynamic",
+    "llama_8b_2048": {
+        "model": "RedHatAI/Meta-Llama-3-8B-Instruct-FP8",
         "tensor_parallel_size": 1,
-        "max_num_batched_tokens": 512,
-        "max_num_seqs": 512,
+        "max_num_batched_tokens": 2048,
+        "max_num_seqs": 2048,
+        "enable_prefix_caching": False,
+        "ignore_eos": True,
     },
-    "qwen_8b_1024": {
-        "model": "RedHatAI/Qwen3-8B-FP8-dynamic",
+    "llama_8b_4096": {
+        "model": "RedHatAI/Meta-Llama-3-8B-Instruct-FP8",
         "tensor_parallel_size": 1,
-        "max_num_batched_tokens": 1024,
-        "max_num_seqs": 1024,
+        "max_num_batched_tokens": 4096,
+        "max_num_seqs": 4096,
+        "enable_prefix_caching": False,
+        "ignore_eos": True,
     },
-    "qwen_4b_512": {
-        "model": "RedHatAI/Qwen3-4B-FP8-dynamic",
+    "llama_8b_8192": {
+        "model": "RedHatAI/Meta-Llama-3-8B-Instruct-FP8",
         "tensor_parallel_size": 1,
-        "max_num_batched_tokens": 512,
-        "max_num_seqs": 512,
+        "max_num_batched_tokens": 8192,
+        "max_num_seqs": 8192,
+        "enable_prefix_caching": False,
+        "ignore_eos": True,
     },
-    "qwen_4b_1024": {
-        "model": "RedHatAI/Qwen3-4B-FP8-dynamic",
+    "llama_8b_16384": {
+        "model": "RedHatAI/Meta-Llama-3-8B-Instruct-FP8",
         "tensor_parallel_size": 1,
-        "max_num_batched_tokens": 1024,
-        "max_num_seqs": 1024,
+        "max_num_batched_tokens": 16384,
+        "max_num_seqs": 16384,
+        "enable_prefix_caching": False,
+        "ignore_eos": True,
     },
+
+    # "qwen_8b_1024": {
+    #     "model": "RedHatAI/Qwen3-8B-FP8-dynamic",
+    #     "tensor_parallel_size": 1,
+    #     "max_num_batched_tokens": 1024,
+    #     "max_num_seqs": 1024,
+    #     "enable_prefix_caching": False,
+    #     "ignore_eos": True,
+    # },
+    # "qwen_8b_2048": {
+    #     "model": "RedHatAI/Qwen3-8B-FP8-dynamic",
+    #     "tensor_parallel_size": 1,
+    #     "max_num_batched_tokens": 2048,
+    #     "max_num_seqs": 2048,
+    #     "enable_prefix_caching": False,
+    #     "ignore_eos": True,
+    # },
+    # "qwen_8b_4096": {
+    #     "model": "RedHatAI/Qwen3-8B-FP8-dynamic",
+    #     "tensor_parallel_size": 1,
+    #     "max_num_batched_tokens": 4096,
+    #     "max_num_seqs": 4096,
+    #     "enable_prefix_caching": False,
+    #     "ignore_eos": True,
+    # },
+    # "qwen_8b_8192": {
+    #     "model": "RedHatAI/Qwen3-8B-FP8-dynamic",
+    #     "tensor_parallel_size": 1,
+    #     "max_num_batched_tokens": 8192,
+    #     "max_num_seqs": 8192,
+    #     "enable_prefix_caching": False,
+    #     "ignore_eos": True,
+    # },
+    # "qwen_8b_16384": {
+    #     "model": "RedHatAI/Qwen3-8B-FP8-dynamic",
+    #     "tensor_parallel_size": 1,
+    #     "max_num_batched_tokens": 16384,
+    #     "max_num_seqs": 16384,
+    #     "enable_prefix_caching": False,
+    #     "ignore_eos": True,
+    # },
+
+    # "qwen_4b_1024": {
+    #     "model": "RedHatAI/Qwen3-4B-FP8-dynamic",
+    #     "tensor_parallel_size": 1,
+    #     "max_num_batched_tokens": 1024,
+    #     "max_num_seqs": 1024,
+    #     "enable_prefix_caching": False,
+    #     "ignore_eos": True,
+    # },
+    # "qwen_4b_16384": {
+    #     "model": "RedHatAI/Qwen3-4B-FP8-dynamic",
+    #     "tensor_parallel_size": 1,
+    #     "max_num_batched_tokens": 16384,
+    #     "max_num_seqs": 16384,
+    #     "enable_prefix_caching": False,
+    #     "ignore_eos": True,
+    # },
+    # "qwen_4b_2048": {
+    #     "model": "RedHatAI/Qwen3-4B-FP8-dynamic",
+    #     "tensor_parallel_size": 1,
+    #     "max_num_batched_tokens": 2048,
+    #     "max_num_seqs": 2048,
+    #     "enable_prefix_caching": False,
+    #     "ignore_eos": True,
+    # },
+    # "qwen_4b_4096": {
+    #     "model": "RedHatAI/Qwen3-4B-FP8-dynamic",
+    #     "tensor_parallel_size": 1,
+    #     "max_num_batched_tokens": 4096,
+    #     "max_num_seqs": 4096,
+    #     "enable_prefix_caching": False,
+    #     "ignore_eos": True,
+    # },
+    # "qwen_4b_8192": {
+    #     "model": "RedHatAI/Qwen3-4B-FP8-dynamic",
+    #     "tensor_parallel_size": 1,
+    #     "max_num_batched_tokens": 8192,
+    #     "max_num_seqs": 8192,
+    #     "enable_prefix_caching": False,
+    #     "ignore_eos": True,
+    # },
+    # "qwen_4b_16384": {
+    #     "model": "RedHatAI/Qwen3-4B-FP8-dynamic",
+    #     "tensor_parallel_size": 1,
+    #     "max_num_batched_tokens": 16384,
+    #     "max_num_seqs": 16384,
+    #     "enable_prefix_caching": False,
+    #     "ignore_eos": True,
+    # },
 }
 
 PERFORMANCE_TASKS = {
     # Input-Output → (2K, 200) (1.2K, 1.5K), (2K, 3K), (10,500)
-    "batch_1": BenchmarkTask(
+    "2000/200/256": BenchmarkTask(
+        config={
+            "dataset_name": "random",
+            "random_input_len": 2000,
+            "random_output_len": 200,
+            "num_prompts": 2000,
+            "max_concurrency": 256,
+        },
+        metrics={
+            "throughput": "total_token_throughput",
+        },
+    ),
+    "2000/200/512": BenchmarkTask(
         config={
             "dataset_name": "random",
             "random_input_len": 2000,
@@ -68,42 +174,54 @@ PERFORMANCE_TASKS = {
             "throughput": "total_token_throughput",
         },
     ),
-    "batch_2": BenchmarkTask(
-        config={
-            "dataset_name": "random",
-            "random_input_len": 1200,
-            "random_output_len": 1500,
-            "num_prompts": 2000,
-            "max_concurrency": 512,
-        },
-        metrics={
-            "throughput": "total_token_throughput",
-        },
-    ),
-    "batch_3": BenchmarkTask(
+    "2000/200/768": BenchmarkTask(
         config={
             "dataset_name": "random",
             "random_input_len": 2000,
-            "random_output_len": 3000,
+            "random_output_len": 200,
             "num_prompts": 2000,
-            "max_concurrency": 512,
+            "max_concurrency": 768,
         },
         metrics={
             "throughput": "total_token_throughput",
         },
     ),
-    "batch_4": BenchmarkTask(
-        config={
-            "dataset_name": "random",
-            "random_input_len": 10,
-            "random_output_len": 500,
-            "num_prompts": 2000,
-            "max_concurrency": 512,
-        },
-        metrics={
-            "throughput": "total_token_throughput",
-        },
-    ),
+    # "1200/1500": BenchmarkTask(
+    #     config={
+    #         "dataset_name": "random",
+    #         "random_input_len": 1200,
+    #         "random_output_len": 1500,
+    #         "num_prompts": 2000,
+    #         "max_concurrency": 512,
+    #     },
+    #     metrics={
+    #         "throughput": "total_token_throughput",
+    #     },
+    # ),
+    # "2000/3000": BenchmarkTask(
+    #     config={
+    #         "dataset_name": "random",
+    #         "random_input_len": 2000,
+    #         "random_output_len": 3000,
+    #         "num_prompts": 2000,
+    #         "max_concurrency": 512,
+    #     },
+    #     metrics={
+    #         "throughput": "total_token_throughput",
+    #     },
+    # ),
+    # "10/500": BenchmarkTask(
+    #     config={
+    #         "dataset_name": "random",
+    #         "random_input_len": 10,
+    #         "random_output_len": 500,
+    #         "num_prompts": 2000,
+    #         "max_concurrency": 512,
+    #     },
+    #     metrics={
+    #         "throughput": "total_token_throughput",
+    #     },
+    # ),
 }
 
 ACCURACY_TASKS = {
