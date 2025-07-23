@@ -7,9 +7,9 @@ import time
 import pytest
 import requests
 import uvloop
-#from vllm.entrypoints.openai.api_server import (
-#    make_arg_parser, run_server, validate_parsed_serve_args)
-#from vllm.utils import FlexibleArgumentParser
+from vllm.entrypoints.openai.api_server import (
+    make_arg_parser, run_server, validate_parsed_serve_args)
+from vllm.utils import FlexibleArgumentParser
 
 from .benchmark_utils import (ACCURACY_TASKS, PERFORMANCE_TASKS, VLLM_CONFIGS,
                               JSON_MODE_TASKS, update_benchmark_summary)                  
