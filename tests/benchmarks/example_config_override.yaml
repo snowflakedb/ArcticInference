@@ -1,0 +1,32 @@
+vllm_configs:
+  my_custom_config:
+    model: "some-other-model"
+    tensor_parallel_size: 2
+
+performance_tasks:
+  my_batch_test:
+    config:
+      dataset_name: "random"
+      random_input_len: 1000
+      random_output_len: 100
+      num_prompts: 500
+    metrics:
+      throughput: "total_token_throughput"
+
+accuracy_tasks:
+  my_arc_test:
+    config:
+      tasks: ["arc_challenge_chat"]
+      apply_chat_template: true
+      num_fewshot: 3
+    metrics:
+      acc: "exact_match,remove_whitespace"
+
+json_mode_tasks:
+  my_json_test:
+    config:
+      task: "json-mode-all"
+      input: "json_mode/datasets/WikiQuestions.json"
+      n_samples: 10
+    metrics:
+      score: "json-mode-all"
