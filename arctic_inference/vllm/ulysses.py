@@ -38,6 +38,7 @@ from vllm.v1.executor.multiproc_executor import (MultiprocExecutor, WorkerProc,
 from vllm.platforms import current_platform
 from vllm.utils import resolve_obj_by_qualname
 from vllm.compilation.backends import PiecewiseCompileInterpreter
+from vllm.model_executor.layers.fused_moe import FusedMoE
 
 from arctic_inference.patching import ArcticPatch
 
@@ -49,6 +50,7 @@ def apply_shift_parallel_patches():
     UlyssesMultiprocExecutorPatch.apply_patch()
     UlyssesAttentionPatch.apply_patch()
     PiecewiseCompileInterpreterPatch.apply_patch()
+    UlyssesFusedMoEPatch.apply_patch()
 
 
 class UlyssesModelConfigPatch(ArcticPatch[ModelConfig]):
@@ -585,3 +587,13 @@ class PiecewiseCompileInterpreterPatch(ArcticPatch[PiecewiseCompileInterpreter])
             compilation_counter.num_piecewise_capturable_graphs_seen += 1
 
         return output
+
+
+class UlyssesFusedMoEPatch(ArcticPatch[FusedMoE]):
+
+    def forward(self, hidden_states: torch.Tensor,
+                router_logits: torch.Tensor):
+        # directly call forward_impl to bypass custom opt
+        # custom opt prevents using the shift model
+        # we will expand this function to fuse SP with EP
+        return self.forward_impl(hidden_states, router_logits)
