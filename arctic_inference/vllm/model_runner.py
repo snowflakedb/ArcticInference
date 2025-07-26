@@ -668,6 +668,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         previous_hidden_states: Optional[torch.Tensor] = None,
     ) -> list[list[int]]:
         last_tokens : list[int] = []
+        max_spec_tokens = self.speculative_config.num_speculative_tokens
         for i, sampled_ids in enumerate(sampled_token_ids):
             num_sampled_ids = len(sampled_ids)
             
@@ -686,9 +687,17 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             self.input_batch.token_ids_cpu[i, start_idx:end_idx] = sampled_ids[-1]
             last_tokens.append(self.input_batch.token_ids_cpu[i, end_idx - 1])
 
+            max_spec_tokens = min(
+                max_spec_tokens, self.max_model_len - end_idx - 1,
+            )
+
+        if max_spec_tokens <= 0:
+            return [[] for _ in sampled_token_ids]
+
         drafter_output = self.drafter.propose(
             last_tokens,
             previous_hidden_states=previous_hidden_states,
+            num_predict_tokens=max_spec_tokens,
         )
 
         draft_token_ids = drafter_output.tolist()
