@@ -128,6 +128,6 @@ class MLPSpeculatorConfigPatch(ArcticPatch[MLPSpeculatorConfig]):
 
     _orig_init = MLPSpeculatorConfig.__init__
 
-    def __post_init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
         self.base_model_arch = kwargs.pop("base_model_arch", "")
         self._orig_init(*args, **kwargs)
