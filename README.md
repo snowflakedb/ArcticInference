@@ -3,7 +3,7 @@
 
 <h3 align="center">
   <img src="docs/images/arctic_inference_logo.svg" width=500px><br>
-  | <a href="https://arcticinference.readthedocs.io/en/latest/"><b>Documentation</b></a> | <a href="https://www.snowflake.com/en/engineering-blog/arctic-inference-shift-parallelism/"><b>Blog</b></a> | <a href="https://arxiv.org/pdf/2507.11830"><b>Paper</b></a> |
+  | <a href="https://arcticinference.readthedocs.io/en/latest/"><b>Documentation</b></a> | <a href="https://www.snowflake.com/en/engineering-blog/arctic-inference-shift-parallelism/"><b>Blog</b></a> | <a href="https://arxiv.org/abs/2507.11830"><b>Paper</b></a> |
 </h3>
 
 ## Latest news
@@ -35,8 +35,7 @@ Arctic Inference achieves high throughput and low latency through a wholistic se
     <tbody>
         <tr>
             <td align="left">
-                Arctic Ulysses (<a href="https://www.snowflake.com/en/engineering-blog/ulysses-low-latency-llm-inference/">blog</a>,
-                                <a href="https://arxiv.org/abs/2507.11830">paper</a>)
+                Arctic Ulysses (<a href="https://www.snowflake.com/en/engineering-blog/ulysses-low-latency-llm-inference/">blog</a>)
                 <br>
                 Shift Parallelism (<a href="https://www.snowflake.com/en/engineering-blog/arctic-inference-shift-parallelism/">blog</a>)
             </td>
