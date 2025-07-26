@@ -582,12 +582,14 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             start_idx = self.input_batch.num_tokens_no_spec[i]
             end_idx = start_idx + num_sampled_ids
 
-            self.input_batch.token_ids_cpu[i, start_idx:end_idx] = sampled_ids[-1]
-            last_tokens.append(self.input_batch.token_ids_cpu[i, end_idx - 1])
-
             max_spec_tokens = min(
                 max_spec_tokens, self.max_model_len - end_idx - 1,
             )
+            if max_spec_tokens <= 0:
+                continue
+
+            self.input_batch.token_ids_cpu[i, start_idx:end_idx] = sampled_ids[-1]
+            last_tokens.append(self.input_batch.token_ids_cpu[i, end_idx - 1])
 
         if max_spec_tokens <= 0:
             return [[] for _ in sampled_token_ids]
