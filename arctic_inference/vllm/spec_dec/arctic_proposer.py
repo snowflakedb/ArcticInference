@@ -35,7 +35,6 @@ class ArcticProposer:
     ):
         self.vllm_config = vllm_config
         self.speculative_config = vllm_config.speculative_config
-        self.num_predict_tokens = self.speculative_config.num_speculative_tokens
 
         self.model = None
         self.device = None
@@ -151,13 +150,17 @@ class ArcticProposer:
         self,
         context_token_ids: np.ndarray,
         previous_hidden_states: torch.Tensor,
+        num_predict_tokens: int,
     ) -> Optional[np.ndarray]:
+        assert num_predict_tokens > 0, \
+            f"num_predict_tokens must be greater than 0, got {num_predict_tokens}."
+        
         input_ids = torch.tensor(context_token_ids, device=self.device)
 
         next_tokens = self.model.generate_proposals(
             input_ids=input_ids,
             previous_hidden_states=previous_hidden_states,
-            num_predict_tokens=self.num_predict_tokens,
+            num_predict_tokens=num_predict_tokens,
         )
 
         return next_tokens.cpu().numpy()
