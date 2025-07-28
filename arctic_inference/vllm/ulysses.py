@@ -21,6 +21,7 @@ from typing import Optional, Any
 
 import torch
 import vllm.distributed.parallel_state as parallel_state
+import vllm.envs as envs
 from vllm.attention.layer import Attention
 from vllm.config import ModelConfig, ParallelConfig
 from vllm.distributed.device_communicators.shm_broadcast import MessageQueue
@@ -37,6 +38,7 @@ from vllm.v1.executor.multiproc_executor import (MultiprocExecutor, WorkerProc,
 from vllm.platforms import current_platform
 from vllm.utils import resolve_obj_by_qualname
 from vllm.compilation.backends import PiecewiseCompileInterpreter
+from vllm.model_executor.layers.fused_moe import FusedMoE
 
 from arctic_inference.patching import ArcticPatch
 
@@ -48,6 +50,7 @@ def apply_shift_parallel_patches():
     UlyssesMultiprocExecutorPatch.apply_patch()
     UlyssesAttentionPatch.apply_patch()
     PiecewiseCompileInterpreterPatch.apply_patch()
+    UlyssesFusedMoEPatch.apply_patch()
 
 
 class UlyssesModelConfigPatch(ArcticPatch[ModelConfig]):
@@ -99,6 +102,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
     # all-to-all within SP_AA group followed by an local all-gather within SP_AG
     # group. The SP_AA and SP_AG groups partitions the SP group into two orthogonal
     # sub-groups and will not be initialized if max(1, num_kv_heads / TP) < SP.
+    # See the figure in PR #126 https://github.com/snowflakedb/ArcticInference/pull/126
 
     def initialize_model_parallel(
         tensor_model_parallel_size: int = 1,
@@ -371,7 +375,10 @@ class UlyssesMultiprocExecutorPatch(ArcticPatch[MultiprocExecutor]):
 
         # Initialize worker and set up message queues for SchedulerOutputs
         # and ModelRunnerOutputs
-        self.rpc_broadcast_mq = MessageQueue(self.world_size, self.world_size)
+        max_chunk_bytes = envs.VLLM_MQ_MAX_CHUNK_BYTES_MB * 1024 * 1024
+        self.rpc_broadcast_mq = MessageQueue(self.world_size,
+                                             self.world_size,
+                                             max_chunk_bytes=max_chunk_bytes)
         scheduler_output_handle = self.rpc_broadcast_mq.export_handle()
 
         # Create workers
@@ -580,3 +587,13 @@ class PiecewiseCompileInterpreterPatch(ArcticPatch[PiecewiseCompileInterpreter])
             compilation_counter.num_piecewise_capturable_graphs_seen += 1
 
         return output
+
+
+class UlyssesFusedMoEPatch(ArcticPatch[FusedMoE]):
+
+    def forward(self, hidden_states: torch.Tensor,
+                router_logits: torch.Tensor):
+        # directly call forward_impl to bypass custom opt
+        # custom opt prevents using the shift model
+        # we will expand this function to fuse SP with EP
+        return self.forward_impl(hidden_states, router_logits)
