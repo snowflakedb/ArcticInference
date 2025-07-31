@@ -16,7 +16,7 @@ from .benchmark_utils import (ACCURACY_TASKS, PERFORMANCE_TASKS, VLLM_CONFIGS,
 
 CUSTOM_PORT = 8080
 
-@pytest.fixture(scope="module", params=list(VLLM_CONFIGS.keys()))
+@pytest.fixture(scope="module")
 def vllm_server(request):
     """
     Fixture to start the OpenAI API server for testing.
@@ -73,7 +73,6 @@ def vllm_server(request):
     print("Server process terminated")
 
 
-@pytest.mark.parametrize("task_name", list(PERFORMANCE_TASKS.keys()))
 def test_performance(request, vllm_server, task_name):
     from vllm.benchmarks.serve import add_cli_args, main
 
@@ -113,7 +112,6 @@ def test_performance(request, vllm_server, task_name):
     update_benchmark_summary(config_name, task_name, metrics)
 
 
-@pytest.mark.parametrize("task_name", list(ACCURACY_TASKS.keys()))
 def test_accuracy(request, vllm_server, task_name):
 
     config_name, vllm_args = vllm_server
@@ -181,7 +179,6 @@ def test_accuracy(request, vllm_server, task_name):
     update_benchmark_summary(config_name, task_name, metrics)
 
 
-@pytest.mark.parametrize("task_name", list(JSON_MODE_TASKS.keys()))
 def test_json_mode(request, vllm_server, task_name):
     """
     Test JSON mode using the evaluate_text_json_mode script.
