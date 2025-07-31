@@ -107,4 +107,5 @@ def test_speculative_decoding(
                 pytest.fail(
                     f"Speculative decoding with method '{method}' failed with error: {e}"
                 )
+                
         del spec_llm
