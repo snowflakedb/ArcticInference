@@ -696,6 +696,12 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             # Add sampled_token_ids to token_ids_cpu.
             start_idx = self.input_batch.num_tokens_no_spec[i]
             end_idx = start_idx + len(sampled_ids)
+
+            if end_idx >= self.max_model_len:
+                results.append(SuffixSpecResult())
+                self.input_batch.token_ids_cpu[i, start_idx:self.max_model_len] = sampled_ids[:self.max_model_len - start_idx]
+                continue
+
             self.input_batch.token_ids_cpu[i, start_idx:end_idx] = sampled_ids
 
             size = min(end_idx, config.suffix_cache_max_depth)
