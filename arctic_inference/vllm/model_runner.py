@@ -70,8 +70,8 @@ def set_shift_parallel_mode(mode: Optional[bool]):
     old_tp_group = parallel_state.get_tp_group()
     SP_TP_MODE = mode
 
-    parallel_state._TP = (parallel_state._SP_TP if mode
-                          else parallel_state._ORIG_TP)
+    parallel_state._TP = (parallel_state._SP_TP
+                          if mode else parallel_state._ORIG_TP)
 
     try:
         yield
@@ -136,8 +136,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             self.speculative_config = arctic_speculative_config
 
             if get_pp_group().is_last_rank:
-                if (self.speculative_config.method == "arctic" or
-                      self.speculative_config.method == "mlp_speculator"):
+                if (self.speculative_config.method == "arctic"
+                        or self.speculative_config.method == "mlp_speculator"):
                     self.drafter = ArcticProposer(self.vllm_config)
                 elif self.speculative_config.method != "suffix":
                     raise ValueError("Unknown speculative decoding method: "
@@ -145,10 +145,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
                 self.rejection_sampler = RejectionSampler()
 
-        if (self.speculative_config is not None and
-                self.speculative_config.enable_suffix_decoding):
-            if self.speculative_config.method not in (
-                    "arctic", "suffix", "mlp_speculator"):
+        if (self.speculative_config is not None
+                and self.speculative_config.enable_suffix_decoding):
+            if self.speculative_config.method not in ("arctic", "suffix",
+                                                      "mlp_speculator"):
                 raise ValueError(
                     "Suffix decoding is only supported with the 'arctic', "
                     "'mlp_speculator' or 'suffix' spec decoding methods.")
@@ -180,7 +180,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         sp_rank = parallel_state._SP.rank_in_group
         device_group = parallel_state._SP.device_group
         model_forward = self.model.forward
-        input_key = 'inputs_embeds' if  self.is_multimodal_model else 'input_ids'
+        input_key = 'inputs_embeds' if self.is_multimodal_model else 'input_ids'
 
         def ulysses_forward(*args, **kwargs):
             # update inputs
@@ -202,11 +202,11 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             if output.size(0) == N_ulysses:
                 # all-gather model_output
                 model_output = torch.empty((N, self.hidden_size),
-                                        dtype=output.dtype,
-                                        device=output.device)
+                                           dtype=output.dtype,
+                                           device=output.device)
                 torch.distributed.all_gather_into_tensor(model_output,
-                                                        output,
-                                                        group=device_group)
+                                                         output,
+                                                         group=device_group)
             else:
                 # SwiftKV models will already have all-gathered the output.
                 assert output.size(0) == N
@@ -234,9 +234,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
          spec_decode_metadata,
          num_scheduled_tokens_np) = (self._prepare_inputs(scheduler_output))
         num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
-        use_shift_model = (
-            self.use_ulysses and self.shift_model is not None and
-            num_scheduled_tokens <= self.shift_parallel_threshold)
+        use_shift_model = (self.use_ulysses and self.shift_model is not None
+                           and num_scheduled_tokens
+                           <= self.shift_parallel_threshold)
         if self.use_ulysses and not use_shift_model:
             # add padding to the batch size to make it a multiple of SP
             sp_size = self.parallel_config.ulysses_sequence_parallel_size
@@ -246,7 +246,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 num_input_tokens = self.vllm_config.pad_for_cudagraph(
                     num_input_tokens // sp_size) * sp_size
         elif (self.use_cuda_graph
-                and num_scheduled_tokens <= self.cudagraph_batch_sizes[-1]):
+              and num_scheduled_tokens <= self.cudagraph_batch_sizes[-1]):
             # Use piecewise CUDA graphs.
             # Add padding to the batch size.
             num_input_tokens = self.vllm_config.pad_for_cudagraph(
@@ -535,11 +535,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         spec_decode_metadata: Optional[SpecDecodeMetadata],
         attn_metadata: dict[str, Any],
     ) -> list[list[int]]:
-        disable_spec_decode = (
-            self.speculative_config and
-            self.speculative_config.disable_by_batch_size and
-            len(self.input_batch.req_ids) > self.speculative_config.disable_by_batch_size
-        )
+        disable_spec_decode = (self.speculative_config and
+                               self.speculative_config.disable_by_batch_size
+                               and len(self.input_batch.req_ids)
+                               > self.speculative_config.disable_by_batch_size)
         if disable_spec_decode:
             # No speculative decoding is enabled.
             return [[] for _ in sampled_token_ids]
@@ -555,8 +554,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             # greater than the # of tokens we would speculate otherwise.
             min_score = (self.speculative_config.num_speculative_tokens
                          if self.speculative_config.method != "suffix" else 0)
-            min_score = (0 if self.speculative_config.method == "suffix"
-                         else self.speculative_config.num_speculative_tokens)
+            min_score = (0 if self.speculative_config.method == "suffix" else
+                         self.speculative_config.num_speculative_tokens)
             for i, result in enumerate(results):
                 if result.score >= min_score:
                     # Use suffix decoded tokens, disable other speculation
@@ -569,8 +568,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         spec_token_ids = None
         if self.speculative_config.method == "suffix":
             pass
-        elif (self.speculative_config.method == "arctic" or 
-              self.speculative_config.method == "mlp_speculator"):
+        elif (self.speculative_config.method == "arctic"
+              or self.speculative_config.method == "mlp_speculator"):
             assert isinstance(self.drafter, ArcticProposer)
             previous_hidden_states = self.drafter.prepare_hidden_states(
                 sample_hidden_states=sample_hidden_states,
@@ -579,7 +578,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             )
             spec_token_ids = self.propose_arctic_draft_token_ids(
                 scheduler_output,
-                new_sampled_token_ids, 
+                new_sampled_token_ids,
                 previous_hidden_states=previous_hidden_states)
         else:
             spec_token_ids = self._orig_propose_draft_token_ids(
@@ -609,11 +608,11 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         sampled_token_ids: list[list[int]],
         previous_hidden_states: Optional[torch.Tensor] = None,
     ) -> list[list[int]]:
-        last_tokens : list[int] = []
+        last_tokens: list[int] = []
         max_spec_tokens = self.speculative_config.num_speculative_tokens
         for i, sampled_ids in enumerate(sampled_token_ids):
             num_sampled_ids = len(sampled_ids)
-            
+
             if (num_sampled_ids == 0):
                 if self.speculative_config.enable_suffix_decoding:
                     return [[]] * len(sampled_token_ids)
@@ -628,12 +627,14 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             end_idx = start_idx + num_sampled_ids
 
             max_spec_tokens = min(
-                max_spec_tokens, self.max_model_len - end_idx - 1,
+                max_spec_tokens,
+                self.max_model_len - end_idx - 1,
             )
             if max_spec_tokens <= 0:
                 continue
 
-            self.input_batch.token_ids_cpu[i, start_idx:end_idx] = sampled_ids[-1]
+            self.input_batch.token_ids_cpu[i,
+                                           start_idx:end_idx] = sampled_ids[-1]
             last_tokens.append(self.input_batch.token_ids_cpu[i, end_idx - 1])
 
         if max_spec_tokens <= 0:
@@ -699,13 +700,16 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
             if end_idx >= self.max_model_len:
                 results.append(SuffixSpecResult())
-                self.input_batch.token_ids_cpu[i, start_idx:self.max_model_len] = sampled_ids[:self.max_model_len - start_idx]
+                self.input_batch.token_ids_cpu[
+                    i, start_idx:self.
+                    max_model_len] = sampled_ids[:self.max_model_len -
+                                                 start_idx]
                 continue
 
             self.input_batch.token_ids_cpu[i, start_idx:end_idx] = sampled_ids
 
             size = min(end_idx, config.suffix_cache_max_depth)
-            pattern = self.input_batch.token_ids_cpu[i, end_idx-size:end_idx]
+            pattern = self.input_batch.token_ids_cpu[i, end_idx - size:end_idx]
             pattern = pattern.tolist() + spec_ids
             if len(pattern) > config.suffix_cache_max_depth:
                 pattern = pattern[-config.suffix_cache_max_depth:]
@@ -725,8 +729,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             #   - Already speculated 3 tokens, so should allow 2 more tokens
             # So the new config should map match length 6 to 2 max spec tokens.
             max_spec_factor = config.suffix_max_spec_factor
-            max_spec_offset = (config.suffix_max_spec_offset -
-                              len(spec_ids) * (max_spec_factor + 1))
+            max_spec_offset = (config.suffix_max_spec_offset - len(spec_ids) *
+                               (max_spec_factor + 1))
             result = self._suffix_cache.speculate(
                 req_id,
                 pattern,
@@ -791,15 +795,17 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             sp_size = self.parallel_config.ulysses_sequence_parallel_size
             full_cg = self.full_cuda_graph
             # capture original model shapes
-            compilation_cases = (shape for shape in reversed(self.cudagraph_batch_sizes)
-                if shape * sp_size > self.shift_parallel_threshold
-                and shape * sp_size <= self.max_num_tokens)
+            compilation_cases = (
+                shape for shape in reversed(self.cudagraph_batch_sizes)
+                if shape * sp_size > self.shift_parallel_threshold and shape *
+                sp_size <= self.max_num_tokens)
             # Only rank 0 should print progress bar during capture
             if is_global_first_rank():
                 print_cases, compilation_cases = tee(compilation_cases)
                 logger.info(f"original model shapes {list(print_cases)}")
-                compilation_cases = tqdm(list(compilation_cases),
-                                         desc="Capturing CUDA graph shapes of original model")
+                compilation_cases = tqdm(
+                    list(compilation_cases),
+                    desc="Capturing CUDA graph shapes of original model")
             for num_tokens in compilation_cases:
                 # We skip EPLB here since we don't want to record dummy metrics
                 for _ in range(self.vllm_config.compilation_config.
@@ -815,7 +821,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             if self.shift_model is not None:
                 orig_model, self.model = self.model, self.shift_model
                 # Reset compilation cases
-                compilation_cases = (shape for shape in reversed(self.cudagraph_batch_sizes)
+                compilation_cases = (
+                    shape for shape in reversed(self.cudagraph_batch_sizes)
                     if shape <= self.shift_parallel_threshold
                     or "SwiftKV" in self.model.__class__.__name__)
                 # Note: We want to capture all shapes for the SwiftKV shift model.
@@ -825,8 +832,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 if is_global_first_rank():
                     print_cases, compilation_cases = tee(compilation_cases)
                     logger.info(f"shift model shapes {list(print_cases)}")
-                    compilation_cases = tqdm(list(compilation_cases),
-                                             desc="Capturing CUDA graph shapes of shift model")
+                    compilation_cases = tqdm(
+                        list(compilation_cases),
+                        desc="Capturing CUDA graph shapes of shift model")
                 with set_shift_parallel_mode(True):
                     for num_tokens in compilation_cases:
                         for _ in range(self.vllm_config.compilation_config.

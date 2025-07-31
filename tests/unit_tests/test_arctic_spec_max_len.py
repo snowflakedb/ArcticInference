@@ -31,10 +31,20 @@ def test_prompts():
 
 @pytest.fixture
 def sampling_configs():
-    return [SamplingParams(temperature=0, max_tokens=MAX_MODEL_LEN, ignore_eos=True),
-            SamplingParams(temperature=0, max_tokens=MAX_MODEL_LEN - 1, ignore_eos=True),
-            SamplingParams(temperature=0, max_tokens=MAX_MODEL_LEN - 2, ignore_eos=True),
-            SamplingParams(temperature=0, max_tokens=MAX_MODEL_LEN - 3, ignore_eos=True)]
+    return [
+        SamplingParams(temperature=0,
+                       max_tokens=MAX_MODEL_LEN,
+                       ignore_eos=True),
+        SamplingParams(temperature=0,
+                       max_tokens=MAX_MODEL_LEN - 1,
+                       ignore_eos=True),
+        SamplingParams(temperature=0,
+                       max_tokens=MAX_MODEL_LEN - 2,
+                       ignore_eos=True),
+        SamplingParams(temperature=0,
+                       max_tokens=MAX_MODEL_LEN - 3,
+                       ignore_eos=True)
+    ]
 
 
 @pytest.fixture
