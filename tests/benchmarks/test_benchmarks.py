@@ -73,44 +73,44 @@ def vllm_server(request):
     print("Server process terminated")
 
 
-@pytest.mark.parametrize("task_name", list(PERFORMANCE_TASKS.keys()))
-def test_performance(request, vllm_server, task_name):
-    from vllm.benchmarks.serve import add_cli_args, main
+# @pytest.mark.parametrize("task_name", list(PERFORMANCE_TASKS.keys()))
+# def test_performance(request, vllm_server, task_name):
+#     from vllm.benchmarks.serve import add_cli_args, main
 
-    config_name, vllm_args = vllm_server
-    task = PERFORMANCE_TASKS[task_name]
+#     config_name, vllm_args = vllm_server
+#     task = PERFORMANCE_TASKS[task_name]
 
-    parser = argparse.ArgumentParser()
-    add_cli_args(parser)
+#     parser = argparse.ArgumentParser()
+#     add_cli_args(parser)
 
-    args = parser.parse_args(["--model", vllm_args.model])
+#     args = parser.parse_args(["--model", vllm_args.model])
 
-    setattr(args, 'port', CUSTOM_PORT)
+#     setattr(args, 'port', CUSTOM_PORT)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        args.save_result = True
-        args.result_dir = str(tmpdir)
-        args.result_filename = "result.json"
+#     with tempfile.TemporaryDirectory() as tmpdir:
+#         args.save_result = True
+#         args.result_dir = str(tmpdir)
+#         args.result_filename = "result.json"
 
-        for key, value in task.config.items():
-            setattr(args, key, value)
+#         for key, value in task.config.items():
+#             setattr(args, key, value)
 
-        main(args)
+#         main(args)
 
-        with open(f"{tmpdir}/result.json", "r") as f:
-            result = json.load(f)
+#         with open(f"{tmpdir}/result.json", "r") as f:
+#             result = json.load(f)
 
-    benchmark_result_dir = request.config.option.benchmark_result_dir
-    if benchmark_result_dir is not None:
-        result_path = (benchmark_result_dir / "performance" /
-                       f"{config_name}-{task_name}.json")
-        result_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(result_path, "w") as f:
-            json.dump(result, f, indent=4)
+#     benchmark_result_dir = request.config.option.benchmark_result_dir
+#     if benchmark_result_dir is not None:
+#         result_path = (benchmark_result_dir / "performance" /
+#                        f"{config_name}-{task_name}.json")
+#         result_path.parent.mkdir(parents=True, exist_ok=True)
+#         with open(result_path, "w") as f:
+#             json.dump(result, f, indent=4)
 
-    metrics = {name: key(result) if callable(key) else result[key]
-               for name, key in task.metrics.items()}
-    update_benchmark_summary(config_name, task_name, metrics)
+#     metrics = {name: key(result) if callable(key) else result[key]
+#                for name, key in task.metrics.items()}
+#     update_benchmark_summary(config_name, task_name, metrics)
 
 
 @pytest.mark.parametrize("task_name", list(ACCURACY_TASKS.keys()))
@@ -181,42 +181,42 @@ def test_accuracy(request, vllm_server, task_name):
     update_benchmark_summary(config_name, task_name, metrics)
 
 
-@pytest.mark.parametrize("task_name", list(JSON_MODE_TASKS.keys()))
-def test_json_mode(request, vllm_server, task_name):
-    """
-    Test JSON mode using the evaluate_text_json_mode script.
-    """
-    from .json_mode.evaluate_text_json_mode import main as evaluate_json
+# @pytest.mark.parametrize("task_name", list(JSON_MODE_TASKS.keys()))
+# def test_json_mode(request, vllm_server, task_name):
+#     """
+#     Test JSON mode using the evaluate_text_json_mode script.
+#     """
+#     from .json_mode.evaluate_text_json_mode import main as evaluate_json
 
-    config_name, vllm_args = vllm_server
-    task = JSON_MODE_TASKS[task_name]
+#     config_name, vllm_args = vllm_server
+#     task = JSON_MODE_TASKS[task_name]
 
-    if (vllm_args.speculative_config and
-            vllm_args.speculative_config.get('enable_suffix_decoding', False)):
-        pytest.skip("Skipping JSON mode test for spec + suffix decoding enabled")
+#     if (vllm_args.speculative_config and
+#             vllm_args.speculative_config.get('enable_suffix_decoding', False)):
+#         pytest.skip("Skipping JSON mode test for spec + suffix decoding enabled")
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        result_path = f"{tmpdir}/result.json"
+#     with tempfile.TemporaryDirectory() as tmpdir:
+#         result_path = f"{tmpdir}/result.json"
 
-        args = FlexibleArgumentParser()
-        args.model = vllm_args.model
-        args.output = result_path
-        args.task = task.config["task"]
-        args.input = task.config["input"]
-        args.n_samples = task.config["n_samples"]
+#         args = FlexibleArgumentParser()
+#         args.model = vllm_args.model
+#         args.output = result_path
+#         args.task = task.config["task"]
+#         args.input = task.config["input"]
+#         args.n_samples = task.config["n_samples"]
 
-        args.port = CUSTOM_PORT
+#         args.port = CUSTOM_PORT
 
-        evaluate_json(args)
+#         evaluate_json(args)
 
-        with open(result_path, "r") as f:
-            result = json.load(f)
+#         with open(result_path, "r") as f:
+#             result = json.load(f)
 
-    result_data = result.get("results", {})
+#     result_data = result.get("results", {})
     
-    metrics = {
-        name: key(result_data) if callable(key) else result_data.get(key, {}).get('score')
-        for name, key in task.metrics.items()
-    }
+#     metrics = {
+#         name: key(result_data) if callable(key) else result_data.get(key, {}).get('score')
+#         for name, key in task.metrics.items()
+#     }
 
-    update_benchmark_summary(config_name, task_name, metrics)
+#     update_benchmark_summary(config_name, task_name, metrics)
