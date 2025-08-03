@@ -6,6 +6,7 @@ import pathlib
 import subprocess
 import sys
 import time
+import torch
 from typing import Any, Dict, List
 
 import pytest
@@ -18,7 +19,6 @@ from .benchmark_utils import (ACCURACY_TASKS, JSON_MODE_TASKS,
                               PERFORMANCE_TASKS, VLLM_CONFIGS,
                               get_benchmark_summary)
 
-# --- Configuration for the parallel runner ---
 MAX_GPUS = torch.cuda.device_count()
 BASE_PORT = 8080
 
@@ -83,7 +83,7 @@ class BatchServerManager:
             return
         self.teardown_current_batch()
         self.current_batch_idx = batch_idx
-        print(f"\n--- 🚀 Starting Batch {batch_idx}: {batch_configs} ---")
+        print(f"\nStarting Batch {batch_idx}: {batch_configs} ---")
         gpu_pool = list(range(MAX_GPUS))
         gpus_assigned = 0
         for i, config_name in enumerate(batch_configs):
@@ -113,8 +113,7 @@ class BatchServerManager:
         if not self.processes:
             return
         print(
-            f"\n--- 🛑 Terminating servers for Batch {self.current_batch_idx} ---"
-        )
+            f"\n---Terminating servers for Batch {self.current_batch_idx} ---")
         for name, p in self.processes.items():
             if p.poll() is None:  # Check if the process is still running
                 print(

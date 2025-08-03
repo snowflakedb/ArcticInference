@@ -58,7 +58,8 @@ def test_accuracy(benchmark_spec, request):
     port = benchmark_spec["port"]
 
     vllm_config = VLLM_CONFIGS[config_name]
-    assert len(task.config["tasks"]) == 1, "Accuracy benchmarks must have one task."
+    assert len(
+        task.config["tasks"]) == 1, "Accuracy benchmarks must have one task."
 
     q = multiprocessing.Queue()
 
@@ -124,7 +125,7 @@ def test_json_mode(benchmark_spec, request):
         pytest.skip("Skipping JSON mode test for spec + suffix decoding.")
 
     from .json_mode.evaluate_text_json_mode import main as evaluate_json
-    
+
     with tempfile.TemporaryDirectory() as tmpdir:
         result_path = f"{tmpdir}/result.json"
         # The evaluate_json script saves its own file, so we pass it the full path
@@ -141,10 +142,16 @@ def test_json_mode(benchmark_spec, request):
         parser.add_argument("--model", type=str, default=vllm_config["model"])
         parser.add_argument("--output", type=str, default=result_path)
         parser.add_argument("--port", type=int, default=port)
-        parser.add_argument("--task", type=str, default=task.config.get("task"))
-        parser.add_argument("--input", type=str, default=task.config.get("input"))
-        parser.add_argument("--n-samples", type=int, default=task.config.get("n_samples"))
-        
+        parser.add_argument("--task",
+                            type=str,
+                            default=task.config.get("task"))
+        parser.add_argument("--input",
+                            type=str,
+                            default=task.config.get("input"))
+        parser.add_argument("--n-samples",
+                            type=int,
+                            default=task.config.get("n_samples"))
+
         args = parser.parse_args([])
         evaluate_json(args)
 
@@ -153,7 +160,9 @@ def test_json_mode(benchmark_spec, request):
 
     result_data = result.get("results", {})
     metrics = {
-        name: key(result_data) if callable(key) else result_data.get(key, {}).get("score")
+        name:
+        key(result_data)
+        if callable(key) else result_data.get(key, {}).get("score")
         for name, key in task.metrics.items()
     }
     update_benchmark_summary(config_name, task_name, metrics)
