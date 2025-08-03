@@ -15,11 +15,11 @@ class BenchmarkTask:
     metrics: Dict[str, str | Callable]
 
 VLLM_CONFIGS = {
-    "Qwen/Qwen3-32B": {
-        "model": "Qwen/Qwen3-32B",
+    "Llama-3.1-8B-FP8": {
+        "model": "meta-llama/Llama-3.1-8B-Instruct",
         "tensor_parallel_size": 1,
-        "quantization": "fp4",
-        "enable_prefix_caching": False,
+        "quantization": "fp8",
+        "enable_prefix_caching": True,
     },
 }
 
