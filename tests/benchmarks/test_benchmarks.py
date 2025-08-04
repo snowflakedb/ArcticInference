@@ -8,7 +8,6 @@ from .benchmark_utils import VLLM_CONFIGS, update_benchmark_summary
 
 def test_performance(benchmark_spec, request):
     """Tests vLLM performance (throughput and latency)."""
-    # Unpack the spec for the current test case
     config_name = benchmark_spec["config_name"]
     task_name = benchmark_spec["task_name"]
     task = benchmark_spec["task_obj"]
@@ -16,7 +15,6 @@ def test_performance(benchmark_spec, request):
 
     vllm_config = VLLM_CONFIGS[config_name]
 
-    # Run the performance benchmark client
     from vllm.benchmarks.serve import add_cli_args, main
     parser = argparse.ArgumentParser()
     add_cli_args(parser)
@@ -128,14 +126,12 @@ def test_json_mode(benchmark_spec, request):
 
     with tempfile.TemporaryDirectory() as tmpdir:
         result_path = f"{tmpdir}/result.json"
-        # The evaluate_json script saves its own file, so we pass it the full path
         final_result_path = None
         benchmark_result_dir = request.config.option.benchmark_result_dir
         if benchmark_result_dir is not None:
             config_result_dir = benchmark_result_dir / config_name
             config_result_dir.mkdir(parents=True, exist_ok=True)
             final_result_path = config_result_dir / f"json_mode-{task_name}.json"
-            # Pass the final path to the script
             result_path = str(final_result_path)
 
         parser = argparse.ArgumentParser()

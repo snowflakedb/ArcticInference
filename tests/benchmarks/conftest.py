@@ -14,7 +14,6 @@ import requests
 
 import vllm
 
-# NOTE: We no longer import internal vLLM server code, making this more stable.
 from .benchmark_utils import (ACCURACY_TASKS, JSON_MODE_TASKS,
                               PERFORMANCE_TASKS, VLLM_CONFIGS,
                               get_benchmark_summary)
@@ -97,7 +96,6 @@ class BatchServerManager:
             gpus_assigned += gpus_needed
             self.port_map[config_name] = port
 
-            # Build the command and environment for the subprocess
             command = self._build_server_command(config_name, port)
             env = os.environ.copy()
             env["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, gpu_ids))
@@ -105,7 +103,7 @@ class BatchServerManager:
             print(
                 f"  -> Launching '{config_name}' on port {port} with GPUs {gpu_ids}..."
             )
-            # Launch the server as a new, independent subprocess
+
             p = subprocess.Popen(command, env=env)
             self.processes[config_name] = p
 
@@ -118,7 +116,7 @@ class BatchServerManager:
         print(
             f"\n---Terminating servers for Batch {self.current_batch_idx} ---")
         for name, p in self.processes.items():
-            if p.poll() is None:  # Check if the process is still running
+            if p.poll() is None:
                 print(
                     f"  -> Terminating '{name}' on port {self.port_map.get(name)}"
                 )
@@ -155,7 +153,6 @@ class BatchServerManager:
         url = f"http://localhost:{port}/health"
         start_time = time.time()
         while True:
-            # Check if the process terminated unexpectedly
             if process.poll() is not None:
                 raise RuntimeError(
                     f"Server on port {port} terminated unexpectedly. "
@@ -166,14 +163,12 @@ class BatchServerManager:
                     print(f"Server on port {port} is ready.")
                     return
             except requests.exceptions.RequestException:
-                pass  # Not ready yet
+                pass
 
             if time.time() - start_time > 3600:
                 raise TimeoutError(f"Server on port {port} failed to start.")
             time.sleep(5)
 
-
-# --- The rest of the file remains the same ---
 
 batch_manager = BatchServerManager()
 
