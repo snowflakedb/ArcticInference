@@ -57,6 +57,7 @@ def process_batch(
     sample_data: list[dict[str, str]],
     llm_name: str,
     options: dict[str, float | dict],
+    port: int,
 ) -> list[dict | None]:
     """Generate the outputs for the given task on the batch of sample data."""
     task_instructions = TASK_DESCRIPTIONS[task_name]["task_instructions"]
@@ -82,7 +83,7 @@ def process_batch(
 
     responses = asyncio.run(
         call_vllm_complete(prompts=prompts, llm_name=llm_name,
-                           options=options))
+                           options=options, port=port))
 
     all_rows = responses
     results: list[None | dict] = []
@@ -224,6 +225,7 @@ def main(args: argparse.Namespace):
     dataset_filepath = args.input if args.input else DATASET_WIKIQUESTIONS
     output_path = args.output
     n_samples_per_task = args.n_samples
+    port = args.port
 
     wiki_questions = load_dataset_wikiquestions(filepath=dataset_filepath)
     # Full dataset is made of 112 examples. Only use the N first samples
@@ -247,7 +249,7 @@ def main(args: argparse.Namespace):
         options: dict[str, float | dict] = {
             "temperature": 0,
             "response_format": {
-                "type": "json",
+                "type": "json_object",
                 "schema": expected_schema_json
             },
         }
@@ -258,6 +260,7 @@ def main(args: argparse.Namespace):
             sample_data=wiki_questions,
             llm_name=llm_name,
             options=options,
+            port=port,
         )
 
         # Get scores.

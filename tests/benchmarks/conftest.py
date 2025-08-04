@@ -178,48 +178,72 @@ def pytest_sessionstart(session):
 
 
 def pytest_generate_tests(metafunc):
-    if "benchmark_spec" in metafunc.fixturenames:
+    """
+    Generates one test per BATCH, not per configuration.
+    This allows a single test function to run all configs in a batch in parallel.
+    """
+    # This will match the new test functions, e.g., test_batch_json_mode
+    if "batch_spec" in metafunc.fixturenames:
         batches = metafunc.config.vllm_batches
-        all_specs: List[Dict[str, Any]] = []
-        all_ids: List[str] = []
+        all_specs = []
+        all_ids = []
+
         task_map = {
-            "test_performance": PERFORMANCE_TASKS,
-            "test_accuracy": ACCURACY_TASKS,
-            "test_json_mode": JSON_MODE_TASKS,
+            "test_batch_performance": PERFORMANCE_TASKS,
+            "test_batch_accuracy": ACCURACY_TASKS,
+            "test_batch_json_mode": JSON_MODE_TASKS,
         }
         test_func_name = metafunc.function.__name__
+        
+        # Only generate tests if the function name is one we're refactoring
         if test_func_name in task_map:
             tasks_to_run = task_map[test_func_name]
             for batch_idx, configs in enumerate(batches):
-                for config_name in configs:
-                    for task_name, task_obj in tasks_to_run.items():
-                        all_specs.append({
-                            "batch_idx": batch_idx,
-                            "config_name": config_name,
-                            "task_name": task_name,
-                            "task_obj": task_obj,
-                        })
-                        all_ids.append(
-                            f"b{batch_idx}-{config_name}-{task_name}")
-        metafunc.parametrize("benchmark_spec",
+                for task_name, task_obj in tasks_to_run.items():
+                    all_specs.append({
+                        "batch_idx": batch_idx,
+                        "configs": configs,
+                        "task_name": task_name,
+                        "task_obj": task_obj,
+                    })
+                    all_ids.append(f"b{batch_idx}-{task_name}")
+
+        metafunc.parametrize("batch_spec",
                              all_specs,
                              ids=all_ids,
                              indirect=True)
 
 
 def pytest_collection_modifyitems(session, config, items):
-    items.sort(
-        key=lambda item: item.callspec.params["benchmark_spec"]["batch_idx"])
+    """Sorts tests by their batch index to ensure sequential batch execution."""
+    # This logic is updated to look for 'batch_spec'
+    batch_items = [i for i in items if "batch_spec" in getattr(i, "callspec", {}).params]
+    
+    if not batch_items:
+        return
+
+    batch_items.sort(
+        key=lambda item: item.callspec.params["batch_spec"]["batch_idx"])
+    
+    non_batch_items = [i for i in items if i not in batch_items]
+    items[:] = batch_items + non_batch_items
 
 
 @pytest.fixture(scope="module")
-def benchmark_spec(request):
+def batch_spec(request):
+    """
+    A fixture that starts all servers for a batch and provides the test
+    function with the configuration and port mapping for that entire batch.
+    """
     spec = request.param
     batch_idx = spec["batch_idx"]
-    batches = request.config.vllm_batches
-    batch_manager.start_batch(batch_idx, batches[batch_idx])
-    config_name = spec["config_name"]
-    spec["port"] = batch_manager.port_map[config_name]
+    configs_in_batch = spec["configs"]
+    
+    # Start all servers for the given batch
+    batch_manager.start_batch(batch_idx, configs_in_batch)
+    
+    # Add the complete port map to the spec object
+    spec["port_map"] = batch_manager.port_map.copy()
     yield spec
 
 
