@@ -1,9 +1,12 @@
 import argparse
+from httpx import URL
 import json
 import multiprocessing
+import pytest
 import tempfile
 
 from .benchmark_utils import VLLM_CONFIGS, update_benchmark_summary
+from .json_mode import utils as json_mode_utils
 
 
 def test_performance(benchmark_spec, request):
@@ -124,35 +127,42 @@ def test_json_mode(benchmark_spec, request):
 
     from .json_mode.evaluate_text_json_mode import main as evaluate_json
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        result_path = f"{tmpdir}/result.json"
-        final_result_path = None
-        benchmark_result_dir = request.config.option.benchmark_result_dir
-        if benchmark_result_dir is not None:
-            config_result_dir = benchmark_result_dir / config_name
-            config_result_dir.mkdir(parents=True, exist_ok=True)
-            final_result_path = config_result_dir / f"json_mode-{task_name}.json"
-            result_path = str(final_result_path)
+    original_base_url = json_mode_utils.client.base_url
+    json_mode_utils.client.base_url = URL(f"http://localhost:{port}/v1")
 
-        parser = argparse.ArgumentParser()
-        parser.add_argument("--model", type=str, default=vllm_config["model"])
-        parser.add_argument("--output", type=str, default=result_path)
-        parser.add_argument("--port", type=int, default=port)
-        parser.add_argument("--task",
-                            type=str,
-                            default=task.config.get("task"))
-        parser.add_argument("--input",
-                            type=str,
-                            default=task.config.get("input"))
-        parser.add_argument("--n-samples",
-                            type=int,
-                            default=task.config.get("n_samples"))
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result_path = f"{tmpdir}/result.json"
+            final_result_path = None
+            benchmark_result_dir = request.config.option.benchmark_result_dir
+            if benchmark_result_dir is not None:
+                config_result_dir = benchmark_result_dir / config_name
+                config_result_dir.mkdir(parents=True, exist_ok=True)
+                final_result_path = config_result_dir / f"json_mode-{task_name}.json"
+                result_path = str(final_result_path)
 
-        args = parser.parse_args([])
-        evaluate_json(args)
+            parser = argparse.ArgumentParser()
+            parser.add_argument("--model",
+                                type=str,
+                                default=vllm_config["model"])
+            parser.add_argument("--output", type=str, default=result_path)
+            parser.add_argument("--task",
+                                type=str,
+                                default=task.config.get("task"))
+            parser.add_argument("--input",
+                                type=str,
+                                default=task.config.get("input"))
+            parser.add_argument("--n-samples",
+                                type=int,
+                                default=task.config.get("n_samples"))
 
-        with open(result_path, "r") as f:
-            result = json.load(f)
+            args = parser.parse_args([])
+            evaluate_json(args)
+
+            with open(result_path, "r") as f:
+                result = json.load(f)
+    finally:
+        json_mode_utils.client.base_url = original_base_url
 
     result_data = result.get("results", {})
     metrics = {
