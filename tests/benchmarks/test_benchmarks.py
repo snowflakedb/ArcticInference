@@ -142,23 +142,28 @@ def _run_batch_test(batch_spec: Dict, request: Any, worker_func: callable,
     benchmark_result_dir = request.config.option.benchmark_result_dir or pathlib.Path(tempfile.mkdtemp())
 
     processes = []
+    # A queue is generally more robust for collecting results than a Manager.dict
+    # and doesn't require a separate shutdown. Let's switch to it.
     results_queue = multiprocessing.Queue()
     
     print(f"\nLaunching parallel {test_type_str} benchmark for Batch {batch_spec['batch_idx']}...")
     for config_name in configs_in_batch:
         p = multiprocessing.Process(
             target=worker_func,
+            # We pass the same queue to all workers
             args=(config_name, port_map[config_name], task_name, task_obj.config,
                   benchmark_result_dir, results_queue))
         processes.append(p)
         p.start()
         print(f"  -> Started {test_type_str} worker for '{config_name}' on port {port_map[config_name]}")
 
+    # Wait for all workers to finish
     for p in processes:
         p.join()
         
     print(f"Parallel {test_type_str} benchmark for Batch {batch_spec['batch_idx']} complete. Aggregating results...")
     
+    # Collect all results from the queue
     while not results_queue.empty():
         result = results_queue.get()
         config_name = result["config_name"]
@@ -194,11 +199,11 @@ def test_batch_accuracy(batch_spec, request):
     _run_batch_test(batch_spec, request, _run_accuracy_worker, "accuracy", extractor)
 
 
-# def test_batch_json_mode(batch_spec, request):
-#     """Tests JSON mode for a whole batch in parallel."""
-#     def extractor(result_path, task_obj):
-#         with open(result_path, "r") as f:
-#             result = json.load(f)
-#         result_data = result.get("results", {})
-#         return {name: key(result_data) if callable(key) else result_data.get(key, {}).get("score") for name, key in task_obj.metrics.items()}
-#     _run_batch_test(batch_spec, request, _run_json_eval_worker, "JSON mode", extractor)
+def test_batch_json_mode(batch_spec, request):
+    """Tests JSON mode for a whole batch in parallel."""
+    def extractor(result_path, task_obj):
+        with open(result_path, "r") as f:
+            result = json.load(f)
+        result_data = result.get("results", {})
+        return {name: key(result_data) if callable(key) else result_data.get(key, {}).get("score") for name, key in task_obj.metrics.items()}
+    _run_batch_test(batch_spec, request, _run_json_eval_worker, "JSON mode", extractor)
