@@ -51,13 +51,15 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
 def _schedule_configs() -> List[List[str]]:
     sorted_configs = sorted(
         VLLM_CONFIGS.items(),
-        key=lambda item: item[1].get("tensor_parallel_size", 1),
+        key=lambda item: item[1].get("tensor_parallel_size", 1) * item[1].get(
+            "ulysses_sequence_parallel_size", 1),
         reverse=True)
     batches: List[List[str]] = []
     current_batch: List[str] = []
     gpus_used_in_batch = 0
     for name, config in sorted_configs:
-        gpus_needed = config.get("tensor_parallel_size", 1)
+        gpus_needed = config.get("tensor_parallel_size", 1) * config.get(
+            "ulysses_sequence_parallel_size", 1)
         if gpus_used_in_batch + gpus_needed <= MAX_GPUS:
             current_batch.append(name)
             gpus_used_in_batch += gpus_needed
@@ -89,7 +91,8 @@ class BatchServerManager:
         for i, config_name in enumerate(batch_configs):
             port = BASE_PORT + i
             gpus_needed = VLLM_CONFIGS[config_name].get(
-                "tensor_parallel_size", 1)
+                "tensor_parallel_size", 1) * VLLM_CONFIGS[config_name].get(
+                    "ulysses_sequence_parallel_size", 1)
             gpu_ids = gpu_pool[gpus_assigned:gpus_assigned + gpus_needed]
             gpus_assigned += gpus_needed
             self.port_map[config_name] = port
