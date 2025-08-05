@@ -10,9 +10,6 @@ import pytest
 
 from .benchmark_utils import VLLM_CONFIGS, update_benchmark_summary
 
-# =============================================================================
-# Serial Tests
-# =============================================================================
 
 def test_performance(benchmark_spec, request):
     """Tests vLLM performance (throughput/latency) in serial."""
@@ -47,7 +44,6 @@ def test_performance(benchmark_spec, request):
 
 
 def test_json_mode(benchmark_spec, request):
-    """Tests JSON mode capability in serial."""
     config_name = benchmark_spec["config_name"]
     task_name = benchmark_spec["task_name"]
     task = benchmark_spec["task_obj"]
@@ -79,9 +75,6 @@ def test_json_mode(benchmark_spec, request):
                for name, key in task.metrics.items()}
     update_benchmark_summary(config_name, task_name, metrics)
 
-# =============================================================================
-# Parallel Accuracy Test
-# =============================================================================
 
 def _run_lm_eval_harness(queue, lm_eval_config, model_name, port):
     try:

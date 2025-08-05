@@ -45,8 +45,6 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
 
 
 def _schedule_configs() -> List[List[str]]:
-    """Schedules configs into batches based on their total GPU requirement."""
-    # This calculation now correctly includes sequence parallelism.
     sorted_configs = sorted(
         VLLM_CONFIGS.items(),
         key=lambda item: item[1].get("tensor_parallel_size", 1) * item[1].get(
@@ -56,7 +54,6 @@ def _schedule_configs() -> List[List[str]]:
     current_batch: List[str] = []
     gpus_used_in_batch = 0
     for name, config in sorted_configs:
-        # This calculation now correctly includes sequence parallelism.
         gpus_needed = config.get("tensor_parallel_size", 1) * config.get(
             "ulysses_sequence_parallel_size", 1)
         if gpus_used_in_batch + gpus_needed <= MAX_GPUS:
@@ -89,7 +86,6 @@ class BatchServerManager:
         gpus_assigned = 0
         for i, config_name in enumerate(batch_configs):
             port = BASE_PORT + i
-            # This calculation now correctly includes sequence parallelism.
             gpus_needed = VLLM_CONFIGS[config_name].get(
                 "tensor_parallel_size", 1) * VLLM_CONFIGS[config_name].get(
                     "ulysses_sequence_parallel_size", 1)
