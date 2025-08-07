@@ -747,7 +747,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         return results
 
-    def load_model(self) -> None:
+    def load_model(self, eep_scale_up: bool = False) -> None:
         load_shift_model = (
             self.vllm_config.parallel_config.enable_shift_parallel)
 
@@ -755,7 +755,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             # Make a deep copy of the config before loading the model.
             shift_config = copy.deepcopy(self.vllm_config)
 
-        self._orig_load_model()
+        self._orig_load_model(eep_scale_up)
 
         if self.parallel_config.ulysses_sequence_parallel_size > 1:
             self.monkeypatch_forward()
