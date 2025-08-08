@@ -23,16 +23,26 @@ class SpeculatorTPInit():
         self.init_tensor_parallelism()
 
     def init_tensor_parallelism(self):
-        from vllm.distributed.parallel_state import (_TP, _SP)
+        # from vllm.distributed.parallel_state import (_TP, _SP)
+
+        # tp_world_size = _TP.world_size
+        # sp_world_size = _SP.world_size
+
+        # # Work around due to cuda graph capture failure using SP_TP_GROUP's AllGather
+        # self.tp_size = max(tp_world_size, sp_world_size)
+        # self.tp_rank = _TP.rank % self.tp_size
+
+        # self.TP_GROUP = _SP if sp_world_size > tp_world_size else _TP
+
+        from vllm.distributed.parallel_state import (_TP)
 
         tp_world_size = _TP.world_size
-        sp_world_size = _SP.world_size
 
         # Work around due to cuda graph capture failure using SP_TP_GROUP's AllGather
-        self.tp_size = max(tp_world_size, sp_world_size)
+        self.tp_size = tp_world_size
         self.tp_rank = _TP.rank % self.tp_size
 
-        self.TP_GROUP = _SP if sp_world_size > tp_world_size else _TP
+        self.TP_GROUP = _TP
 
 
 class UnquantizedEmbeddingMethod(QuantizeMethodBase):
