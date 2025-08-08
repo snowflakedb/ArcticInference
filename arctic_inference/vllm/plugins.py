@@ -123,4 +123,4 @@ def arctic_inference_plugin():
     MLPSpeculatorConfigPatch.apply_patch()
 
     # Main optimization patches.
-    apply_shift_parallel_patches()
+    # apply_shift_parallel_patches()
