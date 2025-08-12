@@ -123,4 +123,6 @@ def arctic_inference_plugin():
     MLPSpeculatorConfigPatch.apply_patch()
 
     # Main optimization patches.
-    apply_shift_parallel_patches()
+    from arctic_inference.envs import ARCTIC_INFERENCE_SKIP_ULYSSES_PATCH
+    if not ARCTIC_INFERENCE_SKIP_ULYSSES_PATCH:
+        apply_shift_parallel_patches()
