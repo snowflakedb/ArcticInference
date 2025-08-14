@@ -50,7 +50,7 @@ def apply_shift_parallel_patches():
     UlyssesMultiprocExecutorPatch.apply_patch()
     UlyssesAttentionPatch.apply_patch()
     PiecewiseCompileInterpreterPatch.apply_patch()
-    UlyssesFusedMoEPatch.apply_patch()
+    # UlyssesFusedMoEPatch.apply_patch()
 
 
 class UlyssesModelConfigPatch(ArcticPatch[ModelConfig]):
