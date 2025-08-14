@@ -124,3 +124,15 @@ def arctic_inference_plugin():
 
     # Main optimization patches.
     apply_shift_parallel_patches()
+
+    from vllm.reasoning import OpenAIReasoningParser
+    def is_reasoning_end(self, input_ids: list[int]) -> bool:
+        end_token_ids = self.reasoning_end_token_ids
+        assert len(end_token_ids) > 0, "reasoning_end_token_ids is empty"
+        # Check if the end sequence is present in the input_ids.
+        # We search from the end of input_ids to find the last match.
+        for i in range(len(input_ids) - len(end_token_ids), -1, -1):
+            if input_ids[i:i + len(end_token_ids)] == end_token_ids:
+                return True
+        return False
+    OpenAIReasoningParser.is_reasoning_end = is_reasoning_end
