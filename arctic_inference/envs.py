@@ -17,7 +17,7 @@ import os
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
-    ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK: bool = True
+    ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK: bool = False
 
 environment_variables: dict[str, Callable[[], Any]] = {
     "ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK":
