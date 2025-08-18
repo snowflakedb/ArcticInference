@@ -231,8 +231,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         # Prepare the decoder inputs.
         (attn_metadata, attention_cuda_graphs, logits_indices,
-         spec_decode_metadata,
-         num_scheduled_tokens_np) = (self._prepare_inputs(scheduler_output))
+         spec_decode_metadata, num_scheduled_tokens_np,
+         spec_decode_common_attn_metadata) = (
+             self._prepare_inputs(scheduler_output))
+        
         num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
         use_shift_model = (self.use_ulysses and self.shift_model is not None
                            and num_scheduled_tokens
@@ -280,11 +282,14 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             # embeddings), we always use embeddings (rather than token ids)
             # as input to the multimodal model, even when the input is text.
             input_ids = self.input_ids[:num_scheduled_tokens]
-            if mm_embeds:
-                inputs_embeds = self.model.get_input_embeddings(
-                    input_ids, mm_embeds)
-            else:
-                inputs_embeds = self.model.get_input_embeddings(input_ids)
+
+            model_kwargs = self._init_model_kwargs_for_multimodal_model(
+                scheduler_output=scheduler_output)
+            inputs_embeds = self.model.get_input_embeddings(
+                input_ids=input_ids,
+                multimodal_embeddings=mm_embeds or None,
+            )
+
             # TODO(woosuk): Avoid the copy. Optimize.
             self.inputs_embeds[:num_scheduled_tokens].copy_(inputs_embeds)
             inputs_embeds = self.inputs_embeds[:num_input_tokens]
@@ -296,6 +301,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             # then the embedding layer is not included in the CUDA graph.
             input_ids = self.input_ids[:num_input_tokens]
             inputs_embeds = None
+            model_kwargs = {}
         if self.uses_mrope:
             positions = self.mrope_positions[:, :num_input_tokens]
         else:
@@ -320,21 +326,22 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 num_tokens=num_input_tokens,
                 num_tokens_across_dp=num_tokens_across_dp,
                 skip_cuda_graphs=skip_cuda_graphs,
-        ):
-            self.maybe_setup_kv_connector(scheduler_output)
+        ), self.maybe_get_kv_connector_output(
+                scheduler_output) as kv_connector_output:
 
             model = self.shift_model if use_shift_model else self.model
+            from vllm.multimodal.inputs import MultiModalKwargs
             with set_shift_parallel_mode(use_shift_model):
                 model_output = model(
                     input_ids=input_ids,
                     positions=positions,
                     intermediate_tensors=intermediate_tensors,
                     inputs_embeds=inputs_embeds,
+                    **MultiModalKwargs.as_kwargs(
+                        model_kwargs,
+                        device=self.device,
+                    ),
                 )
-
-            self.maybe_wait_for_kv_save()
-            finished_sending, finished_recving = (
-                self.get_finished_kv_transfers(scheduler_output))
 
         if self.use_aux_hidden_state_outputs:
             hidden_states, aux_hidden_states = model_output
@@ -351,17 +358,17 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             == "external_launcher" and len(get_pp_group().ranks) > 0
         if not get_pp_group().is_last_rank:
             # For mid-pipeline stages, return the hidden states.
-            if not broadcast_pp_output:
-                return hidden_states
             assert isinstance(hidden_states, IntermediateTensors)
+            if not broadcast_pp_output:
+                hidden_states.kv_connector_output = kv_connector_output
+                return hidden_states
             get_pp_group().send_tensor_dict(hidden_states.tensors,
                                             all_gather_group=get_tp_group())
             logits = None
         else:
             if self.input_batch.pooling_params:
                 return self._pool(hidden_states, num_scheduled_tokens,
-                                  num_scheduled_tokens_np, finished_sending,
-                                  finished_recving)
+                                  num_scheduled_tokens_np, kv_connector_output)
 
             sample_hidden_states = hidden_states[logits_indices]
             logits = self.model.compute_logits(sample_hidden_states, None)
@@ -492,6 +499,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             # Speculative decoding is not enabled.
             spec_token_ids = None
         else:
+            assert spec_decode_common_attn_metadata is not None
             spec_token_ids = self.propose_draft_token_ids(
                 scheduler_output,
                 valid_sampled_token_ids,
@@ -501,12 +509,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 sample_hidden_states,
                 aux_hidden_states,
                 spec_decode_metadata,
-                attn_metadata,
+                spec_decode_common_attn_metadata,
             )
-
-        # Clear KVConnector state after all KVs are generated.
-        if has_kv_transfer_group():
-            get_kv_transfer_group().clear_connector_metadata()
 
         self.eplb_step()
 
@@ -518,11 +522,11 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             logprobs=logprobs_lists,
             prompt_logprobs_dict=prompt_logprobs_dict,
             pooler_output=[],
-            finished_sending=finished_sending,
-            finished_recving=finished_recving,
+            kv_connector_output=kv_connector_output,
             num_nans_in_logits=num_nans_in_logits,
         )
 
+    from vllm.v1.attention.backends.utils import CommonAttentionMetadata
     def propose_draft_token_ids(
         self,
         scheduler_output: "SchedulerOutput",
@@ -533,7 +537,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         sample_hidden_states: torch.Tensor,
         aux_hidden_states: Optional[torch.Tensor],
         spec_decode_metadata: Optional[SpecDecodeMetadata],
-        attn_metadata: dict[str, Any],
+        common_attn_metadata: CommonAttentionMetadata,
     ) -> list[list[int]]:
         disable_spec_decode = (self.speculative_config and
                                self.speculative_config.disable_by_batch_size
@@ -589,7 +593,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 sample_hidden_states,
                 aux_hidden_states,
                 spec_decode_metadata,
-                attn_metadata,
+                common_attn_metadata,
             )
 
         if spec_token_ids is None:
@@ -743,7 +747,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         return results
 
-    def load_model(self) -> None:
+    def load_model(self, eep_scale_up: bool = False) -> None:
         load_shift_model = (
             self.vllm_config.parallel_config.enable_shift_parallel)
 
@@ -751,7 +755,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             # Make a deep copy of the config before loading the model.
             shift_config = copy.deepcopy(self.vllm_config)
 
-        self._orig_load_model()
+        self._orig_load_model(eep_scale_up)
 
         if self.parallel_config.ulysses_sequence_parallel_size > 1:
             self.monkeypatch_forward()
