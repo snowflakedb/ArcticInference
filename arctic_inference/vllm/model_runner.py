@@ -820,7 +820,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         with freeze_gc(), parallel_state.graph_capture(device=self.device):
             cudagraph_mode = self.compilation_config.cudagraph_mode
             sp_size = self.parallel_config.ulysses_sequence_parallel_size
-            full_cg = cudagraph_mode.decode_mode() == CUDAGraphMode.FULL
+            #full_cg = cudagraph_mode.decode_mode() == CUDAGraphMode.FULL
             # capture original model shapes
             compilation_cases = (
                 shape for shape in reversed(self.cudagraph_batch_sizes)
@@ -838,11 +838,13 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 for _ in range(self.compilation_config.cudagraph_num_of_warmups):
                     self._dummy_run(num_tokens * sp_size,
                                     cudagraph_runtime_mode=CUDAGraphMode.NONE,
-                                    force_attention=full_cg,
+                                    # force_attention=full_cg,
+                                    uniform_decode=True,
                                     skip_eplb=True)
                 self._dummy_run(num_tokens * sp_size,
-                                cudagraph_runtime_mode=CUDAGraphMode.NONE,
-                                force_attention=full_cg,
+                                cudagraph_runtime_mode=CUDAGraphMode.PIECEWISE,
+                                # force_attention=full_cg,
+                                uniform_decode=True,
                                 skip_eplb=True)
 
             # Capture shift model shapes
