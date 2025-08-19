@@ -782,7 +782,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             self.shift_parallel_threshold = 0
 
     def capture_model(self) -> None:
-        if not self.use_cuda_graph:
+        if self.compilation_config.cudagraph_mode == CUDAGraphMode.NONE:
             logger.warning(
                 "Skipping CUDA graph capture. To turn on CUDA graph capture, "
                 "set -O %s and ensure `use_cudagraph` was not manually set to "

@@ -49,10 +49,10 @@ def apply_shift_parallel_patches():
     UlyssesWorkerProcPatch.apply_patch()
     UlyssesMultiprocExecutorPatch.apply_patch()
     UlyssesAttentionPatch.apply_patch()
-    PiecewiseCompileInterpreterPatch.apply_patch()
     
     from arctic_inference.envs import ARCTIC_INFERENCE_SKIP_ULYSSES_PATCH
     if not ARCTIC_INFERENCE_SKIP_ULYSSES_PATCH:
+        PiecewiseCompileInterpreterPatch.apply_patch()
         UlyssesFusedMoEPatch.apply_patch()
 
 
