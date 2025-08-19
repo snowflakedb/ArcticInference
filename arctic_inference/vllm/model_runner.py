@@ -15,6 +15,7 @@
 
 import contextlib
 import copy
+import gc
 import time
 from typing import Any, Union, Optional, TYPE_CHECKING
 from itertools import tee
@@ -26,6 +27,7 @@ import vllm.envs as envs
 from tqdm import tqdm
 from vllm.attention.layer import Attention
 from vllm.compilation.counter import compilation_counter
+from vllm.compilation.monitor import set_cudagraph_capturing_enabled
 from vllm.config import CompilationLevel
 from vllm.distributed.kv_transfer import (get_kv_transfer_group,
                                           has_kv_transfer_group)
@@ -785,21 +787,40 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         if self.compilation_config.cudagraph_mode == CUDAGraphMode.NONE:
             logger.warning(
                 "Skipping CUDA graph capture. To turn on CUDA graph capture, "
-                "set -O %s and ensure `use_cudagraph` was not manually set to "
-                "False", CompilationLevel.PIECEWISE)
+                "ensure `cudagraph_mode` was not manually set to `NONE`")
             return
+        else:
+            self.initialize_cudagraph_capture()
 
         compilation_counter.num_gpu_runner_capture_triggers += 1
 
         start_time = time.perf_counter()
         start_free_gpu_memory = torch.cuda.mem_get_info()[0]
 
+        from contextlib import contextmanager
+        @contextmanager
+        def freeze_gc():
+            # Optimize garbage collection during CUDA graph capture.
+            # Clean up, then freeze all remaining objects from being included
+            # in future collections.
+            gc.collect()
+            should_freeze = not envs.VLLM_ENABLE_CUDAGRAPH_GC
+            if should_freeze:
+                gc.freeze()
+            try:
+                yield
+            finally:
+                if should_freeze:
+                    gc.unfreeze()
+
         # Trigger CUDA graph capture for specific shapes.
         # Capture the large shapes first so that the smaller shapes
         # can reuse the memory pool allocated for the large shapes.
-        with parallel_state.graph_capture(device=self.device):
+        set_cudagraph_capturing_enabled(True)
+        with freeze_gc(), parallel_state.graph_capture(device=self.device):
+            cudagraph_mode = self.compilation_config.cudagraph_mode
             sp_size = self.parallel_config.ulysses_sequence_parallel_size
-            full_cg = self.full_cuda_graph
+            full_cg = cudagraph_mode.decode_mode() == CUDAGraphMode.FULL
             # capture original model shapes
             compilation_cases = (
                 shape for shape in reversed(self.cudagraph_batch_sizes)
@@ -814,13 +835,14 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                     desc="Capturing CUDA graph shapes of original model")
             for num_tokens in compilation_cases:
                 # We skip EPLB here since we don't want to record dummy metrics
-                for _ in range(self.vllm_config.compilation_config.
-                               cudagraph_num_of_warmups):
+                for _ in range(self.compilation_config.cudagraph_num_of_warmups):
                     self._dummy_run(num_tokens * sp_size,
-                                    capture_attn_cudagraph=full_cg,
+                                    cudagraph_runtime_mode=CUDAGraphMode.NONE,
+                                    force_attention=full_cg,
                                     skip_eplb=True)
                 self._dummy_run(num_tokens * sp_size,
-                                capture_attn_cudagraph=full_cg,
+                                cudagraph_runtime_mode=CUDAGraphMode.NONE,
+                                force_attention=full_cg,
                                 skip_eplb=True)
 
             # Capture shift model shapes
@@ -852,6 +874,13 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                                         capture_attn_cudagraph=full_cg,
                                         skip_eplb=True)
                 self.model = orig_model
+
+        # Disable cudagraph capturing globally, so any unexpected cudagraph
+        # capturing will be detected and raise an error after here.
+        # Note: We don't put it into graph_capture context manager because
+        # we may doing lazy capturing in future that still allows capturing
+        # after here.
+        set_cudagraph_capturing_enabled(False)
 
         end_time = time.perf_counter()
         end_free_gpu_memory = torch.cuda.mem_get_info()[0]
