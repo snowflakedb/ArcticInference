@@ -169,13 +169,13 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 self.model = orig_model
 
     def _prepare_inputs(self, *args, **kwargs):
-        attn_metadata, attention_cuda_graphs, logits_indices, *rest = (
+        attn_metadata, logits_indices, spec_decode_metadata, *rest = (
             self._orig_prepare_inputs(*args, **kwargs))
         # SwiftKV requires knowing the logits indices from inside the model
         # definition in order to early-stop the prefill tokens.
         for meta in attn_metadata.values():
             meta.swiftkv_logits_indices = logits_indices
-        return attn_metadata, attention_cuda_graphs, logits_indices, *rest
+        return attn_metadata, logits_indices, spec_decode_metadata, *rest
 
     def monkeypatch_forward(self: GPUModelRunner):
         sp_size = parallel_state._SP.world_size
