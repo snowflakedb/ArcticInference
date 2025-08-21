@@ -369,8 +369,12 @@ def main(args: argparse.Namespace):
         (dataset, train_dataset, i, *v) for i, v in enumerate(config_values)]
 
     records = []
-    with mp.Pool(args.parallel) as pool:
-        for results in pool.starmap(process_task, config_values):
+    if args.parallel and args.parallel > 1:
+        with mp.Pool(args.parallel) as pool:
+            for results in pool.starmap(process_task, config_values):
+                records.extend(results)
+    else:
+        for results in [process_task(*cfg) for cfg in config_values]:
             records.extend(results)
 
     print("Preparing results...")
@@ -458,7 +462,6 @@ def get_parser():
         "-p",
         "--parallel",
         type=int,
-        default=16,
         help="Max number of parallel processes",
     )
     parser.add_argument(
