@@ -238,7 +238,7 @@ def results_summary(df: pd.DataFrame, config_cols: List[str]) -> pd.DataFrame:
     summary["update_ms_per_tok"] = (
         summary["sum_update_ms"] / summary["sum_out_toks"])
     # Calculate columns to drop from the summary
-    drop_cols = [col for col in config_cols if summary[col].nunique() == 1]
+    drop_cols = [col for col in config_cols[1:] if summary[col].nunique() == 1]
     drop_cols.extend([
         "sum_accept_toks",
         "sum_spec_toks",
@@ -374,8 +374,8 @@ def main(args: argparse.Namespace):
             for results in pool.starmap(process_task, config_values):
                 records.extend(results)
     else:
-        for results in [process_task(*cfg) for cfg in config_values]:
-            records.extend(results)
+        for cfg in config_values:
+            records.extend(process_task(*cfg))
 
     print("Preparing results...")
 
