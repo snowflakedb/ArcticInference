@@ -31,16 +31,19 @@ struct Node {
     // Children nodes, the key should always be the first token of the child.
     std::unordered_map<int, std::unique_ptr<Node>> children;
 
-    // ID of a "reference" sequence that contains the tokens in this node.
-    int seq_id;
+    // For each sequence that contains this node, tracks the start index of the
+    // tokens in this node within that sequence. The start index for sequence s
+    // is idx_in_seq[s] + idx_offset.
+    std::unordered_map<int, int> idx_in_seq;
 
-    // Start index of this node's tokens in the reference sequence.
-    int start;
+    // Global offset of the start indices in all sequences. Used internally to
+    // efficiently adjust the indices for all sequences that contain this node.
+    int idx_offset;
 
     // Number of tokens in this node.
     int length;
 
-    Node() : count(0), parent(nullptr), seq_id(-1), start(0), length(0) {}
+    Node() : count(0), parent(nullptr), idx_offset(0), length(0) {}
 };
 
 struct Candidate {
@@ -75,12 +78,19 @@ public:
     // Append multiple new elements to the sequence with id seq_id.
     void extend(int seq_id, const std::vector<int>& tokens);
 
+    // Remove the sequence with id seq_id.
+    void remove(int seq_id);
+
     Candidate speculate(const std::vector<int>& pattern,
                         int max_spec_tokens,
                         float max_spec_factor = 1.0f,
                         float max_spec_offset = 0.0f,
                         float min_token_prob = 0.1f,
                         bool use_tree_spec = false);
+
+    bool check_integrity();
+
+    bool check_integrity(Node* node);
 
 private:
 

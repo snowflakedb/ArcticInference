@@ -175,7 +175,7 @@ setup(
     ext_modules=[
         CMakeExtension("arctic_inference.common.suffix_cache._C",
                        "csrc/suffix_cache"),
-        CMakeExtension("arctic_inference.custom_ops", "csrc/custom_ops"),
+        #CMakeExtension("arctic_inference.custom_ops", "csrc/custom_ops"),
     ],
     cmdclass={
         "build_ext": CMakeBuild,
