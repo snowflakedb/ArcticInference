@@ -7,6 +7,7 @@
 </h3>
 
 ## Latest news
+* [2025/08] - [Fast Reasoning on GPT-OSS with Speculative Decoding and Arctic Inference](https://www.snowflake.com/en/engineering-blog/faster-gpt-oss-reasoning-arctic-inference/)
 * [2025/05] - [Arctic Inference w. Shift Parallelism: The Fastest Open Source Inference System for Enterprise AI](https://www.snowflake.com/en/engineering-blog/arctic-inference-shift-parallelism/)
 * [2025/05] - [Scaling vLLM for Embeddings: 16x Throughput and Cost Reduction](https://www.snowflake.com/en/engineering-blog/embedding-inference-arctic-16x-faster/)
 * [2025/05] - [Fastest Speculative Decoding in vLLM with Arctic Inference and Arctic Training](https://www.snowflake.com/en/engineering-blog/fast-speculative-decoding-vllm-arctic/)
