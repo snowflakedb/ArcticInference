@@ -1,222 +1,151 @@
 import argparse
 import json
 import multiprocessing
+import pathlib
 import tempfile
-import time
+import traceback
+from typing import Any, Dict
 
 import pytest
-import requests
-import uvloop
-from vllm.entrypoints.openai.api_server import (
-    make_arg_parser, run_server, validate_parsed_serve_args)
-from vllm.utils import FlexibleArgumentParser
 
-from .benchmark_utils import (ACCURACY_TASKS, PERFORMANCE_TASKS, VLLM_CONFIGS,
-                              JSON_MODE_TASKS, update_benchmark_summary)                  
-
-CUSTOM_PORT = 8080
-
-@pytest.fixture(scope="module", params=list(VLLM_CONFIGS.keys()))
-def vllm_server(request):
-    """
-    Fixture to start the OpenAI API server for testing.
-    """
-    parser = FlexibleArgumentParser()
-    parser = make_arg_parser(parser)
-
-    args = parser.parse_args([])
-    args.disable_log_requests = True
-    args.disable_uvicorn_access_log = True
-
-    setattr(args, 'port', CUSTOM_PORT)
-
-    for key, value in VLLM_CONFIGS[request.param].items():
-        setattr(args, key, value)
-
-    validate_parsed_serve_args(args)
-
-    def _run_process():
-        uvloop.run(run_server(args))
-
-    # Start server process
-    process = multiprocessing.Process(target=_run_process)
-    process.start()
-
-    print("Waiting for server to start...")
-    timeout = 3600
-    interval = 5
-    start = time.time()
-
-    health_check_url = f"http://localhost:{CUSTOM_PORT}/v1/models"
-
-    while True:
-        try:
-            r = requests.get(health_check_url)
-            if r.status_code == 200:
-                break
-        except requests.exceptions.ConnectionError:
-            pass
-        if not process.is_alive():
-            raise RuntimeError("Server process terminated unexpectedly")
-        if time.time() - start > timeout:
-            raise TimeoutError(f"Server didn't start after {timeout} seconds")
-        time.sleep(interval)
-    print("Server process started")
-
-    yield request.param, args
-
-    # Stop server process
-    print("Terminating server process")
-    if process.is_alive():
-        process.terminate()
-        process.join()
-    print("Server process terminated")
+from .benchmark_utils import VLLM_CONFIGS, update_benchmark_summary
 
 
-@pytest.mark.parametrize("task_name", list(PERFORMANCE_TASKS.keys()))
-def test_performance(request, vllm_server, task_name):
-    from vllm.benchmarks.serve import add_cli_args, main
-
-    config_name, vllm_args = vllm_server
-    task = PERFORMANCE_TASKS[task_name]
-
+def test_performance(benchmark_spec, request):
+    """Tests vLLM performance (throughput/latency) in serial."""
+    config_name = benchmark_spec["config_name"]
+    task_name = benchmark_spec["task_name"]
+    task = benchmark_spec["task_obj"]
+    port = benchmark_spec["port"]
+    vllm_config = VLLM_CONFIGS[config_name]
+    
+    from vllm.benchmarks.serve import add_cli_args, main as benchmark_serve_main
     parser = argparse.ArgumentParser()
     add_cli_args(parser)
+    args = parser.parse_args(["--model", vllm_config["model"], "--port", str(port)])
 
-    args = parser.parse_args(["--model", vllm_args.model])
+    result_path = (request.config.option.benchmark_result_dir / config_name /
+                   f"performance-{task_name}.json")
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    for key, value in task.config.items():
+        setattr(args, key, value)
+    args.save_result = True
+    args.result_dir = str(result_path.parent)
+    args.result_filename = str(result_path.name)
+    
+    benchmark_serve_main(args)
 
-    setattr(args, 'port', CUSTOM_PORT)
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        args.save_result = True
-        args.result_dir = str(tmpdir)
-        args.result_filename = "result.json"
-
-        for key, value in task.config.items():
-            setattr(args, key, value)
-
-        main(args)
-
-        with open(f"{tmpdir}/result.json", "r") as f:
-            result = json.load(f)
-
-    benchmark_result_dir = request.config.option.benchmark_result_dir
-    if benchmark_result_dir is not None:
-        result_path = (benchmark_result_dir / "performance" /
-                       f"{config_name}-{task_name}.json")
-        result_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(result_path, "w") as f:
-            json.dump(result, f, indent=4)
-
+    with open(result_path, "r") as f:
+        result = json.load(f)
     metrics = {name: key(result) if callable(key) else result[key]
                for name, key in task.metrics.items()}
     update_benchmark_summary(config_name, task_name, metrics)
 
 
-@pytest.mark.parametrize("task_name", list(ACCURACY_TASKS.keys()))
-def test_accuracy(request, vllm_server, task_name):
+def test_json_mode(benchmark_spec, request):
+    config_name = benchmark_spec["config_name"]
+    task_name = benchmark_spec["task_name"]
+    task = benchmark_spec["task_obj"]
+    port = benchmark_spec["port"]
+    vllm_config = VLLM_CONFIGS[config_name]
 
-    config_name, vllm_args = vllm_server
-    task = ACCURACY_TASKS[task_name]
+    if vllm_config.get("speculative_config", {}).get("enable_suffix_decoding"):
+        pytest.skip("Skipping JSON mode test for spec + suffix decoding.")
 
-    assert len(task.config["tasks"]) == 1, \
-        "Accuracy benchmarks should only have one task configured"
-
-    q = multiprocessing.Queue()
-
-    def _run_process():
-        # Run lm_eval in a separate process because it imports torch and
-        # initializes CUDA, which breaks process forking in later tests.
-        try:
-            from lm_eval import evaluator
-            from lm_eval.utils import handle_non_serializable, make_table
-
-            base_url = f"http://localhost:{CUSTOM_PORT}/v1/completions"
-
-            result = evaluator.simple_evaluate(
-                model="local-completions",
-                model_args={
-                    "model": vllm_args.model,
-                    "base_url": base_url,
-                    "num_concurrent": 256,
-                    "timeout": 3600,
-                },
-                **task.config,
-            )
-            print(make_table(result))
-
-            tmpfile = f"{tmpdir}/result.json"
-            with open(tmpfile, "w") as f:
-                json.dump(result, f, indent=4, default=handle_non_serializable)
-        except Exception as exc:
-            # If an exception occurs, put it in the queue to be raised later
-            q.put(exc)
-        else:
-            # Send back the temporary file path instead of the result object
-            # since multiprocessing queue can hang on large objects.
-            q.put(tmpfile)
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        process = multiprocessing.Process(target=_run_process)
-        process.start()
-        r = q.get()
-        process.join()
-        if isinstance(r, Exception):
-            raise r
-        tmpfile = r
-        with open(tmpfile, "r") as f:
-            result = json.load(f)
-
-    benchmark_result_dir = request.config.option.benchmark_result_dir
-    if benchmark_result_dir is not None:
-        result_path = (benchmark_result_dir / "accuracy" /
-                       f"{config_name}-{task_name}.json")
-        result_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(result_path, "w") as f:
-            json.dump(result, f, indent=4)
-
-    result = result["results"][task.config["tasks"][0]]
-    metrics = {name: key(result) if callable(key) else result[key]
-               for name, key in task.metrics.items()}
-    update_benchmark_summary(config_name, task_name, metrics)
-
-
-@pytest.mark.parametrize("task_name", list(JSON_MODE_TASKS.keys()))
-def test_json_mode(request, vllm_server, task_name):
-    """
-    Test JSON mode using the evaluate_text_json_mode script.
-    """
     from .json_mode.evaluate_text_json_mode import main as evaluate_json
 
-    config_name, vllm_args = vllm_server
-    task = JSON_MODE_TASKS[task_name]
-
-    if (vllm_args.speculative_config and
-            vllm_args.speculative_config.get('enable_suffix_decoding', False)):
-        pytest.skip("Skipping JSON mode test for spec + suffix decoding enabled")
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        result_path = f"{tmpdir}/result.json"
-
-        args = FlexibleArgumentParser()
-        args.model = vllm_args.model
-        args.output = result_path
-        args.task = task.config["task"]
-        args.input = task.config["input"]
-        args.n_samples = task.config["n_samples"]
-
-        args.port = CUSTOM_PORT
-
-        evaluate_json(args)
-
-        with open(result_path, "r") as f:
-            result = json.load(f)
-
-    result_data = result.get("results", {})
+    result_path = (request.config.option.benchmark_result_dir / config_name /
+                   f"json_mode-{task_name}.json")
+    result_path.parent.mkdir(parents=True, exist_ok=True)
     
-    metrics = {
-        name: key(result_data) if callable(key) else result_data.get(key, {}).get('score')
-        for name, key in task.metrics.items()
-    }
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str, default=vllm_config["model"])
+    parser.add_argument("--output", type=str, default=str(result_path))
+    parser.add_argument("--port", type=int, default=port)
+    for key, value in task.config.items():
+        parser.add_argument(f"--{key}", type=type(value), default=value)
 
+    evaluate_json(parser.parse_args([]))
+    
+    with open(result_path, "r") as f:
+        result = json.load(f)
+    result_data = result.get("results", {})
+    metrics = {name: key(result_data) if callable(key) else result_data.get(key, {}).get("score")
+               for name, key in task.metrics.items()}
     update_benchmark_summary(config_name, task_name, metrics)
+
+
+def _run_lm_eval_harness(queue, lm_eval_config, model_name, port):
+    try:
+        from lm_eval import evaluator
+        result = evaluator.simple_evaluate(
+            model="local-completions",
+            model_args={"model": model_name, "base_url": f"http://localhost:{port}/v1/completions"},
+            **lm_eval_config)
+        queue.put(result)
+    except Exception as exc:
+        queue.put(exc)
+
+def _run_accuracy_worker(config_name, port, task_name, task_config,
+                         benchmark_result_dir, results_queue):
+    try:
+        from lm_eval.utils import handle_non_serializable, make_table
+        vllm_config = VLLM_CONFIGS[config_name]
+        queue = multiprocessing.Queue()
+        eval_process = multiprocessing.Process(
+            target=_run_lm_eval_harness,
+            args=(queue, task_config, vllm_config["model"], port))
+        eval_process.start()
+        result_or_exc = queue.get()
+        eval_process.join()
+        if isinstance(result_or_exc, Exception): raise result_or_exc
+        
+        result = result_or_exc
+        print(f"Accuracy results for '{config_name}':\n{make_table(result)}")
+        
+        result_path = benchmark_result_dir / config_name / f"accuracy-{task_name}.json"
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(result_path, "w") as f:
+            json.dump(result, f, indent=4, default=handle_non_serializable)
+        results_queue.put({"config_name": config_name, "result_path": result_path})
+    except Exception as e:
+        results_queue.put({"config_name": config_name, "error": str(e), "traceback": traceback.format_exc()})
+
+def test_batch_accuracy(batch_spec, request):
+    """Tests model accuracy for a whole batch in parallel."""
+    try:
+        multiprocessing.set_start_method("spawn", force=True)
+    except RuntimeError:
+        pass
+        
+    task_name = batch_spec["task_name"]
+    task_obj = batch_spec["task_obj"]
+    configs_in_batch = batch_spec["configs"]
+    port_map = batch_spec["port_map"]
+    benchmark_result_dir = request.config.option.benchmark_result_dir or pathlib.Path(tempfile.mkdtemp())
+
+    processes, results_queue = [], multiprocessing.Queue()
+    for config_name in configs_in_batch:
+        p = multiprocessing.Process(
+            target=_run_accuracy_worker,
+            args=(config_name, port_map[config_name], task_name,
+                  task_obj.config, benchmark_result_dir, results_queue))
+        processes.append(p)
+        p.start()
+    for p in processes:
+        p.join()
+        
+    while not results_queue.empty():
+        result = results_queue.get()
+        config_name = result["config_name"]
+        if "error" in result:
+            pytest.fail(f"Worker for '{config_name}' failed:\n{result['error']}\n{result['traceback']}")
+        
+        with open(result["result_path"], "r") as f:
+            raw_result = json.load(f)
+        lm_eval_task_name = task_obj.config["tasks"][0]
+        result_data = raw_result["results"][lm_eval_task_name]
+        metrics = {name: key(result_data) if callable(key) else result_data[key]
+                   for name, key in task_obj.metrics.items()}
+        update_benchmark_summary(config_name, task_name, metrics)
