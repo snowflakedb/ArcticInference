@@ -23,7 +23,7 @@ import torch
 import vllm.distributed.parallel_state as parallel_state
 import vllm.envs as envs
 from vllm.attention.layer import Attention
-from vllm.config import ModelConfig, ParallelConfig
+from vllm.config import ModelConfig, ParallelConfig, CompilationConfig, CUDAGraphMode, VllmConfig
 from vllm.distributed.device_communicators.shm_broadcast import MessageQueue
 from vllm.distributed.parallel_state import (init_model_parallel_group,
                                              get_world_group,
@@ -586,13 +586,36 @@ class PiecewiseCompileInterpreterPatch(ArcticPatch[PiecewiseCompileInterpreter])
                 graph_index=index,
                 num_graphs=len(self.compile_submod_names),
                 runtime_shape=None)
+            # Lazy import here to avoid circular import
+            from vllm.compilation.cuda_graph import CUDAGraphOptions
+            from vllm.compilation.cuda_piecewise_backend import PiecewiseBackend
 
-            piecewise_backend = resolve_obj_by_qualname(
-                current_platform.get_piecewise_backend_cls())
-            self.module.__dict__[target] = piecewise_backend(
-                submod, self.vllm_config, self.graph_pool, index,
+            piecewise_backend = PiecewiseBackend(
+                submod, self.vllm_config, index,
                 len(self.compile_submod_names), sym_shape_indices,
                 compiled_graph_for_general_shape, self.vllm_backend)
+            
+            if self.compilation_config.cudagraph_mode != CUDAGraphMode.NONE:
+                # resolve the static graph wrapper class (e.g. CUDAGraphWrapper
+                # class) as platform dependent.
+                static_graph_wrapper_class = resolve_obj_by_qualname(
+                    current_platform.get_static_graph_wrapper_cls())
+
+                # Always assign PIECEWISE runtime mode to the
+                # CUDAGraphWrapper for piecewise_backend, to distinguish
+                # it from the FULL cudagraph runtime mode, no matter it
+                # is wrapped on a full or piecewise fx graph.
+                self.module.__dict__[target] = static_graph_wrapper_class(
+                    runnable=piecewise_backend,
+                    vllm_config=self.vllm_config,
+                    runtime_mode=CUDAGraphMode.PIECEWISE,
+                    graph_pool=self.graph_pool,
+                    cudagraph_options=CUDAGraphOptions(
+                        debug_log_enable=piecewise_backend.is_first_graph,
+                        gc_disable=not piecewise_backend.is_first_graph,
+                        weak_ref_output=piecewise_backend.is_last_graph))
+            else:
+                self.module.__dict__[target] = piecewise_backend
 
             from vllm.compilation.counter import compilation_counter
             compilation_counter.num_piecewise_capturable_graphs_seen += 1
