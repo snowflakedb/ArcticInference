@@ -75,41 +75,38 @@ class ParallelConfigPatch(ArcticPatch[ParallelConfig]):
 
 class SpeculativeConfigPatch(ArcticPatch[SpeculativeConfig]):
 
-    _orig_from_dict = SpeculativeConfig.__dict__["from_dict"].__wrapped__
     _orig_post_init = SpeculativeConfig.__post_init__
 
     def __new__(cls, *args, **kwargs):
         # Override __new__ to return an ArcticSpeculativeConfig instead of a
         # SpeculativeConfig when creating a new instance of the class.
         if cls is SpeculativeConfig:
-            return ArcticSpeculativeConfig.__new__(ArcticSpeculativeConfig,
-                                                   *args, **kwargs)
+            return ArcticSpeculativeConfig.__new__(ArcticSpeculativeConfig, *args, **kwargs)
         return super(SpeculativeConfig, cls).__new__(cls)
 
     def __post_init__(self):
-        use_suffix = (self.method
-                      == "suffix") or (self.method is None
-                                       and self.enable_suffix_decoding)
-        if (use_suffix or self.method == "arctic") and \
-            self.disable_by_batch_size is None:
+        use_suffix = (self.method == "suffix") or (self.method is None and self.enable_suffix_decoding)
+        if (use_suffix or self.method == "arctic") and self.disable_by_batch_size is None:
             logger.info("Defaulting disable_by_batch_size to 64")
             self.disable_by_batch_size = 64
-            
         if use_suffix:
             self.method = "suffix"
             self.enable_suffix_decoding = True
             self.num_speculative_tokens = self.suffix_cache_max_depth
             self._verify_args()
         else:
-            self._orig_post_init()
+            SpeculativeConfigPatch._orig_post_init(self)
 
     @classmethod
     def from_dict(cls, dict_value: dict) -> SpeculativeConfig:
         """Parse the CLI value for the speculative config."""
+        # Generic dataclass from_dict implementation
+        # Accepts both ArcticSpeculativeConfig and SpeculativeConfig
         if cls is SpeculativeConfig:
-            return SpeculativeConfigPatch._orig_from_dict(
-                ArcticSpeculativeConfig, dict_value)
-        return SpeculativeConfigPatch._orig_from_dict(cls, dict_value)
+            target_cls = ArcticSpeculativeConfig
+        else:
+            target_cls = cls
+        return target_cls(**dict_value)
 
 
 class VllmConfigPatch(ArcticPatch[VllmConfig]):
