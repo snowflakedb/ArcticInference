@@ -118,7 +118,7 @@ class SuffixCache:
     def update_response(
         self,
         req_id: Hashable,
-        token_ids: Union[int | Sequence[int]],
+        token_ids: Union[int, Sequence[int]],
     ):
         """
         Update the cached response for a given request by adding token(s) to
