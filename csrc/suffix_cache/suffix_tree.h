@@ -19,35 +19,105 @@
 #include <deque>
 #include <memory>
 #include <unordered_map>
+#include <utility>
 #include <vector>
+
+#include <iterator>
+
+class ReferenceMap {
+/*
+ * For a given suffix tree node, this class keeps track of all the sequences and the starting
+ * index within those sequences that contain the tokens represented by the node. Supports an
+ * efficient way to increment/decrement all indices, which is needed by certain tree operations.
+ */
+friend class SuffixTree;
+
+public:
+
+    int get_idx(int seq_id) {
+        return _idx_in_seq[seq_id] + _idx_offset;
+    }
+
+    std::pair<int, int> get_any() {
+        auto it = _idx_in_seq.begin();
+        assert(it != _idx_in_seq.end());
+        return {it->first, it->second + _idx_offset};
+    }
+
+    void set_idx(int seq_id, int idx) {
+        _idx_in_seq[seq_id] = idx - _idx_offset;
+    }
+
+    void erase(int seq_id) {
+        if (_idx_in_seq.count(seq_id)) {
+            _idx_in_seq.erase(seq_id);
+        }
+    }
+
+    void add_all(int delta) {
+        _idx_offset += delta;
+    }
+
+    size_t size() const {
+        return _idx_in_seq.size();
+    }
+
+    bool contains(int seq_id) const {
+        return _idx_in_seq.count(seq_id) > 0;
+    }
+
+    class const_iterator {
+        using Inner = std::unordered_map<int,int>::const_iterator;
+
+    public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = std::pair<int,int>;
+        using difference_type = std::ptrdiff_t;
+
+        const_iterator(Inner it, int off) : _it(it), _off(off) {}
+        value_type operator*() const { return {_it->first, _it->second + _off}; }
+        const_iterator& operator++() { ++_it; return *this; }
+        bool operator==(const const_iterator& o) const { return _it == o._it; }
+        bool operator!=(const const_iterator& o) const { return _it != o._it; }
+
+    private:
+        Inner _it;
+        int _off;
+    };
+
+    const_iterator begin() const {
+        return const_iterator(_idx_in_seq.begin(), _idx_offset);
+    }
+
+    const_iterator end() const {
+        return const_iterator(_idx_in_seq.end(), _idx_offset);
+    }
+
+private:
+    std::unordered_map<int, int> _idx_in_seq;
+    int _idx_offset = 0;
+};
 
 struct Node {
     // Token referenced by this node. Node can refer to a sequence of tokens,
     // this is just the ID of the first token.
-    int token;
+    int token = 0;
 
     // Number of suffixes from the root that end at or pass through this node.
-    int count;
+    int count = 0;
 
     // Parent node.
-    Node* parent;
+    Node* parent = nullptr;
 
     // Children nodes, the key should always be the first token of the child.
     std::unordered_map<int, std::unique_ptr<Node>> children;
 
     // For each sequence that contains this node, tracks the start index of the
-    // tokens in this node within that sequence. The start index for sequence s
-    // is idx_in_seq[s] + idx_offset.
-    std::unordered_map<int, int> idx_in_seq;
-
-    // Global offset of the start indices in all sequences. Used internally to
-    // efficiently adjust the indices for all sequences that contain this node.
-    int idx_offset;
+    // tokens in this node within that sequence.
+    ReferenceMap refs;
 
     // Number of tokens in this node.
-    int length;
-
-    Node() : token(0), count(0), parent(nullptr), idx_offset(0), length(0) {}
+    int length = 0;
 };
 
 struct Candidate {
@@ -92,9 +162,9 @@ public:
                         float min_token_prob = 0.1f,
                         bool use_tree_spec = false);
 
-    bool check_integrity();
+    std::string check_integrity();
 
-    bool check_integrity(Node* node);
+    std::string check_integrity(Node* node);
 
 private:
 

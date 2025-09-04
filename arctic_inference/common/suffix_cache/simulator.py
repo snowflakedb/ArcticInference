@@ -170,16 +170,31 @@ def process_task(
     )
     suffix_cache = SuffixCache(max_depth)
     request_ids = []
+    tokens = 0
     for request_id, example in tqdm(train_subset.iterrows(),
                                     total=len(train_subset),
                                     desc=f"Building cache"):
         # Use negative request_id to indicate training examples and avoid
         # conflicts with eval request_ids numbered 0, .., num_eval - 1.
         suffix_cache.update_response(-1 - request_id + 1, example["response"])
+        tokens += len(example["response"])
         request_ids.append(-1 - request_id + 1)
         if len(request_ids) > max_cached_seqs:
             print("evict")
             suffix_cache.evict_response(request_ids.pop(0))
+    ret = suffix_cache._suffix_tree.check_integrity()
+    if ret:
+        raise RuntimeError(f"SuffixTree integrity check failed: {ret}")
+
+    print("Tokens in cache:", tokens)
+
+    import psutil
+    import os
+
+    process = psutil.Process(os.getpid())
+    memory_info = process.memory_info()
+    print(f"RSS (Resident Set Size): {memory_info.rss / (1024 * 1024):.2f} MB")
+    print(f"VMS (Virtual Memory Size): {memory_info.vms / (1024 * 1024):.2f} MB")
 
     records = []
     for request_id, example in tqdm(eval_subset.iterrows(),
