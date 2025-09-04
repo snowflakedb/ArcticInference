@@ -148,6 +148,21 @@ class SuffixCache:
             if req_id in self._prompt_trees:
                 self._prompt_trees[req_id].extend(0, token_ids)
 
+    def evict_response(self, req_id: Hashable):
+        """
+        Evicts the cached response for a specific request.
+
+        Args:
+            req_id (Hashable): The unique identifier for the request whose
+                response should be evicted.
+
+        Raises:
+            ValueError: If no response exists for the given request identifier.
+        """
+        seq_id = self._get_or_assign_seq_id(req_id)
+        self._suffix_tree.remove(seq_id)
+        del self._req_to_seq_id[req_id]
+
     def speculate(
         self,
         req_id: Hashable,

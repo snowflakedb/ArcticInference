@@ -67,7 +67,7 @@ def suffix_decode(
         end_time = time.perf_counter()
         spec_time = end_time - start_time
 
-        # Verify scpeculated tokens
+        # Verify speculated tokens
         accepted_tokens = []
         node = -1
         for token_id in ground_truth_response[len(response):]:
@@ -154,6 +154,7 @@ def process_task(
     num_train: int,
     seed: int,
     max_depth: int,
+    max_cached_seqs: int,
     max_spec_tokens: int,
     max_spec_factor: float,
     min_token_prob: float,
@@ -168,12 +169,17 @@ def process_task(
         seed,
     )
     suffix_cache = SuffixCache(max_depth)
+    request_ids = []
     for request_id, example in tqdm(train_subset.iterrows(),
                                     total=len(train_subset),
                                     desc=f"Building cache"):
         # Use negative request_id to indicate training examples and avoid
         # conflicts with eval request_ids numbered 0, .., num_eval - 1.
         suffix_cache.update_response(-1 - request_id + 1, example["response"])
+        request_ids.append(-1 - request_id + 1)
+        if len(request_ids) > max_cached_seqs:
+            print("evict")
+            suffix_cache.evict_response(request_ids.pop(0))
 
     records = []
     for request_id, example in tqdm(eval_subset.iterrows(),
@@ -198,6 +204,7 @@ def process_task(
                 "num_train": len(train_subset),
                 "seed": seed,
                 "max_depth": max_depth,
+                "max_cached_seqs": max_cached_seqs,
                 "max_spec_tokens": max_spec_tokens,
                 "max_spec_factor": max_spec_factor,
                 "min_token_prob": min_token_prob,
@@ -358,6 +365,7 @@ def main(args: argparse.Namespace):
         num_train=num_train,
         seed=args.seed,
         max_depth=args.max_depth,
+        max_cached_seqs=args.max_cached_seqs,
         max_spec_tokens=args.max_spec_tokens,
         max_spec_factor=args.max_spec_factor,
         min_token_prob=args.min_token_prob,
@@ -470,6 +478,13 @@ def get_parser():
         nargs="+",
         default=[64],
         help="Max depth of the suffix tree",
+    )
+    parser.add_argument(
+        "--max-cached-seqs",
+        type=int,
+        nargs="+",
+        default=[100],
+        help="Max number of cached sequences before eviction",
     )
     parser.add_argument(
         "--max-spec-tokens",

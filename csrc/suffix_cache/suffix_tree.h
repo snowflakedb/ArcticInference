@@ -22,6 +22,10 @@
 #include <vector>
 
 struct Node {
+    // Token referenced by this node. Node can refer to a sequence of tokens,
+    // this is just the ID of the first token.
+    int token;
+
     // Number of suffixes from the root that end at or pass through this node.
     int count;
 
@@ -43,7 +47,7 @@ struct Node {
     // Number of tokens in this node.
     int length;
 
-    Node() : count(0), parent(nullptr), idx_offset(0), length(0) {}
+    Node() : token(0), count(0), parent(nullptr), idx_offset(0), length(0) {}
 };
 
 struct Candidate {
