@@ -821,7 +821,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             cudagraph_mode = self.compilation_config.cudagraph_mode
             sp_size = self.parallel_config.ulysses_sequence_parallel_size
             #full_cg = cudagraph_mode.decode_mode() == CUDAGraphMode.FULL
-            # capture original model shapes
+            # capture base model shapes
             compilation_cases = (
                 shape for shape in reversed(self.cudagraph_batch_sizes)
                 if shape * sp_size > self.shift_parallel_threshold and shape *
@@ -829,10 +829,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             # Only rank 0 should print progress bar during capture
             if is_global_first_rank():
                 print_cases, compilation_cases = tee(compilation_cases)
-                logger.info(f"original model shapes {list(print_cases)}")
+                logger.info(f"base model shapes {list(print_cases)}")
                 compilation_cases = tqdm(
                     list(compilation_cases),
-                    desc="Capturing CUDA graph shapes of original model")
+                    desc="Capturing CUDA graph shapes of the base model")
             for num_tokens in compilation_cases:
                 # We skip EPLB here since we don't want to record dummy metrics
                 for _ in range(self.compilation_config.cudagraph_num_of_warmups):
@@ -864,7 +864,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                     logger.info(f"shift model shapes {list(print_cases)}")
                     compilation_cases = tqdm(
                         list(compilation_cases),
-                        desc="Capturing CUDA graph shapes of shift model")
+                        desc="Capturing CUDA graph shapes of the shift model")
                 with set_shift_parallel_mode(True):
                     for num_tokens in compilation_cases:
                         for _ in range(self.vllm_config.compilation_config.
