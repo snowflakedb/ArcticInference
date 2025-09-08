@@ -24,80 +24,6 @@
 
 #include <iterator>
 
-class ReferenceMap {
-/*
- * For a given suffix tree node, this class keeps track of all the sequences and the starting
- * index within those sequences that contain the tokens represented by the node. Supports an
- * efficient way to increment/decrement all indices, which is needed by certain tree operations.
- */
-friend class SuffixTree;
-
-public:
-
-    int get_idx(int seq_id) {
-        return _idx_in_seq[seq_id] + _idx_offset;
-    }
-
-    std::pair<int, int> get_any() {
-        auto it = _idx_in_seq.begin();
-        assert(it != _idx_in_seq.end());
-        return {it->first, it->second + _idx_offset};
-    }
-
-    void set_idx(int seq_id, int idx) {
-        _idx_in_seq[seq_id] = idx - _idx_offset;
-    }
-
-    void erase(int seq_id) {
-        if (_idx_in_seq.count(seq_id)) {
-            _idx_in_seq.erase(seq_id);
-        }
-    }
-
-    void add_all(int delta) {
-        _idx_offset += delta;
-    }
-
-    size_t size() const {
-        return _idx_in_seq.size();
-    }
-
-    bool contains(int seq_id) const {
-        return _idx_in_seq.count(seq_id) > 0;
-    }
-
-    class const_iterator {
-        using Inner = std::unordered_map<int,int>::const_iterator;
-
-    public:
-        using iterator_category = std::forward_iterator_tag;
-        using value_type = std::pair<int,int>;
-        using difference_type = std::ptrdiff_t;
-
-        const_iterator(Inner it, int off) : _it(it), _off(off) {}
-        value_type operator*() const { return {_it->first, _it->second + _off}; }
-        const_iterator& operator++() { ++_it; return *this; }
-        bool operator==(const const_iterator& o) const { return _it == o._it; }
-        bool operator!=(const const_iterator& o) const { return _it != o._it; }
-
-    private:
-        Inner _it;
-        int _off;
-    };
-
-    const_iterator begin() const {
-        return const_iterator(_idx_in_seq.begin(), _idx_offset);
-    }
-
-    const_iterator end() const {
-        return const_iterator(_idx_in_seq.end(), _idx_offset);
-    }
-
-private:
-    std::unordered_map<int, int> _idx_in_seq;
-    int _idx_offset = 0;
-};
-
 struct Node {
     // Token referenced by this node. Node can refer to a sequence of tokens,
     // this is just the ID of the first token.
@@ -112,9 +38,12 @@ struct Node {
     // Children nodes, the key should always be the first token of the child.
     std::unordered_map<int, std::unique_ptr<Node>> children;
 
-    // For each sequence that contains this node, tracks the start index of the
-    // tokens in this node within that sequence.
-    ReferenceMap refs;
+    // 
+    std::unordered_map<int, int> endpoints;
+
+    int ref_seq = 0;
+
+    int ref_idx = -1;
 
     // Number of tokens in this node.
     int length = 0;
