@@ -17,6 +17,7 @@
 
 #include <cassert>
 #include <deque>
+#include <map>
 #include <memory>
 #include <unordered_map>
 #include <utility>
@@ -39,7 +40,7 @@ struct Node {
     std::unordered_map<int, std::unique_ptr<Node>> children;
 
     // 
-    std::unordered_map<int, int> endpoints;
+    std::map<int, int> endpoints;
 
     int ref_seq = 0;
 
