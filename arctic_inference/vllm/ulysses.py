@@ -50,11 +50,8 @@ def apply_shift_parallel_patches():
     UlyssesMultiprocExecutorPatch.apply_patch()
     UlyssesAttentionPatch.apply_patch()
     
-    from arctic_inference.envs import ARCTIC_INFERENCE_SKIP_ULYSSES_PATCH
-    if not ARCTIC_INFERENCE_SKIP_ULYSSES_PATCH:
-        PiecewiseCompileInterpreterPatch.apply_patch()
-        UlyssesFusedMoEPatch.apply_patch()
-
+    # PiecewiseCompileInterpreterPatch.apply_patch()
+    # UlyssesFusedMoEPatch.apply_patch()
 
 class UlyssesModelConfigPatch(ArcticPatch[ModelConfig]):
 
@@ -77,7 +74,8 @@ class UlyssesModelConfigPatch(ArcticPatch[ModelConfig]):
             self, parallel_config: "ParallelConfig") -> tuple[int, int]:
         from vllm.distributed.utils import get_pp_indices
         if (self.hf_text_config.model_type == "deepseek_mtp"
-                or self.hf_config.model_type == "mimo_mtp"):
+                or self.hf_config.model_type == "mimo_mtp"
+                or self.hf_config.model_type == "glm4_moe_mtp"):
             total_num_hidden_layers = getattr(self.hf_text_config,
                                               "num_nextn_predict_layers", 0)
         else:
@@ -112,28 +110,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         pipeline_model_parallel_size: int = 1,
         backend: Optional[str] = None,
     ) -> None:
-        """
-        Initialize model parallel groups.
-
-        Arguments:
-            tensor_model_parallel_size: number of GPUs used for tensor model
-                parallelism.
-            pipeline_model_parallel_size: number of GPUs used for pipeline model
-                parallelism.
-
-        Let's say we have a total of 8 GPUs denoted by g0 ... g7 and we
-        use 2 GPUs to parallelize the model tensor, and 4 GPUs to parallelize
-        the model pipeline. The present function will
-        create 4 tensor model-parallel groups and 2 pipeline model-parallel groups:
-            4 tensor model-parallel groups:
-                [g0, g1], [g2, g3], [g4, g5], [g6, g7]
-            2 pipeline model-parallel groups:
-                [g0, g2, g4, g6], [g1, g3, g5, g7]
-        Note that for efficiency, the caller should make sure adjacent ranks
-        are on the same DGX box. For example if we are using 2 DGX-1 boxes
-        with a total of 16 GPUs, rank 0 to 7 belong to the first box and
-        ranks 8 to 15 belong to the second box.
-        """
+        
         from vllm.distributed.parallel_state import _DP, _EP, _PP, _TP
         # Get world size and rank. Ensure some consistencies.
         assert torch.distributed.is_initialized()
@@ -151,15 +128,6 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         sequence_parallel_size = \
             config.parallel_config.ulysses_sequence_parallel_size
 
-        # the layout order is: ExternalDP x DP x PP x SP x TP
-        # ExternalDP is the data parallel group that is not part of the model,
-        # every dp rank can generate independently (in verl integration).
-        # DP is the data parallel group that is part of the model,
-        # all the ranks in the same DP group should generate simultaneously,
-        # i.e. the `generate` call in the same DP group should be called together,
-        # otherwise it will cause deadlock.
-        # to get group_ranks for each dimension, transpose that dimension to the
-        # last dimension, then reshape to 2D, then unbind the last dimension
         all_ranks = torch.arange(world_size).reshape(
             -1, data_parallel_size, pipeline_model_parallel_size,
             sequence_parallel_size, tensor_model_parallel_size)  # noqa
