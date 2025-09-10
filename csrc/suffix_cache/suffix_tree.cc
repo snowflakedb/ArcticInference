@@ -48,8 +48,10 @@ void SuffixTree::append(int seq_id, int token) {
     // Iterate over all active nodes for this sequence.
     for (size_t i = 0; i < _active_nodes[seq_id].size(); ++i) {
         Node* node = _active_nodes[seq_id][i];
-        auto it = node->children.find(token);
-        Node* child = (it != node->children.end()) ? it->second.get() : nullptr;
+        Node* child = nullptr;
+        if (node->children.contains(token)) {
+            child = node->children[token].get();
+        }
 
         assert(node->endpoints.contains(seq_id));
         assert(node->endpoints[seq_id] == _seqs[seq_id].size() - 1);
@@ -187,6 +189,12 @@ void SuffixTree::remove(int seq_id) {
     //             node->children.erase(token);
     //             break;
     //         }
+    //         if (child->endpoints.contains(seq_id)) {
+    //             child->endpoints.erase(seq_id);
+    //         }
+    //         if (child->ref_seq == seq_id) {
+                
+    //         }
     //         child->refs.erase(seq_id);
     //         idx += child->length;
     //         node = child;
@@ -264,11 +272,10 @@ std::string SuffixTree::check_integrity() {
             // Loop through the nodes for this suffix.
             while (idx < seq.size()) {
                 int token = seq[idx];
-                auto it = node->children.find(token);
-                if (it == node->children.end()) {
+                if (!node->children.contains(token)) {
                     break;
                 }
-                Node* child = it->second.get();
+                Node* child = node->children[token].get();
                 assert(child->count > 0);
                 node = child;
             }
@@ -306,11 +313,10 @@ std::string SuffixTree::check_integrity(Node* node) {
     CHECK_OR_RETURN(_seqs.find(node->ref_seq) != _seqs.end(), "internal node has invalid seq_id");
     CHECK_OR_RETURN(node->ref_idx + node->length <= _seqs[node->ref_seq].size(),
                     "internal node has invalid token range");
-    int token = _seqs[node->ref_seq][node->ref_idx];
     // Check I am my parent's child.
-    CHECK_OR_RETURN(node->parent->children.find(node->token) != node->parent->children.end(),
+    CHECK_OR_RETURN(node->parent->children.contains(node->token),
                     "internal node is not a child of parent node");
-    CHECK_OR_RETURN(node->parent->children[token].get() == node,
+    CHECK_OR_RETURN(node->parent->children[node->token].get() == node,
                     "parent node has incorrect child pointer");
     // Check all my endpoint references are correct.
     for (int i = 0; i < node->length; ++i) {
@@ -333,11 +339,10 @@ std::pair<Node*, int> SuffixTree::_match_pattern(
     for (int i = start_idx; i < pattern.size(); i++) {
         int c = pattern[i];
         if (idx >= node->length) {
-            auto it = node->children.find(c);
-            if (it == node->children.end()) {
+            if (!node->children.contains(c)) {
                 return {nullptr, -1};
             }
-            node = it->second.get();
+            node = node->children[c].get();
             idx = 0;
         }
         assert(idx < node->length);
@@ -367,7 +372,7 @@ Candidate SuffixTree::_speculate_path(Node* node, int idx,
             Node* child = nullptr;
             int count = 0;
             // Choose the child with the maximum count.
-            for (auto& kv : node->children) {
+            for (const auto& kv : node->children) {
                 Node* ch = kv.second.get();
                 if (ch->count > count) {
                     child = ch;
@@ -422,7 +427,7 @@ Candidate SuffixTree::_speculate_tree(Node* node, int idx,
             queue.emplace(item.prob, item.node, item.idx + 1,
                           static_cast<int>(ret.token_ids.size()) - 1);
         } else {
-            for (auto& kv : item.node->children) {
+            for (const auto& kv : item.node->children) {
                 Node* child = kv.second.get();
                 float prob = item.prob * child->count / 
                     static_cast<float>(item.node->count);

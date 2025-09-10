@@ -17,13 +17,12 @@
 
 #include <cassert>
 #include <deque>
-#include <map>
 #include <memory>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
-#include <iterator>
+#include "int32_map.h"
 
 struct Node {
     // Token referenced by this node. Node can refer to a sequence of tokens,
@@ -37,10 +36,10 @@ struct Node {
     Node* parent = nullptr;
 
     // Children nodes, the key should always be the first token of the child.
-    std::unordered_map<int, std::unique_ptr<Node>> children;
+    Int32Map<std::unique_ptr<Node>> children;
 
     // 
-    std::map<int, int> endpoints;
+    Int32Map<int> endpoints;
 
     int ref_seq = 0;
 
