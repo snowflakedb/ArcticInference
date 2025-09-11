@@ -173,52 +173,78 @@ void SuffixTree::extend(int seq_id, const std::vector<int>& tokens) {
 
 // Remove an existing sequence.
 void SuffixTree::remove(int seq_id) {
-    // const std::vector<int>& seq = _seqs[seq_id];
-    // // Loop through all suffix starting indices.
-    // for (int start = 0; start < seq.size(); start++) {
-    //     Node *node = _root.get();
-    //     node->count--;
-    //     int idx = start;
-    //     // Loop through the nodes for this suffix.
-    //     while (idx < seq.size()) {
-    //         int token = seq[idx];
-    //         auto it = node->children.find(token);
-    //         if (it == node->children.end()) {
-    //             break;
-    //         }
-    //         Node* child = it->second.get();
-    //         assert(child->count > 0);
-    //         child->count--;
-    //         if (child->count == 0) {
-    //             node->children.erase(token);
-    //             break;
-    //         }
-    //         if (child->endpoints.contains(seq_id)) {
-    //             child->endpoints.erase(seq_id);
-    //         }
-    //         if (child->ref_seq == seq_id) {
-                
-    //         }
-    //         child->refs.erase(seq_id);
-    //         idx += child->length;
-    //         node = child;
-    //     }
-    //     if (node != _root.get() && node->children.size() == 1) {
-    //         auto& [token, child] = *node->children.begin();
-    //         if (node->count == child->count) {
-    //             // Merge node into child.
-    //             child->token = node->token;
-    //             child->length += node->length;
-    //             child->refs = std::move(node->refs);
-    //             child->parent = node->parent;
-    //             node = child.release();
-    //             node->parent->children[node->token].reset(node);
-    //         }
-    //     }
-    // }
-    // _seqs.erase(seq_id);
-    // _active_nodes.erase(seq_id);
-    return;
+    const std::vector<int>& seq = _seqs[seq_id];
+    std::vector<Node*> path;  // Declare here to avoid repeated allocations.
+    // Loop through all suffix starting indices.
+    for (int start = 0; start < seq.size(); start++) {
+        Node *node = _root.get();
+        node->count--;
+        int idx = start;
+        path.clear();
+        // Loop through the nodes for this suffix.
+        while (idx < seq.size()) {
+            int token = seq[idx];
+            if (!node->children.contains(token)) {
+                break;
+            }
+            Node* child = node->children[token].get();
+            assert(child->count > 0);
+            child->count--;
+            if (child->count == 0) {
+                node->children.erase(token);
+                break;
+            }
+            if (child->endpoints.contains(seq_id)) {
+                child->endpoints.erase(seq_id);
+            }
+            idx += child->length;
+            node = child;
+            path.push_back(node);
+        }
+        // The last visited node may be mergeable with its child.
+        if (node != _root.get() && node->children.size() == 1) {
+            const auto& it = *node->children.begin();
+            std::unique_ptr<Node>& child_uptr = node->children[it.first];
+            if (node->count == child_uptr->count) {
+                // Merge node into child.
+                child_uptr->token = node->token;
+                child_uptr->length += node->length;
+                child_uptr->ref_idx -= node->length;
+                child_uptr->parent = node->parent;
+                path.back() = node = child_uptr.release();
+                node->parent->children[node->token].reset(node);
+            }
+        }
+        // ref_seq and ref_idx of all nodes in the path may need to be updated.
+        // 1. Go to an arbitrary leaf to get its endpoints.
+        Node* leaf = node;
+        int distance = 0;  // Distance from node to leaf.
+        while (!leaf->children.empty()) {
+            leaf = (*leaf->children.begin()).second.get();
+            distance += leaf->length;
+        }
+        // 2. Pick an arbitrary endpoint for the reference sequence and index.
+        if (leaf->endpoints.empty() || leaf->endpoints.contains(seq_id)) {
+            // Still need to visit this leaf later when removing this sequence.
+            // We can skip updating the refs until the next time it's visited.
+            continue;
+        }
+        const auto& ref = *leaf->endpoints.begin();
+        // 3. Go back up the path to update all nodes' refs.
+        int32_t ref_seq = ref.first;
+        int32_t ref_idx = ref.second - distance;
+        while (!path.empty()) {
+            Node* n = path.back();
+            path.pop_back();
+            ref_idx -= n->length;
+            if (n->ref_seq == seq_id) {
+                n->ref_seq = ref_seq;
+                n->ref_idx = ref_idx;
+            }
+        }
+    }
+    _seqs.erase(seq_id);
+    _active_nodes.erase(seq_id);
 }
 
 Candidate SuffixTree::speculate(const std::vector<int>& pattern,
@@ -289,7 +315,7 @@ std::string SuffixTree::check_integrity() {
 }
 
 std::string SuffixTree::check_integrity(Node* node) {
-    int children_count = 0;
+    int64_t children_count = 0;
     for (const auto& [token, child] : node->children) {
         // Do all my children have me as their parent?
         CHECK_OR_RETURN(child->parent == node, "child node has incorrect parent pointer");
@@ -374,7 +400,7 @@ Candidate SuffixTree::_speculate_path(Node* node, int idx,
             idx++;
         } else {
             Node* child = nullptr;
-            int count = 0;
+            int64_t count = 0;
             // Choose the child with the maximum count.
             for (const auto& kv : node->children) {
                 Node* ch = kv.second.get();

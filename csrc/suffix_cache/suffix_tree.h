@@ -30,7 +30,7 @@ struct Node {
     int token = 0;
 
     // Number of suffixes from the root that end at or pass through this node.
-    int count = 0;
+    int64_t count = 0;
 
     // Parent node.
     Node* parent = nullptr;
