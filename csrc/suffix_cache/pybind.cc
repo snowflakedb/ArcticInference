@@ -36,5 +36,6 @@ PYBIND11_MODULE(_C, m) {
         .def("extend", &SuffixTree::extend)
         .def("remove", &SuffixTree::remove)
         .def("speculate", &SuffixTree::speculate)
-        .def("check_integrity", py::overload_cast<>(&SuffixTree::check_integrity));
+        .def("check_integrity", &SuffixTree::check_integrity)
+        .def("estimate_memory", &SuffixTree::estimate_memory);
 }

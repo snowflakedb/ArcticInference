@@ -325,12 +325,12 @@ std::string SuffixTree::check_integrity() {
         }
     }
     // 3. Check all nodes were visited the correct number of times.
-    queue.clear();
+    assert(queue.empty());
     queue.push(_root.get());
     while (!queue.empty()) {
         Node* node = queue.front();
         queue.pop();
-        CHECK_OR_RETURN(count == node->count == visit_count[node],
+        CHECK_OR_RETURN(node->count == visit_count[node],
                         "node count does not match visit count");
         for (const auto& [token, child] : node->children) {
             queue.push(child.get());
@@ -505,4 +505,25 @@ Candidate SuffixTree::_speculate_tree(Node* node, int idx,
         }
     }
     return ret;
+}
+
+size_t SuffixTree::estimate_memory() const {
+    size_t total = sizeof(*this);
+    std::vector<Node*> stack;
+    stack.push_back(_root.get());
+    while (!stack.empty()) {
+        Node* node = stack.back();
+        stack.pop_back();
+        total += node->memory_usage();
+        for (const auto& [token, child] : node->children) {
+            stack.push_back(child.get());
+        }
+    }
+    for (const auto& [seq_id, seq] : _seqs) {
+        total += sizeof(decltype(seq)::value_type) * seq.capacity();
+    }
+    for (const auto& [seq_id, active_nodes] : _active_nodes) {
+        total += sizeof(decltype(active_nodes)::value_type) * active_nodes.size();
+    }
+    return total;
 }

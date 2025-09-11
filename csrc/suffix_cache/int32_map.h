@@ -164,6 +164,10 @@ public:
         return emplace(key);
     }
 
+    size_t memory_usage() const noexcept {
+        return sizeof(*this) + sizeof(Slot) * cap_;
+    }
+
     class const_iterator {
     public:
         using value_type = const_iterator_value;

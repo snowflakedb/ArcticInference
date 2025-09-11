@@ -17,6 +17,7 @@ import argparse
 import itertools
 import multiprocessing as mp
 import os
+import random
 import time
 from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple
@@ -154,12 +155,13 @@ def process_task(
     num_train: int,
     seed: int,
     max_depth: int,
-    max_cached_seqs: int,
     max_spec_tokens: int,
     max_spec_factor: float,
     min_token_prob: float,
     use_tree_spec: bool,
     use_cached_prompt: bool,
+    evict_fraction: float,
+    evict_strategy: str,
 ) -> List[Dict]:
     eval_subset, train_subset = sample_data(
         dataset,
@@ -169,33 +171,40 @@ def process_task(
         seed,
     )
     suffix_cache = SuffixCache(max_depth)
-    request_ids = []
-    tokens = 0
+    train_request_ids = []
+    num_cached_tokens = {}  # request_id -> num tokens
     for request_id, example in tqdm(train_subset.iterrows(),
                                     total=len(train_subset),
                                     desc=f"Building cache"):
         # Use negative request_id to indicate training examples and avoid
         # conflicts with eval request_ids numbered 0, .., num_eval - 1.
-        suffix_cache.update_response(-1 - request_id + 1, example["response"])
-        tokens += len(example["response"])
-        request_ids.append(-1 - request_id + 1)
-        if len(request_ids) > max_cached_seqs:
-            print("evict")
-            suffix_cache.evict_response(request_ids.pop(0))
+        train_request_id = -1 - request_id
+        suffix_cache.update_response(train_request_id, example["response"])
+        train_request_ids.append(train_request_id)
+        num_cached_tokens[train_request_id] = len(example["response"])
 
-    print("Tokens in cache:", tokens)
+    if evict_fraction > 0:
+        num_evict = round(len(train_request_ids) * evict_fraction)
+        if evict_strategy == "oldest":
+            evict_ids = train_request_ids[:num_evict]
+        elif evict_strategy == "newest":
+            evict_ids = train_request_ids[-num_evict:]
+        else:
+            assert evict_strategy == "random"
+            rng = random.Random(seed)
+            evict_ids = rng.sample(train_request_ids, num_evict)
+        for request_id in tqdm(evict_ids, desc="Evicting cached responses"):
+            suffix_cache.evict_response(request_id)
+            del num_cached_tokens[request_id]
 
-    import psutil
-    import os
+    print("Checking cache integrity...", end=" ", flush=True)
+    if ret := suffix_cache._suffix_tree.check_integrity():
+        raise RuntimeError(f"Cache integrity check failed: {ret}")
+    else:
+        print("OK")
 
-    process = psutil.Process(os.getpid())
-    memory_info = process.memory_info()
-    print(f"RSS (Resident Set Size): {memory_info.rss / (1024 * 1024):.2f} MB")
-    print(f"VMS (Virtual Memory Size): {memory_info.vms / (1024 * 1024):.2f} MB")
-
-    ret = suffix_cache._suffix_tree.check_integrity()
-    if ret:
-        raise RuntimeError(f"SuffixTree integrity check failed: {ret}")
+    print("Tokens in cache:", sum(num_cached_tokens.values()))
+    print("Memory estimate:", suffix_cache._suffix_tree.estimate_memory())
 
     records = []
     for request_id, example in tqdm(eval_subset.iterrows(),
@@ -220,12 +229,13 @@ def process_task(
                 "num_train": len(train_subset),
                 "seed": seed,
                 "max_depth": max_depth,
-                "max_cached_seqs": max_cached_seqs,
                 "max_spec_tokens": max_spec_tokens,
                 "max_spec_factor": max_spec_factor,
                 "min_token_prob": min_token_prob,
                 "use_tree_spec": use_tree_spec,
                 "use_cached_prompt": use_cached_prompt,
+                "evict_fraction": evict_fraction,
+                "evict_strategy": evict_strategy,
             })
         records.extend(results)
 
@@ -381,12 +391,13 @@ def main(args: argparse.Namespace):
         num_train=num_train,
         seed=args.seed,
         max_depth=args.max_depth,
-        max_cached_seqs=args.max_cached_seqs,
         max_spec_tokens=args.max_spec_tokens,
         max_spec_factor=args.max_spec_factor,
         min_token_prob=args.min_token_prob,
         use_tree_spec=args.use_tree_spec,
         use_cached_prompt=args.use_cached_prompt,
+        evict_fraction=args.evict_fraction,
+        evict_strategy=args.evict_strategy,
     )
     config_values = itertools.product(*configs.values())
     config_values = [
@@ -496,13 +507,6 @@ def get_parser():
         help="Max depth of the suffix tree",
     )
     parser.add_argument(
-        "--max-cached-seqs",
-        type=int,
-        nargs="+",
-        default=[100],
-        help="Max number of cached sequences before eviction",
-    )
-    parser.add_argument(
         "--max-spec-tokens",
         type=int,
         nargs="+",
@@ -537,6 +541,21 @@ def get_parser():
         default=[True],
         help=("Whether to use the cached prompt for the request in addition "
               "to the global cache of previous responses (True/False)"),
+    )
+    parser.add_argument(
+        "--evict-fraction",
+        type=float,
+        nargs="+",
+        default=[0.0],
+        help="Evict a fraction of the cached sequences before running requests",
+    )
+    parser.add_argument(
+        "--evict-strategy",
+        type=str,
+        nargs="+",
+        choices=["random", "oldest", "newest"],
+        default=["random"],
+        help="Evict cached sequences based on the specified strategy",
     )
     return parser
 

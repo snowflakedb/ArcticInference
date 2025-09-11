@@ -47,6 +47,14 @@ struct Node {
 
     // Number of tokens in this node.
     int length = 0;
+
+    // Memory usage of this node.
+    size_t memory_usage() const {
+        size_t total = sizeof(*this);
+        total += children.memory_usage();
+        total += endpoints.memory_usage();
+        return total;
+    }
 };
 
 struct Candidate {
@@ -84,12 +92,21 @@ public:
     // Remove the sequence with id seq_id.
     void remove(int seq_id);
 
+    // Given a pattern, speculate the next tokens using the suffix tree.
     Candidate speculate(const std::vector<int>& pattern,
                         int max_spec_tokens,
                         float max_spec_factor = 1.0f,
                         float max_spec_offset = 0.0f,
                         float min_token_prob = 0.1f,
                         bool use_tree_spec = false);
+
+    // Check the integrity of the suffix tree, return empty string if ok,
+    // otherwise return an error message.
+    std::string check_integrity();
+
+    // Estimate memory usage of the suffix tree, for debugging only. It
+    // walks the entire tree so can be slow.
+    size_t estimate_memory() const;
 
 private:
 
