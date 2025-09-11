@@ -115,6 +115,12 @@ class SuffixCache:
             self._req_to_seq_id[req_id] = len(self._req_to_seq_id)
         return self._req_to_seq_id[req_id]
 
+    def num_cached_responses(self) -> int:
+        """
+        Returns the number of cached responses in the global suffix tree.
+        """
+        return self._suffix_tree.num_seqs()
+
     def update_response(
         self,
         req_id: Hashable,
@@ -150,7 +156,7 @@ class SuffixCache:
 
     def evict_response(self, req_id: Hashable):
         """
-        Evicts the cached response for a specific request.
+        Evicts the response for a specific request from the global suffix tree.
 
         Args:
             req_id (Hashable): The unique identifier for the request whose

@@ -233,7 +233,7 @@ private:
     // Reserved key representing a deleted slot (tombstone).
     static constexpr int32_t KEY_TOMBSTONE = INT32_MIN + 1;
 
-    // Keep 2 * MIN_LOAD_PCT < MAX_LOAD_PCT to avoid thrashing.
+    // Keep 2 * MIN_LOAD_PCT < MAX_LOAD_PCT with some buffer to avoid thrashing.
     static constexpr uint32_t MIN_LOAD_PCT = 25;
     static constexpr uint32_t MAX_LOAD_PCT = 75;
 
@@ -338,7 +338,7 @@ private:
         }
         if (!has_first_tomb) {
             // This should never happen if load factor is correctly maintained.
-            throw std::runtime_error("Int32Map full");
+            throw std::runtime_error("Int32Map is full");
         }
         idx_out = first_tomb_idx;
         return false;
