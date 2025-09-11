@@ -37,6 +37,7 @@ void SuffixTree::append(int seq_id, int token) {
 
     // Insert a new active node at the root.
     _active_nodes[seq_id].push_back(_root.get());
+    _root->endpoints[seq_id] = static_cast<int>(_seqs[seq_id].size());
     _root->count += 1;
 
     // Ensure the number of active nodes doesn't exceed max_depth.
@@ -102,9 +103,10 @@ void SuffixTree::append(int seq_id, int token) {
                 child->ref_idx = static_cast<int>(_seqs[seq_id].size()) - child->length;
                 child->parent = parent;
                 // Give ownership of child pointer to parent and should also free the current node.
-                assert(parent->children.count(child->token));
+                assert(parent->children.contains(child->token));
                 assert(parent->children[child->token].get() == node);
-                parent->children[child->token] = std::move(node->children[token]);
+                Node* tmp = node->children[token].release();
+                parent->children[child->token].reset(tmp);
                 // Replace active node with child node.
                 _active_nodes[seq_id][i] = child;
             } else {
@@ -120,7 +122,8 @@ void SuffixTree::append(int seq_id, int token) {
                 // The child node's first token should be updated to its second token.
                 child->token = _seqs[child->ref_seq][child->ref_idx];
                 if (child->token != token) {
-                    node->children[child->token] = std::move(node->children[token]);
+                    Node* tmp = node->children[token].release();
+                    node->children.emplace(child->token, tmp);
                     node->children.erase(token);
                 }
             }
@@ -148,7 +151,8 @@ void SuffixTree::append(int seq_id, int token) {
                 new_node->ref_idx = static_cast<int>(_seqs[seq_id].size()) - new_node->length;
                 // The child node's first token should be updated to its second token.
                 child->token = _seqs[child->ref_seq][child->ref_idx + 1];
-                new_node->children[child->token] = std::move(node->children[token]);
+                Node* tmp = node->children[token].release();
+                new_node->children.emplace(child->token, tmp);
                 node->children[token].reset(new_node);
                 node->endpoints.erase(seq_id);
                 child->parent = new_node;
