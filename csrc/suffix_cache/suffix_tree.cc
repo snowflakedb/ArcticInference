@@ -280,12 +280,13 @@ Candidate SuffixTree::speculate(const std::vector<int>& pattern,
 }
 
 std::string SuffixTree::check_integrity() {
+    // 1. Check structural integrity of all nodes.
     std::queue<Node*> queue;
     queue.push(_root.get());
     while (!queue.empty()) {
         Node* node = queue.front();
         queue.pop();
-        std::string ret = check_integrity(node);
+        std::string ret = _check_node_integrity(node);
         if (!ret.empty()) {
             return ret;
         }
@@ -293,28 +294,52 @@ std::string SuffixTree::check_integrity() {
             queue.push(child.get());
         }
     }
+    // 2. Check all sequences are represented in the tree.
+    std::unordered_map<Node*, int64_t> visit_count;
     for (int seq_id = 0; seq_id < _seqs.size(); seq_id++) {
         const std::vector<int>& seq = _seqs[seq_id];
         // Loop through all suffix starting indices.
         for (int start = 0; start < seq.size(); start++) {
-            Node *node = _root.get();
             int idx = start;
-            // Loop through the nodes for this suffix.
-            while (idx < seq.size()) {
-                int token = seq[idx];
-                if (!node->children.contains(token)) {
-                    break;
+            // Traverse the tree along this suffix.
+            Node* node = _root.get();
+            visit_count[node]++;
+            while (idx < seq.size() && idx - start < _max_depth) {
+                CHECK_OR_RETURN(node->children.contains(seq[idx]),
+                                "missing child node for sequence");
+                node = node->children[seq[idx]].get();
+                visit_count[node]++;
+                CHECK_OR_RETURN(idx + node->length <= seq.size(),
+                                "path exceeds sequence length");
+                for (int i = 0; i < node->length; ++i) {
+                    int ref_seq = node->ref_seq;
+                    int ref_idx = node->ref_idx + i;
+                    CHECK_OR_RETURN(seq[idx + i] == _seqs[ref_seq][ref_idx],
+                                    "path does not match sequence tokens");
                 }
-                Node* child = node->children[token].get();
-                assert(child->count > 0);
-                node = child;
+                idx += node->length;
             }
+            // The last node on this path should have an endpoint.
+            CHECK_OR_RETURN(node->endpoints.contains(seq_id),
+                            "missing endpoint for sequence");
+        }
+    }
+    // 3. Check all nodes were visited the correct number of times.
+    queue.clear();
+    queue.push(_root.get());
+    while (!queue.empty()) {
+        Node* node = queue.front();
+        queue.pop();
+        CHECK_OR_RETURN(count == node->count == visit_count[node],
+                        "node count does not match visit count");
+        for (const auto& [token, child] : node->children) {
+            queue.push(child.get());
         }
     }
     return "";
 }
 
-std::string SuffixTree::check_integrity(Node* node) {
+std::string SuffixTree::_check_node_integrity(Node* node) {
     int64_t children_count = 0;
     for (const auto& [token, child] : node->children) {
         // Do all my children have me as their parent?
@@ -328,36 +353,48 @@ std::string SuffixTree::check_integrity(Node* node) {
         CHECK_OR_RETURN(node->count >= 0, "root node has negative count");
         CHECK_OR_RETURN(node->parent == nullptr, "root node has non-null parent pointer");
         CHECK_OR_RETURN(node->length == 0, "root node has non-zero length");
+        CHECK_OR_RETURN(node->endpoints.empty(), "root node has non-empty endpoints");
+        CHECK_OR_RETURN(node->ref_idx == -1, "root node has invalid ref_idx");
         return "";
     }
     // Is my length positive? Otherwise, I shouldn't exist.
     CHECK_OR_RETURN(node->length > 0, "internal node has non-positive length");
     // Is my count positive? Otherwise, I shouldn't exist.
     CHECK_OR_RETURN(node->count > 0, "internal node has non-positive count");
-    // Are all my children's counts less than mine?
+    // Are all my children's counts less than mine? If equal, then we should have been merged.
     for (const auto& [token, child] : node->children) {
         CHECK_OR_RETURN(
             child->count < node->count, "internal node count is not greater than child count");
     }
-    // Find what my first token is.
-    CHECK_OR_RETURN(_seqs.find(node->ref_seq) != _seqs.end(), "internal node has invalid seq_id");
+    // Check my reference sequence and index.
+    CHECK_OR_RETURN(_seqs.count(node->ref_seq), "internal node has invalid ref_seq");
+    CHECK_OR_RETURN(node->ref_idx >= 0, "internal node has invalid ref_idx");
     CHECK_OR_RETURN(node->ref_idx + node->length <= _seqs[node->ref_seq].size(),
                     "internal node has invalid token range");
+    // Check my first token is correct.
+    CHECK_OR_RETURN(node->token == _seqs[node->ref_seq][node->ref_idx],
+                    "internal node has incorrect first token");
     // Check I am my parent's child.
     CHECK_OR_RETURN(node->parent->children.contains(node->token),
                     "internal node is not a child of parent node");
     CHECK_OR_RETURN(node->parent->children[node->token].get() == node,
                     "parent node has incorrect child pointer");
     // Check all my endpoint references are correct.
-    for (int i = 0; i < node->length; ++i) {
-        int tok = _seqs[node->ref_seq][node->ref_idx + i];
-        for (const auto& [seq_id, end_idx] : node->endpoints) {
-            CHECK_OR_RETURN(_seqs.find(seq_id) != _seqs.end(),
-                            "node refers to nonexistent sequence");
-            int idx = end_idx - node->length + i;
-            CHECK_OR_RETURN(idx < _seqs[seq_id].size(), "node length exceeds sequence length");
-            CHECK_OR_RETURN(_seqs[seq_id][idx] == tok, "node sequence has incorrect token");
-        }
+    for (auto [seq_id, end_idx] : node->endpoints) {
+        CHECK_OR_RETURN(_seqs.count(seq_id), "node endpoint refers to nonexistent sequence");
+        CHECK_OR_RETURN(end_idx > 0 && end_idx <= _seqs[seq_id].size(), "invalid endpoint index");
+        // Check all tokens from the start of the suffix to the endpoint.
+        Node* n = node;
+        int idx = end_idx;
+        do {
+            CHECK_OR_RETURN(n->length <= idx, "invalid endpoint length");
+            idx -= n->length;
+            for (int i = 0; i < n->length; ++i) {
+                int tok = _seqs[n->ref_seq][n->ref_idx + i];
+                CHECK_OR_RETURN(_seqs[seq_id][idx + i] == tok, "invalid endpoint token");
+            }
+            n = n->parent;
+        } while (n != nullptr);
     }
     return "";
 }

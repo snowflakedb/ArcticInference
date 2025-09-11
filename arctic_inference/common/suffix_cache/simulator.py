@@ -182,9 +182,6 @@ def process_task(
         if len(request_ids) > max_cached_seqs:
             print("evict")
             suffix_cache.evict_response(request_ids.pop(0))
-    ret = suffix_cache._suffix_tree.check_integrity()
-    if ret:
-        raise RuntimeError(f"SuffixTree integrity check failed: {ret}")
 
     print("Tokens in cache:", tokens)
 
@@ -195,6 +192,10 @@ def process_task(
     memory_info = process.memory_info()
     print(f"RSS (Resident Set Size): {memory_info.rss / (1024 * 1024):.2f} MB")
     print(f"VMS (Virtual Memory Size): {memory_info.vms / (1024 * 1024):.2f} MB")
+
+    ret = suffix_cache._suffix_tree.check_integrity()
+    if ret:
+        raise RuntimeError(f"SuffixTree integrity check failed: {ret}")
 
     records = []
     for request_id, example in tqdm(eval_subset.iterrows(),

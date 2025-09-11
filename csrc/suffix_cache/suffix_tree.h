@@ -38,11 +38,11 @@ struct Node {
     // Children nodes, the key should always be the first token of the child.
     Int32Map<std::unique_ptr<Node>> children;
 
-    // 
+    // Maps sequence ID -> index of the end of the suffix in that sequence.
     Int32Map<int> endpoints;
 
+    // Reference sequence ID and starting index for the tokens in this node.
     int ref_seq = 0;
-
     int ref_idx = -1;
 
     // Number of tokens in this node.
@@ -91,10 +91,6 @@ public:
                         float min_token_prob = 0.1f,
                         bool use_tree_spec = false);
 
-    std::string check_integrity();
-
-    std::string check_integrity(Node* node);
-
 private:
 
     // Maximum depth of the suffix tree.
@@ -120,4 +116,6 @@ private:
 
     Candidate _speculate_tree(Node* node, int idx, int max_spec_tokens,
                               float min_token_prob);
+
+    std::string _check_node_integrity(Node* node);
 };
