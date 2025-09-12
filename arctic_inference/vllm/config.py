@@ -57,6 +57,7 @@ class ArcticSpeculativeConfig(SpeculativeConfig):
 
     enable_suffix_decoding: bool = False
     suffix_cache_max_depth: int = 64
+    suffix_cache_max_requests: int = 100000
     suffix_max_spec_factor: float = 1.0
     suffix_max_spec_offset: float = 0.0
     suffix_min_token_prob: float = 0.1

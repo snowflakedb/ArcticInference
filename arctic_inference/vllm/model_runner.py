@@ -153,7 +153,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                     "Suffix decoding is only supported with the 'arctic', "
                     "'mlp_speculator' or 'suffix' spec decoding methods.")
             self._suffix_cache = SuffixCache(
-                self.speculative_config.suffix_cache_max_depth)
+                max_tree_depth=self.speculative_config.suffix_cache_max_depth)
 
     def profile_run(self) -> None:
         self._orig_profile_run()
