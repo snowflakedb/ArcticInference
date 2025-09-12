@@ -44,16 +44,15 @@ from arctic_inference.patching import ArcticPatch
 
 
 def apply_shift_parallel_patches():
-    UlyssesModelConfigPatch.apply_patch()
-    UlyssesParallelStatePatch.apply_patch()
-    UlyssesWorkerProcPatch.apply_patch()
-    UlyssesMultiprocExecutorPatch.apply_patch()
-    UlyssesAttentionPatch.apply_patch()
-    
-    # PiecewiseCompileInterpreterPatch.apply_patch()
-    # UlyssesFusedMoEPatch.apply_patch()
+    UlyssesModelConfig.apply_patch()
+    UlyssesParallelState.apply_patch()
+    UlyssesWorkerProc.apply_patch()
+    UlyssesMultiprocExecutor.apply_patch()
+    UlyssesAttention.apply_patch()
+    UlyssesFusedMoE.apply_patch()
+    # PiecewiseCompileInterpreter.apply_patch()
 
-class UlyssesModelConfigPatch(ArcticPatch[ModelConfig]):
+class UlyssesModelConfig(ArcticPatch[ModelConfig]):
 
     _orig_get_num_kv_heads = ModelConfig.get_num_kv_heads
     _orig_get_num_attention_heads = ModelConfig.get_num_attention_heads
@@ -91,7 +90,7 @@ class UlyssesModelConfigPatch(ArcticPatch[ModelConfig]):
         return start, end
 
 
-class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
+class UlyssesParallelState(ArcticPatch[parallel_state]):
 
     _SP = None
     _SP_TP = None
@@ -254,7 +253,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
 
         if get_world_group().local_rank == 0:
             parallel_state.logger.info(
-                    f"UlyssesParallelStatePatch initialized:\n"
+                    f"UlyssesParallelState initialized:\n"
                     f"  PP {_PP.world_size} ranks {PP_group_ranks}\n"
                     f"  TP {_TP.world_size} ranks {TP_group_ranks}\n"
                     f"  SP {_SP.world_size} ranks {SP_group_ranks}\n"
@@ -288,7 +287,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
             yield context
 
 
-class UlyssesWorkerProcPatch(ArcticPatch[WorkerProc]):
+class UlyssesWorkerProc(ArcticPatch[WorkerProc]):
 
     def destroy_model_parallel(self):
         from vllm.distributed.parallel_state import _SP, _SP_TP, _SP_AA, _SP_AG
@@ -314,7 +313,7 @@ class UlyssesWorkerProcPatch(ArcticPatch[WorkerProc]):
         destroy_distributed_environment()
 
 
-class UlyssesMultiprocExecutorPatch(ArcticPatch[MultiprocExecutor]):
+class UlyssesMultiprocExecutor(ArcticPatch[MultiprocExecutor]):
 
     def _init_executor(self) -> None:
         # Call self.shutdown at exit to clean up
@@ -406,7 +405,7 @@ class UlyssesMultiprocExecutorPatch(ArcticPatch[MultiprocExecutor]):
             self.parallel_config.world_size)
 
 
-class UlyssesAttentionPatch(ArcticPatch[Attention]):
+class UlyssesAttention(ArcticPatch[Attention]):
 
     _orig_init = Attention.__init__
     _orig_forward = Attention.forward
@@ -422,7 +421,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             if self.is_kv_replicated:
                 num_kv_heads = 1
                 assert parallel_state._SP_AA is not None and parallel_state._SP_AG is not None, (
-                    "UlyssesAttentionPatch requires SP_AA and SP_AG groups to be initialized.")
+                    "UlyssesAttention requires SP_AA and SP_AG groups to be initialized.")
                 self.sp_aa_device_group = parallel_state._SP_AA.device_group
                 self.sp_ag_device_group = parallel_state._SP_AG.device_group
                 self.sp_aa_size = parallel_state._SP_AA.world_size
@@ -501,7 +500,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
         return output
 
 
-class PiecewiseCompileInterpreterPatch(ArcticPatch[PiecewiseCompileInterpreter]):
+class PiecewiseCompileInterpreter(ArcticPatch[PiecewiseCompileInterpreter]):
 
     # find the symbolic shape of the subgraph
     def find_symbolic_shape(self, args: tuple[torch.fx.node.Argument,
@@ -571,7 +570,7 @@ class PiecewiseCompileInterpreterPatch(ArcticPatch[PiecewiseCompileInterpreter])
         return output
 
 
-class UlyssesFusedMoEPatch(ArcticPatch[FusedMoE]):
+class UlyssesFusedMoE(ArcticPatch[FusedMoE]):
 
     def forward(self, hidden_states: torch.Tensor,
                 router_logits: torch.Tensor):
