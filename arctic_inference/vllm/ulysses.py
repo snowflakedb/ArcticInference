@@ -558,8 +558,8 @@ class PiecewiseCompileInterpreter(ArcticPatch[PiecewiseCompileInterpreter]):
                 num_graphs=len(self.compile_submod_names),
                 runtime_shape=None)
             # Lazy import here to avoid circular import
-            from .cuda_graph import CUDAGraphOptions
-            from .cuda_piecewise_backend import PiecewiseBackend
+            from vllm.compilation.cuda_graph import CUDAGraphOptions
+            from vllm.compilation.cuda_piecewise_backend import PiecewiseBackend
 
             piecewise_backend = PiecewiseBackend(
                 submod, self.vllm_config, index,
