@@ -50,7 +50,7 @@ def apply_shift_parallel_patches():
     UlyssesMultiprocExecutorPatch.apply_patch()
     UlyssesAttentionPatch.apply_patch()
     PiecewiseCompileInterpreterPatch.apply_patch()
-    UlyssesFusedMoEPatch.apply_patch()
+    # UlyssesFusedMoEPatch.apply_patch()
 
 
 class UlyssesModelConfigPatch(ArcticPatch[ModelConfig]):
@@ -245,6 +245,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         parallel_state._SP = _SP
         parallel_state._SP_TP = _SP_TP
         parallel_state._DP = _DP
+        parallel_state._EP = _EP
 
         # check if SP requires kv replication
         num_kv_heads = config.model_config._orig_get_num_kv_heads(config.parallel_config)
@@ -410,18 +411,28 @@ class UlyssesMultiprocExecutorPatch(ArcticPatch[MultiprocExecutor]):
         finally:
             if not success:
                 # Clean up the worker procs if there was a failure.
+                # Close death_writers first to signal workers to exit
+                for uw in unready_workers:
+                    if uw.death_writer is not None:
+                        uw.death_writer.close()
                 self._ensure_worker_termination(
-                    [w.proc for w in unready_workers])
+                    [uw.proc for uw in unready_workers])
+
 
         # For pipeline parallel, we use a thread pool for asynchronous
         # execute_model.
         if self.max_concurrent_batches > 1:
             # Note: must use only 1 IO thread to keep dequeue sequence
             # from the response queue
+            # _async_aggregate_workers_output also assumes a single IO thread
             self.io_thread_pool = ThreadPoolExecutor(
                 max_workers=1, thread_name_prefix="mp_exec_io")
 
         self.output_rank = self._get_output_rank()
+        self.has_connector = self.vllm_config.kv_transfer_config is not None
+        from vllm.distributed.kv_transfer.kv_connector.utils import KVOutputAggregator
+        self.kv_output_aggregator = KVOutputAggregator(
+            self.parallel_config.world_size)
 
 
 class UlyssesAttentionPatch(ArcticPatch[Attention]):
