@@ -18,18 +18,14 @@ from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK: bool = False
-    ARCTIC_INFERENCE_SKIP_ULYSSES_PATCH: bool = False
 
 environment_variables: dict[str, Callable[[], Any]] = {
     "ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK":
     lambda: os.getenv("ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK", "0") == "1",
-    "ARCTIC_INFERENCE_SKIP_ULYSSES_PATCH":
-    lambda: os.getenv("ARCTIC_INFERENCE_SKIP_ULYSSES_PATCH", "0") == "1",
 }
 
 # temporary workaround for gpt-oss model
 ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK = 1
-ARCTIC_INFERENCE_SKIP_ULYSSES_PATCH = 1
 
 def __getattr__(name: str) -> Any:
     if name in environment_variables:
