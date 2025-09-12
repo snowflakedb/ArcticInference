@@ -115,6 +115,12 @@ class SuffixCache:
             self._req_to_seq_id[req_id] = len(self._req_to_seq_id)
         return self._req_to_seq_id[req_id]
 
+    def num_cached_responses(self) -> int:
+        """
+        Returns the number of cached responses in the global suffix tree.
+        """
+        return self._suffix_tree.num_seqs()
+
     def update_response(
         self,
         req_id: Hashable,
@@ -147,6 +153,21 @@ class SuffixCache:
             self._suffix_tree.extend(seq_id, token_ids)
             if req_id in self._prompt_trees:
                 self._prompt_trees[req_id].extend(0, token_ids)
+
+    def evict_response(self, req_id: Hashable):
+        """
+        Evicts the response for a specific request from the global suffix tree.
+
+        Args:
+            req_id (Hashable): The unique identifier for the request whose
+                response should be evicted.
+
+        Raises:
+            ValueError: If no response exists for the given request identifier.
+        """
+        seq_id = self._get_or_assign_seq_id(req_id)
+        self._suffix_tree.remove(seq_id)
+        del self._req_to_seq_id[req_id]
 
     def speculate(
         self,

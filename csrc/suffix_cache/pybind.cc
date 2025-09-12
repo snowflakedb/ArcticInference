@@ -34,5 +34,8 @@ PYBIND11_MODULE(_C, m) {
         .def("num_seqs", &SuffixTree::num_seqs)
         .def("append", &SuffixTree::append)
         .def("extend", &SuffixTree::extend)
-        .def("speculate", &SuffixTree::speculate);
+        .def("remove", &SuffixTree::remove)
+        .def("speculate", &SuffixTree::speculate)
+        .def("check_integrity", &SuffixTree::check_integrity)
+        .def("estimate_memory", &SuffixTree::estimate_memory);
 }

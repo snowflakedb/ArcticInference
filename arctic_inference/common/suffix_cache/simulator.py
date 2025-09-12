@@ -17,6 +17,7 @@ import argparse
 import itertools
 import multiprocessing as mp
 import os
+import random
 import time
 from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple
@@ -67,7 +68,7 @@ def suffix_decode(
         end_time = time.perf_counter()
         spec_time = end_time - start_time
 
-        # Verify scpeculated tokens
+        # Verify speculated tokens
         accepted_tokens = []
         node = -1
         for token_id in ground_truth_response[len(response):]:
@@ -159,6 +160,8 @@ def process_task(
     min_token_prob: float,
     use_tree_spec: bool,
     use_cached_prompt: bool,
+    evict_fraction: float,
+    evict_strategy: str,
 ) -> List[Dict]:
     eval_subset, train_subset = sample_data(
         dataset,
@@ -168,12 +171,40 @@ def process_task(
         seed,
     )
     suffix_cache = SuffixCache(max_depth)
+    train_request_ids = []
+    num_cached_tokens = {}  # request_id -> num tokens
     for request_id, example in tqdm(train_subset.iterrows(),
                                     total=len(train_subset),
                                     desc=f"Building cache"):
         # Use negative request_id to indicate training examples and avoid
         # conflicts with eval request_ids numbered 0, .., num_eval - 1.
-        suffix_cache.update_response(-1 - request_id + 1, example["response"])
+        train_request_id = -1 - request_id
+        suffix_cache.update_response(train_request_id, example["response"])
+        train_request_ids.append(train_request_id)
+        num_cached_tokens[train_request_id] = len(example["response"])
+
+    if evict_fraction > 0:
+        num_evict = round(len(train_request_ids) * evict_fraction)
+        if evict_strategy == "oldest":
+            evict_ids = train_request_ids[:num_evict]
+        elif evict_strategy == "newest":
+            evict_ids = train_request_ids[-num_evict:]
+        else:
+            assert evict_strategy == "random"
+            rng = random.Random(seed)
+            evict_ids = rng.sample(train_request_ids, num_evict)
+        for request_id in tqdm(evict_ids, desc="Evicting cached responses"):
+            suffix_cache.evict_response(request_id)
+            del num_cached_tokens[request_id]
+
+    print("Checking cache integrity...", end=" ", flush=True)
+    if ret := suffix_cache._suffix_tree.check_integrity():
+        raise RuntimeError(f"Cache integrity check failed: {ret}")
+    else:
+        print("OK")
+
+    print("Tokens in cache:", sum(num_cached_tokens.values()))
+    print("Memory estimate:", suffix_cache._suffix_tree.estimate_memory())
 
     records = []
     for request_id, example in tqdm(eval_subset.iterrows(),
@@ -203,6 +234,8 @@ def process_task(
                 "min_token_prob": min_token_prob,
                 "use_tree_spec": use_tree_spec,
                 "use_cached_prompt": use_cached_prompt,
+                "evict_fraction": evict_fraction,
+                "evict_strategy": evict_strategy,
             })
         records.extend(results)
 
@@ -238,7 +271,7 @@ def results_summary(df: pd.DataFrame, config_cols: List[str]) -> pd.DataFrame:
     summary["update_ms_per_tok"] = (
         summary["sum_update_ms"] / summary["sum_out_toks"])
     # Calculate columns to drop from the summary
-    drop_cols = [col for col in config_cols if summary[col].nunique() == 1]
+    drop_cols = [col for col in config_cols[1:] if summary[col].nunique() == 1]
     drop_cols.extend([
         "sum_accept_toks",
         "sum_spec_toks",
@@ -363,15 +396,21 @@ def main(args: argparse.Namespace):
         min_token_prob=args.min_token_prob,
         use_tree_spec=args.use_tree_spec,
         use_cached_prompt=args.use_cached_prompt,
+        evict_fraction=args.evict_fraction,
+        evict_strategy=args.evict_strategy,
     )
     config_values = itertools.product(*configs.values())
     config_values = [
         (dataset, train_dataset, i, *v) for i, v in enumerate(config_values)]
 
     records = []
-    with mp.Pool(args.parallel) as pool:
-        for results in pool.starmap(process_task, config_values):
-            records.extend(results)
+    if args.parallel and args.parallel > 1:
+        with mp.Pool(args.parallel) as pool:
+            for results in pool.starmap(process_task, config_values):
+                records.extend(results)
+    else:
+        for cfg in config_values:
+            records.extend(process_task(*cfg))
 
     print("Preparing results...")
 
@@ -458,7 +497,6 @@ def get_parser():
         "-p",
         "--parallel",
         type=int,
-        default=16,
         help="Max number of parallel processes",
     )
     parser.add_argument(
@@ -503,6 +541,21 @@ def get_parser():
         default=[True],
         help=("Whether to use the cached prompt for the request in addition "
               "to the global cache of previous responses (True/False)"),
+    )
+    parser.add_argument(
+        "--evict-fraction",
+        type=float,
+        nargs="+",
+        default=[0.0],
+        help="Evict a fraction of the cached sequences before running requests",
+    )
+    parser.add_argument(
+        "--evict-strategy",
+        type=str,
+        nargs="+",
+        choices=["random", "oldest", "newest"],
+        default=["random"],
+        help="Evict cached sequences based on the specified strategy",
     )
     return parser
 

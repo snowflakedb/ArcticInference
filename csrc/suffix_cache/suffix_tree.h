@@ -19,28 +19,42 @@
 #include <deque>
 #include <memory>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
+#include "int32_map.h"
+
 struct Node {
+    // Token referenced by this node. Node can refer to a sequence of tokens,
+    // this is just the ID of the first token.
+    int token = 0;
+
     // Number of suffixes from the root that end at or pass through this node.
-    int count;
+    int64_t count = 0;
 
     // Parent node.
-    Node* parent;
+    Node* parent = nullptr;
 
     // Children nodes, the key should always be the first token of the child.
-    std::unordered_map<int, std::unique_ptr<Node>> children;
+    Int32Map<std::unique_ptr<Node>> children;
 
-    // ID of a "reference" sequence that contains the tokens in this node.
-    int seq_id;
+    // Maps sequence ID -> index of the end of the suffix in that sequence.
+    Int32Map<int> endpoints;
 
-    // Start index of this node's tokens in the reference sequence.
-    int start;
+    // Reference sequence ID and starting index for the tokens in this node.
+    int ref_seq = 0;
+    int ref_idx = -1;
 
     // Number of tokens in this node.
-    int length;
+    int length = 0;
 
-    Node() : count(0), parent(nullptr), seq_id(-1), start(0), length(0) {}
+    // Memory usage of this node.
+    size_t memory_usage() const {
+        size_t total = sizeof(*this);
+        total += children.memory_usage();
+        total += endpoints.memory_usage();
+        return total;
+    }
 };
 
 struct Candidate {
@@ -75,12 +89,24 @@ public:
     // Append multiple new elements to the sequence with id seq_id.
     void extend(int seq_id, const std::vector<int>& tokens);
 
+    // Remove the sequence with id seq_id.
+    void remove(int seq_id);
+
+    // Given a pattern, speculate the next tokens using the suffix tree.
     Candidate speculate(const std::vector<int>& pattern,
                         int max_spec_tokens,
                         float max_spec_factor = 1.0f,
                         float max_spec_offset = 0.0f,
                         float min_token_prob = 0.1f,
                         bool use_tree_spec = false);
+
+    // Check the integrity of the suffix tree, return empty string if ok,
+    // otherwise return an error message.
+    std::string check_integrity();
+
+    // Estimate memory usage of the suffix tree, for debugging only. It
+    // walks the entire tree so can be slow.
+    size_t estimate_memory() const;
 
 private:
 
@@ -107,4 +133,6 @@ private:
 
     Candidate _speculate_tree(Node* node, int idx, int max_spec_tokens,
                               float min_token_prob);
+
+    std::string _check_node_integrity(Node* node);
 };
