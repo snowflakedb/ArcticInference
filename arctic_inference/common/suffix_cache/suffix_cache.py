@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Hashable, List, Optional, Sequence, Union
+from typing import Hashable, KeysView, List, Optional, Sequence, Union
 
 from arctic_inference.common.suffix_cache._C import SuffixTree, Candidate
 
@@ -56,82 +56,110 @@ class SuffixSpecResult:
 
 class SuffixCache:
     
-    def __init__(self, max_depth: int = 64):
-        self._max_depth = max_depth
-        self._suffix_tree = SuffixTree(max_depth)
-        self._prompt_trees = {}
+    def __init__(self,
+                 max_tree_depth: int = 64,
+                 max_cached_requests: Optional[int] = None):
+        """
+        Initialize the SuffixCache.
+
+        Args:
+            max_tree_depth (int): The maximum depth of the suffix trees.
+            max_cached_requests (int, optional): The maximum number of cached
+                requests. Cache eviction is used when the limit is reached. If
+                `None`, there is no limit on the number of cached requests.
+        """
+        self._max_tree_depth = max_tree_depth
+        self._max_cached_requests = max_cached_requests
+
+        # Global suffix tree caches previous responses in a single tree.
+        self._global_tree = SuffixTree(max_tree_depth)
+
+        # Local suffix trees cache prompts for each active request separately.
+        self._local_trees = {}
+
+        # Maps between Python request ID and int32_t sequence ID. Tracks all
+        # request IDs that are in the global tree or one of the local trees.
         self._req_to_seq_id = {}
+        self._seq_to_req_id = {}
+
+        # Unused sequence ID to assign to a new request ID.
+        self._next_seq_id = 0
 
     @property
-    def max_depth(self) -> int:
-        return self._max_depth
+    def max_tree_depth(self) -> int:
+        return self._max_tree_depth
 
-    def has_cached_prompt(self, req_id: Hashable) -> bool:
-        return req_id in self._prompt_trees
+    @property
+    def max_cached_requests(self) -> int:
+        return self._max_cached_requests
 
-    def cached_prompt_ids(self) -> List[Hashable]:
-        return list(self._prompt_trees.keys())
-
-    def cache_prompt(self, req_id: Hashable, prompt_token_ids: Sequence[int]):
+    @property
+    def active_requests(self) -> KeysView:
         """
-        Cache a prompt for a specific request ID. Future speculations for the
-        same request may also source draft tokens from this prompt.
+        Returns a view of the currently active request IDs. Active requests are
+        those that have been started via `start_request` and not yet stopped
+        via `stop_request`. The prompts of active requests are stored so they
+        can be used during speculation for the same request.
+        """
+        return self._local_trees.keys()
+
+    @property
+    def cached_requests(self) -> KeysView:
+        """
+        Returns a view of all request IDs that have their responses cached in
+        the global suffix tree. The response for the cached request can be used
+        during speculation for other requests, until the response is evicted.
+        """
+        return self._req_to_seq_id.keys()
+
+    def start_request(self, req_id: Hashable, prompt_token_ids: Sequence[int]):
+        """
+        This method should be called when starting to process a new request. It
+        will store the prompt for the request, allowing future speculations for
+        the same request to use the prompt context. The prompt will be stored
+        until `stop_request` is called.
 
         Args:
             req_id (Hashable): The request identifier. Must be a hashable value
                 that uniquely identifies the request.
             prompt_token_ids (Sequence[int]): A sequence of token IDs
-                representing the prompt to be cached.
+                representing the prompt of the request.
 
         Raises:
-            ValueError: If a prompt already exists for the given request ID.
-
-        Note:
-            The caller should evict the cached prompt using `evict_prompt` once
-            the prompt is no longer needed (i.e. the request is completed).
+            ValueError: If a request with the same `req_id` is already active
+                or cached.
         """
-        if req_id in self._prompt_trees:
-            raise ValueError(f"Prompt already exists for request '{req_id}'")
-        self._prompt_trees[req_id] = SuffixTree(self._max_depth)
-        self._prompt_trees[req_id].extend(0, prompt_token_ids)
+        if req_id in self._req_to_seq_id:
+            raise ValueError(f"Request '{req_id}' is already active or cached")
+        seq_id = self._generate_seq_id(req_id)
+        self._local_trees[req_id] = SuffixTree(self._max_tree_depth)
+        self._local_trees[req_id].extend(seq_id, prompt_token_ids)
 
-    def evict_prompt(self, req_id: Hashable):
+    def stop_request(self, req_id: Hashable):
         """
-        Evicts a prompt from the cache for a specific request.
+        This method should be called when a request is completed. It will evict
+        the prompt for the request, freeing up memory.
 
         Args:
-            req_id (Hashable): The unique identifier for the request whose
-                prompt should be evicted.
+            req_id (Hashable): The request identifier. Must be a hashable value
+                that uniquely identifies the request.
 
         Raises:
-            ValueError: If no prompt exists for the given request identifier.
+            ValueError: If the request with the given `req_id` is not active.
         """
-        if req_id not in self._prompt_trees:
-            raise ValueError(f"Prompt does not exist for request '{req_id}'")
-        del self._prompt_trees[req_id]
+        if req_id not in self._local_trees:
+            raise ValueError(f"Request '{req_id}' is not active")
+        del self._local_trees[req_id]
 
-    def _get_or_assign_seq_id(self, req_id: Hashable) -> int:
-        if req_id not in self._req_to_seq_id:
-            self._req_to_seq_id[req_id] = len(self._req_to_seq_id)
-        return self._req_to_seq_id[req_id]
-
-    def num_cached_responses(self) -> int:
-        """
-        Returns the number of cached responses in the global suffix tree.
-        """
-        return self._suffix_tree.num_seqs()
-
-    def update_response(
+    def add_active_response(
         self,
         req_id: Hashable,
         token_ids: Union[int, Sequence[int]],
     ):
         """
-        Update the cached response for a given request by adding token(s) to
-        its end. It does not rely on the prompt being cached for the request,
-        and its lifetime does not depend on the prompt's existence. Once the
-        response is updated, the new tokens can be used for future speculations
-        for all requests.
+        Update the cached response for a given request by appending token(s) to
+        its end. Once the response is updated, the new tokens can be used for
+        future speculations for all requests.
 
         Args:
             req_id (Hashable): The unique identifier for the request.
@@ -139,35 +167,62 @@ class SuffixCache:
                 (int) or a sequence of token IDs to be appended to the response
                 for the given request.
 
-        Notes:
-            - If req_id doesn't exist, a new empty sequence will be initialized.
-            - If token_ids is a single integer, it's added as a single token.
-            - If token_ids is a sequence, all tokens in the sequence are added.
+        Raises:
+            ValueError: If the request with the given `req_id` is not active.
         """
-        seq_id = self._get_or_assign_seq_id(req_id)
+        if req_id not in self._local_trees:
+            raise ValueError(f"Request '{req_id}' is not active")
+        seq_id = self._req_to_seq_id[req_id]
         if isinstance(token_ids, int):
-            self._suffix_tree.append(seq_id, token_ids)
-            if req_id in self._prompt_trees:
-                self._prompt_trees[req_id].append(0, token_ids)
+            self._global_tree.append(seq_id, token_ids)
+            self._local_trees[req_id].append(seq_id, token_ids)
         else:
-            self._suffix_tree.extend(seq_id, token_ids)
-            if req_id in self._prompt_trees:
-                self._prompt_trees[req_id].extend(0, token_ids)
+            self._global_tree.extend(seq_id, token_ids)
+            self._local_trees[req_id].extend(seq_id, token_ids)
 
-    def evict_response(self, req_id: Hashable):
+    def insert_new_response(
+        self,
+        req_id: Hashable,
+        token_ids: Union[int, Sequence[int]],
+    ):
         """
-        Evicts the response for a specific request from the global suffix tree.
+        Insert a complete response to the global cache for a request that is
+        not active and is not already cached.
 
         Args:
-            req_id (Hashable): The unique identifier for the request whose
-                response should be evicted.
+            req_id (Hashable): The unique identifier for the request.
+            token_ids (Sequence[int]): A sequence of token IDs to be inserted
+                as the response for the given request.
+
+        Raises:
+            ValueError: If a request with the same `req_id` is already active
+                or cached.
+        """
+        if req_id in self._req_to_seq_id:
+            raise ValueError(f"Request '{req_id}' is already active or cached")
+        seq_id = self._generate_seq_id(req_id)
+        self._global_tree.extend(seq_id, token_ids)
+
+    def evict_request(self, req_id: Hashable):
+        """
+        Evicts the given request's prompt and response from the cache. If the
+        request is active, it becomes inactive. The `req_id` can then be reused
+        after eviction.
+
+        Args:
+            req_id (Hashable): The unique identifier for the request that
+                should be evicted.
 
         Raises:
             ValueError: If no response exists for the given request identifier.
         """
-        seq_id = self._get_or_assign_seq_id(req_id)
-        self._suffix_tree.remove(seq_id)
-        del self._req_to_seq_id[req_id]
+        if req_id not in self._req_to_seq_id:
+            raise ValueError(f"Request '{req_id}' is not active or cached")
+        if req_id in self._local_trees:
+            del self._local_trees[req_id]
+        seq_id = self._req_to_seq_id.pop(req_id)
+        self._seq_to_req_id.pop(seq_id)
+        self._global_tree.remove(seq_id)
 
     def speculate(
         self,
@@ -178,12 +233,12 @@ class SuffixCache:
         max_spec_offset: float = 0.0,
         min_token_prob: float = 0.1,
         use_tree_spec: bool = False,
-        use_cached_prompt: bool = True,
     ) -> SuffixSpecResult:
         """
         Speculates and returns the most likely continuation of a given token
-        pattern using the request-specific prompt cache (if available) and the
-        global cache of previous responses.
+        pattern using the request's prompt and the global cache of previous
+        responses. This method can only be called for active requests (i.e.
+        after calling `start_request` and before calling `stop_request`).
 
         Args:
             req_id (Hashable): The unique identifier for the request.
@@ -196,42 +251,33 @@ class SuffixCache:
             min_token_prob (float): Minimum estimated probability threshold for
                 candidate tokens.
             use_tree_spec (bool): If True, uses tree-based speculation.
-            use_cached_prompt (bool): If True, uses the cached prompt for the
-                request in addition to the global cache of previous responses.
         
         Returns:
             The speculation result containing the most likely continuation
             tokens, their probabilities, and overall score.
 
         Raises:
-            ValueError: If the prompt doesn't exist for the given req_id when
-                use_cached_prompt is True, or if the pattern is invalid.
+            ValueError: If the request with the given `req_id` is not active.
         """
-        if use_cached_prompt and req_id not in self._prompt_trees:
-            raise ValueError(f"Prompt does not exist for request '{req_id}'")
-        if not pattern:
-            raise ValueError("Pattern must not be empty")
+        if req_id not in self._local_trees:
+            raise ValueError(f"Request '{req_id}' is not active")
 
         if max_spec_tokens is None:
             max_spec_tokens = self.max_depth
 
-        if len(pattern) > self._max_depth:
-            pattern = pattern[-self._max_depth :]
+        if len(pattern) > self._max_tree_depth:
+            pattern = pattern[-self._max_tree_depth :]
 
-        if use_cached_prompt:
-            prompt_tree = self._prompt_trees[req_id]
-            candidate = prompt_tree.speculate(
-                pattern,
-                max_spec_tokens,
-                max_spec_factor,
-                max_spec_offset,
-                min_token_prob,
-                use_tree_spec)
-            result = SuffixSpecResult.from_candidate(candidate)
-        else:
-            result = SuffixSpecResult()
+        candidate = self._local_trees[req_id].speculate(
+            pattern,
+            max_spec_tokens,
+            max_spec_factor,
+            max_spec_offset,
+            min_token_prob,
+            use_tree_spec)
+        result = SuffixSpecResult.from_candidate(candidate)
 
-        candidate = self._suffix_tree.speculate(
+        candidate = self._global_tree.speculate(
             pattern,
             max_spec_tokens,
             max_spec_factor,
@@ -240,4 +286,43 @@ class SuffixCache:
             use_tree_spec)
         if candidate.score > result.score:
             result = SuffixSpecResult.from_candidate(candidate)
+
         return result
+
+    def _generate_seq_id(self, req_id: Hashable) -> int:
+        # Find the next available seq_id not used by an active request.
+        while True:
+            seq_id = self._next_seq_id
+            # Increment to the next non-negative int32_t value.
+            self._next_seq_id = (self._next_seq_id + 1) & 0x7FFFFFFF
+            if (seq_id not in self._seq_to_req_id or
+                    self._seq_to_req_id[seq_id] not in self._local_trees):
+                break
+        # Check if the seq_id is used by an inactive but cached request.
+        if seq_id in self._seq_to_req_id:
+            # This seq_id is already used, should be a very rare case that
+            # only happens when the seq_id has wrapped around and collided.
+            # We evict the old cached request to free up the seq_id.
+            del self._req_to_seq_id[self._seq_to_req_id[seq_id]]
+            del self._seq_to_req_id[seq_id]
+            self._global_tree.remove(seq_id)
+        # Allocate the seq_id to the new req_id.
+        self._req_to_seq_id[req_id] = seq_id
+        self._seq_to_req_id[seq_id] = req_id
+        self._maybe_evict_requests(seq_id)
+        return seq_id
+
+    def _maybe_evict_requests(self, new_seq_id: int):
+        if self._max_cached_requests is None:
+            return
+        while len(self._req_to_seq_id) > self._max_cached_requests:
+            # Evict the first request that is not active. Should be FIFO order
+            # in python 3.7+ as dict preserves insertion order. We also want to
+            # avoid evicting the request that was just added (new_seq_id).
+            for req_id, seq_id in self._req_to_seq_id.items():
+                if seq_id != new_seq_id and req_id not in self._local_trees:
+                    self.evict_request(req_id)
+                    break
+            else:
+                # All previously cached requests are active, cannot evict any.
+                break
