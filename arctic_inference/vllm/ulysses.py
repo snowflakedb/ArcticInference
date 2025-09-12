@@ -31,10 +31,11 @@ from vllm.distributed.parallel_state import (init_model_parallel_group,
                                              destroy_distributed_environment)
 from vllm.executor.multiproc_worker_utils import (
     set_multiprocessing_worker_envs)
-from vllm.utils import get_distributed_init_method, get_open_port
+from vllm.utils import get_distributed_init_method, get_open_port, get_loopback_ip
 from vllm.v1.executor.abstract import FailureCallback
 from vllm.v1.executor.multiproc_executor import (MultiprocExecutor, WorkerProc,
                                                  UnreadyWorkerProcHandle)
+from vllm.distributed.kv_transfer.kv_connector.utils import KVOutputAggregator
 from vllm.platforms import current_platform
 from vllm.utils import resolve_obj_by_qualname
 from vllm.compilation.backends import PiecewiseCompileInterpreter
@@ -340,9 +341,9 @@ class UlyssesMultiprocExecutor(ArcticPatch[MultiprocExecutor]):
 
         # Multiprocessing-based executor does not support multi-node setting.
         # Since it only works for single node, we can use the loopback address
-        # 127.0.0.1 for communication.
+        # get_loopback_ip() for communication.
         distributed_init_method = get_distributed_init_method(
-            "127.0.0.1", get_open_port())
+            get_loopback_ip(), get_open_port())
 
         # Initialize worker and set up message queues for SchedulerOutputs
         # and ModelRunnerOutputs
@@ -388,7 +389,6 @@ class UlyssesMultiprocExecutor(ArcticPatch[MultiprocExecutor]):
                 self._ensure_worker_termination(
                     [uw.proc for uw in unready_workers])
 
-
         # For pipeline parallel, we use a thread pool for asynchronous
         # execute_model.
         if self.max_concurrent_batches > 1:
@@ -400,7 +400,6 @@ class UlyssesMultiprocExecutor(ArcticPatch[MultiprocExecutor]):
 
         self.output_rank = self._get_output_rank()
         self.has_connector = self.vllm_config.kv_transfer_config is not None
-        from vllm.distributed.kv_transfer.kv_connector.utils import KVOutputAggregator
         self.kv_output_aggregator = KVOutputAggregator(
             self.parallel_config.world_size)
 
