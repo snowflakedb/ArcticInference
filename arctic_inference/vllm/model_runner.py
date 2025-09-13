@@ -92,7 +92,7 @@ def is_shift_parallel_mode() -> bool:
 class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
     _orig_initialize_kv_cache = GPUModelRunner.initialize_kv_cache
-    _orig_capture_cuda_graphs = GPUModelRunner._capture_cuda_graphs
+    _orig_capture_cudagraphs = GPUModelRunner._capture_cudagraphs
     _orig_prepare_inputs = GPUModelRunner._prepare_inputs
     _orig_profile_run = GPUModelRunner.profile_run
     _orig_load_model = GPUModelRunner.load_model
@@ -801,7 +801,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         if is_global_first_rank():
             logger.info(f"base model (SP) shapes {compilation_cases_base}")
         # capture SP
-        self._orig_capture_cuda_graphs(compilation_cases_base, cudagraph_runtime_mode, uniform_decode)
+        self._orig_capture_cudagraphs(compilation_cases_base, cudagraph_runtime_mode, uniform_decode)
 
         if self.shift_model is not None:
             # capture shift model (TP) shapes
@@ -815,7 +815,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             orig_model, self.model = self.model, self.shift_model
             # capture TP
             with set_shift_parallel_mode(True):
-                self._orig_capture_cuda_graphs(compilation_cases_shift, cudagraph_runtime_mode, uniform_decode)
+                self._orig_capture_cudagraphs(compilation_cases_shift, cudagraph_runtime_mode, uniform_decode)
             # reverse models
             self.model = orig_model
 
