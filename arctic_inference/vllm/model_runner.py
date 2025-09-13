@@ -92,6 +92,7 @@ def is_shift_parallel_mode() -> bool:
 class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
     _orig_initialize_kv_cache = GPUModelRunner.initialize_kv_cache
+    _orig_capture_cuda_graphs = GPUModelRunner._capture_cuda_graphs
     _orig_prepare_inputs = GPUModelRunner._prepare_inputs
     _orig_profile_run = GPUModelRunner.profile_run
     _orig_load_model = GPUModelRunner.load_model
@@ -783,114 +784,178 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             self.shift_model = None
             self.shift_parallel_threshold = 0
 
-    def capture_model(self) -> None:
-        if self.compilation_config.cudagraph_mode == CUDAGraphMode.NONE:
-            logger.warning(
-                "Skipping CUDA graph capture. To turn on CUDA graph capture, "
-                "ensure `cudagraph_mode` was not manually set to `NONE`")
-            return
-        else:
-            self.initialize_cudagraph_capture()
+    def _capture_cudagraphs(self, compilation_cases: list[int],
+                            cudagraph_runtime_mode: CUDAGraphMode,
+                            uniform_decode: bool):
+        assert cudagraph_runtime_mode != CUDAGraphMode.NONE and \
+            cudagraph_runtime_mode in [CUDAGraphMode.FULL,
+                                        CUDAGraphMode.PIECEWISE]
 
-        compilation_counter.num_gpu_runner_capture_triggers += 1
+        # capture base model (SP) shapes
+        sp_size = self.parallel_config.ulysses_sequence_parallel_size
+        compilation_cases_base = (
+            shape for shape in compilation_cases
+            if shape * sp_size > self.shift_parallel_threshold and shape *
+            sp_size <= self.max_num_tokens)
+        # print shapes
+        if is_global_first_rank():
+            logger.info(f"base model (SP) shapes {compilation_cases_base}")
+        # capture SP
+        self._orig_capture_cuda_graphs(compilation_cases_base, cudagraph_runtime_mode, uniform_decode)
 
-        start_time = time.perf_counter()
-        start_free_gpu_memory = torch.cuda.mem_get_info()[0]
-
-        from contextlib import contextmanager
-        @contextmanager
-        def freeze_gc():
-            # Optimize garbage collection during CUDA graph capture.
-            # Clean up, then freeze all remaining objects from being included
-            # in future collections.
-            gc.collect()
-            should_freeze = not envs.VLLM_ENABLE_CUDAGRAPH_GC
-            if should_freeze:
-                gc.freeze()
-            try:
-                yield
-            finally:
-                if should_freeze:
-                    gc.unfreeze()
-
-        # Trigger CUDA graph capture for specific shapes.
-        # Capture the large shapes first so that the smaller shapes
-        # can reuse the memory pool allocated for the large shapes.
-        set_cudagraph_capturing_enabled(True)
-        with freeze_gc(), parallel_state.graph_capture(device=self.device):
-            cudagraph_mode = self.compilation_config.cudagraph_mode
-            sp_size = self.parallel_config.ulysses_sequence_parallel_size
-            #full_cg = cudagraph_mode.decode_mode() == CUDAGraphMode.FULL
-            # capture base model shapes
-            compilation_cases = (
-                shape for shape in reversed(self.cudagraph_batch_sizes)
-                if shape * sp_size > self.shift_parallel_threshold and shape *
-                sp_size <= self.max_num_tokens)
-            # Only rank 0 should print progress bar during capture
+        if self.shift_model is not None:
+            # capture shift model (TP) shapes
+            compilation_cases_shift = (
+                shape for shape in compilation_cases
+                if shape <= self.shift_parallel_threshold
+                or "SwiftKV" in self.model.__class__.__name__)
             if is_global_first_rank():
-                print_cases, compilation_cases = tee(compilation_cases)
-                logger.info(f"base model shapes {list(print_cases)}")
-                compilation_cases = tqdm(
-                    list(compilation_cases),
-                    desc="Capturing CUDA graph shapes of the base model")
-            for num_tokens in compilation_cases:
-                # We skip EPLB here since we don't want to record dummy metrics
-                for _ in range(self.compilation_config.cudagraph_num_of_warmups):
-                    self._dummy_run(num_tokens * sp_size,
-                                    cudagraph_runtime_mode=CUDAGraphMode.NONE,
-                                    # force_attention=full_cg,
-                                    uniform_decode=True,
-                                    skip_eplb=True)
-                self._dummy_run(num_tokens * sp_size,
-                                cudagraph_runtime_mode=CUDAGraphMode.PIECEWISE,
-                                # force_attention=full_cg,
-                                uniform_decode=True,
-                                skip_eplb=True)
+                logger.info(f"shift model (TP) shapes {compilation_cases_shift}")
+            # switch models
+            orig_model, self.model = self.model, self.shift_model
+            # capture TP
+            with set_shift_parallel_mode(True):
+                self._orig_capture_cuda_graphs(compilation_cases_shift, cudagraph_runtime_mode, uniform_decode)
+            # reverse models
+            self.model = orig_model
 
-            # Capture shift model shapes
-            if self.shift_model is not None:
-                orig_model, self.model = self.model, self.shift_model
-                # Reset compilation cases
-                compilation_cases = (
-                    shape for shape in reversed(self.cudagraph_batch_sizes)
-                    if shape <= self.shift_parallel_threshold
-                    or "SwiftKV" in self.model.__class__.__name__)
-                # Note: We want to capture all shapes for the SwiftKV shift model.
-                # This is necessary since SwiftKV always uses full TP for the decode runner.
-                # For all other models, we only capture necessary shapes for the SP_TP mode,
-                # yielding less setup time.
-                if is_global_first_rank():
-                    print_cases, compilation_cases = tee(compilation_cases)
-                    logger.info(f"shift model shapes {list(print_cases)}")
-                    compilation_cases = tqdm(
-                        list(compilation_cases),
-                        desc="Capturing CUDA graph shapes of the shift model")
-                with set_shift_parallel_mode(True):
-                    for num_tokens in compilation_cases:
-                        for _ in range(self.vllm_config.compilation_config.
-                                       cudagraph_num_of_warmups):
-                            self._dummy_run(num_tokens,
-                                            capture_attn_cudagraph=full_cg,
-                                            skip_eplb=True)
-                        self._dummy_run(num_tokens,
-                                        capture_attn_cudagraph=full_cg,
-                                        skip_eplb=True)
-                self.model = orig_model
+    #     # Only rank 0 should print progress bar during capture
+    #     if is_global_first_rank():
+    #         compilation_cases = tqdm(
+    #             compilation_cases,
+    #             disable=not self.load_config.use_tqdm_on_load,
+    #             desc="Capturing CUDA graphs ({}, {})".format(
+    #                 "decode" if uniform_decode else "mixed prefill-decode",
+    #                 cudagraph_runtime_mode.name))
+        
+    #     # We skip EPLB here since we don't want to record dummy metrics
+    #     for num_tokens in compilation_cases:
+    #         for _ in range(self.compilation_config.cudagraph_num_of_warmups):
+    #             # Use CUDAGraphRuntimeStyle.NONE (default) for warmup.
+    #             # But be careful, warm up with `NONE`is orthogonal to
+    #             # if we want to warm up attention or not. This is
+    #             # different from the case where `FULL` implies capture
+    #             # attention while `PIECEWISE` implies no attention.
+    #             force_attention = (
+    #                 cudagraph_runtime_mode == CUDAGraphMode.FULL)
+    #             self._dummy_run(num_tokens,
+    #                             cudagraph_runtime_mode=CUDAGraphMode.NONE,
+    #                             force_attention=force_attention,
+    #                             uniform_decode=uniform_decode,
+    #                             skip_eplb=True)
+    #         self._dummy_run(num_tokens,
+    #                         cudagraph_runtime_mode=cudagraph_runtime_mode,
+    #                         uniform_decode=uniform_decode,
+    #                         skip_eplb=True)
 
-        # Disable cudagraph capturing globally, so any unexpected cudagraph
-        # capturing will be detected and raise an error after here.
-        # Note: We don't put it into graph_capture context manager because
-        # we may doing lazy capturing in future that still allows capturing
-        # after here.
-        set_cudagraph_capturing_enabled(False)
+    # def capture_model(self) -> None:
+    #     if self.compilation_config.cudagraph_mode == CUDAGraphMode.NONE:
+    #         logger.warning(
+    #             "Skipping CUDA graph capture. To turn on CUDA graph capture, "
+    #             "ensure `cudagraph_mode` was not manually set to `NONE`")
+    #         return
+    #     else:
+    #         self.initialize_cudagraph_capture()
 
-        end_time = time.perf_counter()
-        end_free_gpu_memory = torch.cuda.mem_get_info()[0]
-        elapsed_time = end_time - start_time
-        cuda_graph_size = start_free_gpu_memory - end_free_gpu_memory
-        # This usually takes 5~20 seconds.
-        logger.info("Graph capturing finished in %.0f secs, took %.2f GiB",
-                    elapsed_time, cuda_graph_size / (1 << 30))
+    #     compilation_counter.num_gpu_runner_capture_triggers += 1
+
+    #     start_time = time.perf_counter()
+    #     start_free_gpu_memory = torch.cuda.mem_get_info()[0]
+
+    #     from contextlib import contextmanager
+    #     @contextmanager
+    #     def freeze_gc():
+    #         # Optimize garbage collection during CUDA graph capture.
+    #         # Clean up, then freeze all remaining objects from being included
+    #         # in future collections.
+    #         gc.collect()
+    #         should_freeze = not envs.VLLM_ENABLE_CUDAGRAPH_GC
+    #         if should_freeze:
+    #             gc.freeze()
+    #         try:
+    #             yield
+    #         finally:
+    #             if should_freeze:
+    #                 gc.unfreeze()
+
+    #     # Trigger CUDA graph capture for specific shapes.
+    #     # Capture the large shapes first so that the smaller shapes
+    #     # can reuse the memory pool allocated for the large shapes.
+    #     set_cudagraph_capturing_enabled(True)
+    #     with freeze_gc(), parallel_state.graph_capture(device=self.device):
+    #         cudagraph_mode = self.compilation_config.cudagraph_mode
+    #         sp_size = self.parallel_config.ulysses_sequence_parallel_size
+    #         #full_cg = cudagraph_mode.decode_mode() == CUDAGraphMode.FULL
+    #         # capture base model shapes
+    #         compilation_cases = (
+    #             shape for shape in reversed(self.cudagraph_batch_sizes)
+    #             if shape * sp_size > self.shift_parallel_threshold and shape *
+    #             sp_size <= self.max_num_tokens)
+    #         # Only rank 0 should print progress bar during capture
+    #         if is_global_first_rank():
+    #             print_cases, compilation_cases = tee(compilation_cases)
+    #             logger.info(f"base model shapes {list(print_cases)}")
+    #             compilation_cases = tqdm(
+    #                 list(compilation_cases),
+    #                 desc="Capturing CUDA graph shapes of the base model")
+    #         for num_tokens in compilation_cases:
+    #             # We skip EPLB here since we don't want to record dummy metrics
+    #             for _ in range(self.compilation_config.cudagraph_num_of_warmups):
+    #                 self._dummy_run(num_tokens * sp_size,
+    #                                 cudagraph_runtime_mode=CUDAGraphMode.NONE,
+    #                                 # force_attention=full_cg,
+    #                                 uniform_decode=True,
+    #                                 skip_eplb=True)
+    #             self._dummy_run(num_tokens * sp_size,
+    #                             cudagraph_runtime_mode=CUDAGraphMode.PIECEWISE,
+    #                             # force_attention=full_cg,
+    #                             uniform_decode=True,
+    #                             skip_eplb=True)
+
+    #         # Capture shift model shapes
+    #         if self.shift_model is not None:
+    #             orig_model, self.model = self.model, self.shift_model
+    #             # Reset compilation cases
+    #             compilation_cases = (
+    #                 shape for shape in reversed(self.cudagraph_batch_sizes)
+    #                 if shape <= self.shift_parallel_threshold
+    #                 or "SwiftKV" in self.model.__class__.__name__)
+    #             # Note: We want to capture all shapes for the SwiftKV shift model.
+    #             # This is necessary since SwiftKV always uses full TP for the decode runner.
+    #             # For all other models, we only capture necessary shapes for the SP_TP mode,
+    #             # yielding less setup time.
+    #             if is_global_first_rank():
+    #                 print_cases, compilation_cases = tee(compilation_cases)
+    #                 logger.info(f"shift model shapes {list(print_cases)}")
+    #                 compilation_cases = tqdm(
+    #                     list(compilation_cases),
+    #                     desc="Capturing CUDA graph shapes of the shift model")
+    #             with set_shift_parallel_mode(True):
+    #                 for num_tokens in compilation_cases:
+    #                     for _ in range(self.vllm_config.compilation_config.
+    #                                    cudagraph_num_of_warmups):
+    #                         self._dummy_run(num_tokens,
+    #                                         capture_attn_cudagraph=full_cg,
+    #                                         skip_eplb=True)
+    #                     self._dummy_run(num_tokens,
+    #                                     capture_attn_cudagraph=full_cg,
+    #                                     skip_eplb=True)
+    #             self.model = orig_model
+
+    #     # Disable cudagraph capturing globally, so any unexpected cudagraph
+    #     # capturing will be detected and raise an error after here.
+    #     # Note: We don't put it into graph_capture context manager because
+    #     # we may doing lazy capturing in future that still allows capturing
+    #     # after here.
+    #     set_cudagraph_capturing_enabled(False)
+
+    #     end_time = time.perf_counter()
+    #     end_free_gpu_memory = torch.cuda.mem_get_info()[0]
+    #     elapsed_time = end_time - start_time
+    #     cuda_graph_size = start_free_gpu_memory - end_free_gpu_memory
+    #     # This usually takes 5~20 seconds.
+    #     logger.info("Graph capturing finished in %.0f secs, took %.2f GiB",
+    #                 elapsed_time, cuda_graph_size / (1 << 30))
 
     def initialize_kv_cache(self, kv_cache_config: KVCacheConfig) -> None:
         self._orig_initialize_kv_cache(kv_cache_config)
