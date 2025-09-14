@@ -154,3 +154,9 @@ in vLLM to control suffix decoding behavior, which are listed below.
   below this value are discarded, enhancing speculative precision and reducing
   computational waste. Probabilities are calculated based on the frequencies of
   tokens in the suffix trees.
+
+* **suffix_cache_max_requests** (int, default: 100000)
+
+  Limits the number of requests that can be stored in the cache. New requests
+  that exceed this limit will trigger eviction. Currently, only FIFO eviction
+  is implemented.
