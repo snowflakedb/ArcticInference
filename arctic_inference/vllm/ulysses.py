@@ -36,10 +36,6 @@ from vllm.v1.executor.abstract import FailureCallback
 from vllm.v1.executor.multiproc_executor import (MultiprocExecutor, WorkerProc,
                                                  UnreadyWorkerProcHandle)
 from vllm.distributed.kv_transfer.kv_connector.utils import KVOutputAggregator
-from vllm.platforms import current_platform
-from vllm.utils import resolve_obj_by_qualname
-from vllm.compilation.backends import PiecewiseCompileInterpreter
-from vllm.compilation.counter import compilation_counter
 from vllm.model_executor.layers.fused_moe import FusedMoE
 from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
 from vllm.forward_context import BatchDescriptor
@@ -56,7 +52,6 @@ def apply_shift_parallel_patches():
     UlyssesAttention.apply_patch()
     UlyssesFusedMoE.apply_patch()
     UlyssesCudagraphDispatcher.apply_patch()
-    PiecewiseCompileInterpreter.apply_patch()
 
 
 class UlyssesModelConfig(ArcticPatch[ModelConfig]):
@@ -520,98 +515,6 @@ class UlyssesCudagraphDispatcher(ArcticPatch[CudagraphDispatcher]):
                self.add_cudagraph_key(
                    cudagraph_mode.mixed_mode(),
                    BatchDescriptor(num_tokens=bs * sp_size, uniform_decode=False))
-
-
-class PiecewiseCompileInterpreter(ArcticPatch[PiecewiseCompileInterpreter]):
-
-    # find the symbolic shape of the subgraph
-    def find_symbolic_shape(self, args: tuple[torch.fx.node.Argument,
-                                ...]) -> torch.SymInt:
-        symbols = set()
-        for x in args:
-            if isinstance(x, torch._subclasses.fake_tensor.FakeTensor):
-                for dim in x.shape:
-                    if isinstance(dim, torch.SymInt):
-                        symbols.update(dim.node.expr.free_symbols)
-        assert len(symbols) == 1, (
-            f"Expected exactly one symbolic shape, but found {len(symbols)}: {symbols}")
-        return list(symbols)[0]
-  
-    def call_module(self, target: torch.fx.node.Target,
-                    args: tuple[torch.fx.node.Argument,
-                                ...], kwargs: dict[str, Any]) -> Any:
-        assert isinstance(target, str)
-        # [Arctic Inference]
-        # Since monkeypatching inherits the original class
-        # through ArcticPatch class, we lose the access to the original class'
-        # super() function. Instead of using super(), we directly invoke call_module
-        # from the super class torch.fx.Interpreter of PiecewiseCompileInterpreter.
-        # see - v0.9.0.1/compilation/backends.py#L241
-        output = torch.fx.Interpreter.call_module(self, target, args, kwargs)
-
-        if target in self.compile_submod_names:
-            index = self.compile_submod_names.index(target)
-            submod = self.fetch_attr(target)
-            # [Arctic Inference]
-            # Compiler may create subgraphs with certain symbolic
-            # integer values that violates vllm's assumption here:
-            # - v0.9.0.1/compilation/base_piecewise_backend.py#L64
-            # The index of the significant symbol determines the runtime shape here:
-            # - v0.9.0.1/compilation/cuda_piecewise_backend.py#L112
-            # The fix is relaxing vllm's original assumption that there is only a
-            # single symbolic that determines the shape.We then find the matching 
-            # symbol indices.
-            sym_shape = self.find_symbolic_shape(args)
-            sym_shape_indices = []
-            for i, x in enumerate(args):
-                if isinstance(x, torch.SymInt):
-                    if sym_shape == x:
-                        sym_shape_indices.append(i)
-
-            global compilation_start_time
-            compiled_graph_for_dynamic_shape = self.vllm_backend.\
-                compiler_manager.compile(
-                submod,
-                args,
-                self.compilation_config.inductor_compile_config,
-                self.compilation_config,
-                graph_index=index,
-                num_graphs=len(self.compile_submod_names),
-                runtime_shape=None)
-            # Lazy import here to avoid circular import
-            from vllm.compilation.cuda_graph import CUDAGraphOptions
-            from vllm.compilation.cuda_piecewise_backend import PiecewiseBackend
-
-            piecewise_backend = PiecewiseBackend(
-                submod, self.vllm_config, index,
-                len(self.compile_submod_names), sym_shape_indices,
-                compiled_graph_for_dynamic_shape, self.vllm_backend)
-
-            if self.compilation_config.cudagraph_mode != CUDAGraphMode.NONE:
-                # resolve the static graph wrapper class (e.g. CUDAGraphWrapper
-                # class) as platform dependent.
-                static_graph_wrapper_class = resolve_obj_by_qualname(
-                    current_platform.get_static_graph_wrapper_cls())
-
-                # Always assign PIECEWISE runtime mode to the
-                # CUDAGraphWrapper for piecewise_backend, to distinguish
-                # it from the FULL cudagraph runtime mode, no matter it
-                # is wrapped on a full or piecewise fx graph.
-                self.module.__dict__[target] = static_graph_wrapper_class(
-                    runnable=piecewise_backend,
-                    vllm_config=self.vllm_config,
-                    runtime_mode=CUDAGraphMode.PIECEWISE,
-                    graph_pool=self.graph_pool,
-                    cudagraph_options=CUDAGraphOptions(
-                        debug_log_enable=piecewise_backend.is_first_graph,
-                        gc_disable=not piecewise_backend.is_first_graph,
-                        weak_ref_output=piecewise_backend.is_last_graph))
-            else:
-                self.module.__dict__[target] = piecewise_backend
-
-            compilation_counter.num_piecewise_capturable_graphs_seen += 1
-
-        return output
 
 
 class UlyssesFusedMoE(ArcticPatch[FusedMoE]):
