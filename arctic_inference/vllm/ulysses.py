@@ -565,9 +565,6 @@ class UlyssesFusedMoEParallelConfig(ArcticPatch[FusedMoEParallelConfig]):
         _sp_rank = parallel_state._SP.rank_in_group
         use_ep = vllm_parallel_config.enable_expert_parallel
 
-        if torch.distributed.get_rank() == 0:
-            print(f"_tp_size {_tp_size} _sp_size {_sp_size} use_ep {use_ep}")
-
         from .model_runner import is_shift_parallel_mode
         if is_shift_parallel_mode():
             return FusedMoEParallelConfig(tp_size=_tp_size,
