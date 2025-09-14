@@ -563,25 +563,19 @@ class UlyssesFusedMoEParallelConfig(ArcticPatch[FusedMoEParallelConfig]):
         _tp_rank = parallel_state._TP.rank_in_group
         _sp_size = parallel_state._SP.world_size
         _sp_rank = parallel_state._SP.rank_in_group
-        use_ep = vllm_parallel_config.enable_expert_parallel
 
         from .model_runner import is_shift_parallel_mode
-        if is_shift_parallel_mode():
-            return FusedMoEParallelConfig(tp_size=_tp_size,
-                                          tp_rank=_tp_rank,
-                                          dp_size=1,
-                                          dp_rank=0,
-                                          ep_size=1,
-                                          ep_rank=0,
-                                          use_ep=False)
-        else:
-            return FusedMoEParallelConfig(tp_size=_tp_size,
-                                          tp_rank=_tp_rank,
-                                          dp_size=1,
-                                          dp_rank=0,
-                                          ep_size=_sp_size,
-                                          ep_rank=_sp_rank,
-                                          use_ep=True)
+        # ep logic
+        use_ep = True if (vllm_parallel_config.enable_expert_parallel and
+                          not is_shift_parallel_mode()) else False
+        # ep is not significant if use_ep == False
+        return FusedMoEParallelConfig(tp_size=_tp_size,
+                                      tp_rank=_tp_rank,
+                                      dp_size=1,
+                                      dp_rank=0,
+                                      ep_size=_sp_size,
+                                      ep_rank=_sp_rank,
+                                      use_ep=use_ep)
 
 class UlyssesFp8MoEMethod(ArcticPatch[Fp8MoEMethod]):
 
