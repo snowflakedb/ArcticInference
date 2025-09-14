@@ -17,7 +17,7 @@ import threading
 import weakref
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional, Any
+from typing import Optional, Callable
 
 import torch
 import vllm.distributed.parallel_state as parallel_state
@@ -38,7 +38,8 @@ from vllm.v1.executor.multiproc_executor import (MultiprocExecutor, WorkerProc,
 from vllm.distributed.kv_transfer.kv_connector.utils import KVOutputAggregator
 from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
 from vllm.forward_context import BatchDescriptor
-from vllm.model_executor.layers.fused_moe import FusedMoE, FusedMoEParallelConfig
+from vllm.model_executor.layers.fused_moe import FusedMoE
+from vllm.model_executor.layers.fused_moe.config import FusedMoEParallelConfig
 from vllm.model_executor.layers.quantization.fp8 import Fp8MoEMethod
 
 
