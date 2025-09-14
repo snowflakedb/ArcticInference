@@ -41,6 +41,9 @@ from vllm.utils import resolve_obj_by_qualname
 from vllm.compilation.backends import PiecewiseCompileInterpreter
 from vllm.compilation.counter import compilation_counter
 from vllm.model_executor.layers.fused_moe import FusedMoE
+from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
+from vllm.forward_context import BatchDescriptor
+
 
 from arctic_inference.patching import ArcticPatch
 
@@ -52,7 +55,8 @@ def apply_shift_parallel_patches():
     UlyssesMultiprocExecutor.apply_patch()
     UlyssesAttention.apply_patch()
     UlyssesFusedMoE.apply_patch()
-    # PiecewiseCompileInterpreter.apply_patch()
+    UlyssesCudagraphDispatcher.apply_patch()
+    PiecewiseCompileInterpreter.apply_patch()
 
 
 class UlyssesModelConfig(ArcticPatch[ModelConfig]):
@@ -499,6 +503,25 @@ class UlyssesAttention(ArcticPatch[Attention]):
                   .reshape(-1, self.num_heads * self.sp_size * self.head_size))
         
         return output
+
+
+class UlyssesCudagraphDispatcher(ArcticPatch[CudagraphDispatcher]):
+
+   _orig_initialize_cudagraph_keys = CudagraphDispatcher.initialize_cudagraph_keys
+
+   def initialize_cudagraph_keys(self, cudagraph_mode: CUDAGraphMode,
+                                 uniform_decode_query_len: int):
+       if torch.distributed.get_rank() == 0:
+           print(f"initialize cudagraph keys cudagraph_mode {cudagraph_mode} uniform_decode_query_len {uniform_decode_query_len}")
+
+       self._orig_initialize_cudagraph_keys(cudagraph_mode, uniform_decode_query_len)
+           
+       if cudagraph_mode.mixed_mode() != CUDAGraphMode.NONE:
+           sp_size = parallel_state._SP.world_size
+           for bs in self.compilation_config.cudagraph_capture_sizes:
+               self.add_cudagraph_key(
+                   cudagraph_mode.mixed_mode(),
+                   BatchDescriptor(num_tokens=bs * sp_size, uniform_decode=False))
 
 
 class PiecewiseCompileInterpreter(ArcticPatch[PiecewiseCompileInterpreter]):
