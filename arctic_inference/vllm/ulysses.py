@@ -545,7 +545,7 @@ class UlyssesFusedMoE(ArcticPatch[FusedMoE]):
 
         if is_shift_parallel_mode():
             output = torch.empty_like(hidden_states)
-            torch.distributed.reduce_scatter_from_tensor(output, expert_out, group=sp_group)
+            torch.distributed.reduce_scatter_tensor(output, expert_out, group=sp_group)
         else:
             output = expert_out
 
