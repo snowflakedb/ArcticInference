@@ -537,15 +537,10 @@ class UlyssesFusedMoE(ArcticPatch[FusedMoE]):
             sp_size = parallel_state._SP.world_size
             sp_group = parallel_state._SP.device_group
             senbuf = torch.cat([hidden_states, router_logits], dim=1)
-            # hidden_states_replicated = torch.empty((hidden_states.shape[0] * sp_size, hidden_states.shape[1]), dtype=hidden_states.dtype, device=hidden_states.device)
-            # router_logits_replicated = torch.empty((router_logits.shape[0] * sp_size, router_logits.shape[1]), dtype=router_logits.dtype, device=router_logits.device)
-            # torch.distributed.all_gather_into_tensor(hidden_states_replicated, hidden_states, group=sp_group)
-            # torch.distributed.all_gather_into_tensor(router_logits_replicated, router_logits, group=sp_group)
             recvbuf = torch.empty((senbuf.shape[0] * sp_size, senbuf.shape[1]), dtype=senbuf.dtype, device=senbuf.device)
             torch.distributed.all_gather_into_tensor(recvbuf, senbuf, group=sp_group)
-            hidden_states_, router_logits_ = recvbuf.split([hidden_states.shape[1], router_logits.shape[1]], dim=1)
-            hidden_states_ = hidden_states_.contiguous()
-            router_logits_ = router_logits_.contiguous()
+            hidden_states_, router_logits_ = [chunk.contiguous() for chunk in 
+                                              recvbuf.split([hidden_states.shape[1], router_logits.shape[1]], dim=1)]   
 
         expert_out = self.forward_impl(hidden_states_, router_logits_)
 
