@@ -529,26 +529,25 @@ class UlyssesFusedMoE(ArcticPatch[FusedMoE]):
         # directly call forward_impl to bypass custom opt
         # custom opt prevents using the shift model
 
-        from .model_runner import is_shift_parallel_mode
-        if is_shift_parallel_mode():
-            hidden_states_ = hidden_states
-            router_logits_ = router_logits
-        else:
+        if self.moe_parallel_config.use_ep:
             sp_size = parallel_state._SP.world_size
             sp_group = parallel_state._SP.device_group
             senbuf = torch.cat([hidden_states, router_logits], dim=1)
             recvbuf = torch.empty((senbuf.shape[0] * sp_size, senbuf.shape[1]), dtype=senbuf.dtype, device=senbuf.device)
             torch.distributed.all_gather_into_tensor(recvbuf, senbuf, group=sp_group)
             hidden_states_, router_logits_ = [chunk.contiguous() for chunk in 
-                                              recvbuf.split([hidden_states.shape[1], router_logits.shape[1]], dim=1)]   
+                                              recvbuf.split([hidden_states.shape[1], router_logits.shape[1]], dim=1)]
+        else:
+            hidden_states_ = hidden_states
+            router_logits_ = router_logits
 
         expert_out = self.forward_impl(hidden_states_, router_logits_)
 
-        if is_shift_parallel_mode():
-            output = expert_out
-        else:
+        if self.moe_parallel_config.use_ep:
             output = torch.empty_like(hidden_states)
             torch.distributed.reduce_scatter_tensor(output, expert_out, group=sp_group)
+        else:
+            return expert_out
 
         return output
 
