@@ -531,8 +531,8 @@ class UlyssesFusedMoE(ArcticPatch[FusedMoE]):
 
         from .model_runner import is_shift_parallel_mode
         if is_shift_parallel_mode():
-            hidden_states_replicated = hidden_states
-            router_logits_replicated = router_logits
+            hidden_states_ = hidden_states
+            router_logits_ = router_logits
         else:
             sp_size = parallel_state._SP.world_size
             sp_group = parallel_state._SP.device_group
