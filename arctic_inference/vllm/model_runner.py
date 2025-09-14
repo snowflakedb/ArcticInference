@@ -792,14 +792,15 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                                         CUDAGraphMode.PIECEWISE]
 
         # capture base model (SP) shapes
-        sp_size = self.parallel_config.ulysses_sequence_parallel_size
+        sp_size = parallel_state._SP.world_size
+        tp_size = parallel_state._TP.world_size
         compilation_cases_base = [
             shape * sp_size for shape in compilation_cases
             if shape * sp_size > self.shift_parallel_threshold and shape *
             sp_size <= self.max_num_tokens]
         # print shapes
         if is_global_first_rank():
-            logger.info(f"base model (SP) shapes {compilation_cases_base}")
+            logger.info(f"base model (SP={sp_size}, TP={tp_size}) shapes {compilation_cases_base}")
 
         # capture SP
         self._orig_capture_cudagraphs(compilation_cases_base, cudagraph_runtime_mode, uniform_decode)
@@ -811,7 +812,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 if shape <= self.shift_parallel_threshold
                 or "SwiftKV" in self.model.__class__.__name__]
             if is_global_first_rank():
-                logger.info(f"shift model (TP) shapes {compilation_cases_shift}")
+                logger.info(f"shift model (SPxTP={sp_size * tp_size}) shapes {compilation_cases_shift}")
             # switch models
             orig_model, self.model = self.model, self.shift_model
             # capture TP

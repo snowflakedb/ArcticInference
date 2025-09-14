@@ -502,19 +502,20 @@ class UlyssesAttention(ArcticPatch[Attention]):
 
 class UlyssesCudagraphDispatcher(ArcticPatch[CudagraphDispatcher]):
 
-   _orig_initialize_cudagraph_keys = CudagraphDispatcher.initialize_cudagraph_keys
+    _orig_initialize_cudagraph_keys = CudagraphDispatcher.initialize_cudagraph_keys
 
-   def initialize_cudagraph_keys(self, cudagraph_mode: CUDAGraphMode,
-                                 uniform_decode_query_len: int):
+    def initialize_cudagraph_keys(self, cudagraph_mode: CUDAGraphMode,
+                                  uniform_decode_query_len: int):
 
-       self._orig_initialize_cudagraph_keys(cudagraph_mode, uniform_decode_query_len)
-           
-       if cudagraph_mode.mixed_mode() != CUDAGraphMode.NONE:
-           sp_size = parallel_state._SP.world_size
-           for bs in self.compilation_config.cudagraph_capture_sizes:
-               self.add_cudagraph_key(
-                   cudagraph_mode.mixed_mode(),
-                   BatchDescriptor(num_tokens=bs * sp_size, uniform_decode=False))
+        self._orig_initialize_cudagraph_keys(cudagraph_mode, uniform_decode_query_len)
+
+        # Ulysses specific keys
+        if cudagraph_mode.mixed_mode() != CUDAGraphMode.NONE:
+            sp_size = parallel_state._SP.world_size
+            for bs in self.compilation_config.cudagraph_capture_sizes:
+                self.add_cudagraph_key(
+                    cudagraph_mode.mixed_mode(),
+                    BatchDescriptor(num_tokens=bs * sp_size, uniform_decode=False))
 
 
 class UlyssesFusedMoE(ArcticPatch[FusedMoE]):
@@ -523,5 +524,4 @@ class UlyssesFusedMoE(ArcticPatch[FusedMoE]):
                 router_logits: torch.Tensor):
         # directly call forward_impl to bypass custom opt
         # custom opt prevents using the shift model
-        # we will expand this function to fuse SP with EP
         return self.forward_impl(hidden_states, router_logits)
