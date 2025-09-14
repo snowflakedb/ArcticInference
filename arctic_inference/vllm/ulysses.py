@@ -533,8 +533,8 @@ class UlyssesFusedMoE(ArcticPatch[FusedMoE]):
         if is_shift_parallel_mode():
             sp_size = parallel_state._SP.world_size
             sp_group = parallel_state._SP.device_group
-            hidden_states_replicated = torch.empty((hidden_states.shape[0], sp_size), dtype=hidden_states.dtype, device=hidden_states.device)
-            router_logits_replicated = torch.empty((router_logits.shape[0], sp_size), dtype=router_logits.dtype, device=router_logits.device)
+            hidden_states_replicated = torch.empty((hidden_states.shape[0] * sp_size, hidden_states.shape[1]), dtype=hidden_states.dtype, device=hidden_states.device)
+            router_logits_replicated = torch.empty((router_logits.shape[0] * sp_size, router_logits.shape[1]), dtype=router_logits.dtype, device=router_logits.device)
             torch.distributed.all_gather_into_tensor(hidden_states_replicated, hidden_states, group=sp_group)
             torch.distributed.all_gather_into_tensor(router_logits_replicated, router_logits, group=sp_group)
         else:
