@@ -511,8 +511,6 @@ class UlyssesCudagraphDispatcher(ArcticPatch[CudagraphDispatcher]):
 
    def initialize_cudagraph_keys(self, cudagraph_mode: CUDAGraphMode,
                                  uniform_decode_query_len: int):
-       if torch.distributed.get_rank() == 0:
-           print(f"initialize cudagraph keys cudagraph_mode {cudagraph_mode} uniform_decode_query_len {uniform_decode_query_len}")
 
        self._orig_initialize_cudagraph_keys(cudagraph_mode, uniform_decode_query_len)
            
