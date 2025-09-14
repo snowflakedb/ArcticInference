@@ -543,10 +543,11 @@ class UlyssesFusedMoE(ArcticPatch[FusedMoE]):
             # torch.distributed.all_gather_into_tensor(router_logits_replicated, router_logits, group=sp_group)
             recvbuf = torch.empty((senbuf.shape[0] * sp_size, senbuf.shape[1]), dtype=senbuf.dtype, device=senbuf.device)
             torch.distributed.all_gather_into_tensor(recvbuf, senbuf, group=sp_group)
-            hidden_states_replicated = recvbuf[:, :hidden_states.shape[1]]
-            router_logits_replicated = recvbuf[:, hidden_states.shape[1]:]
+            hidden_states_, router_logits_ = recvbuf.split([hidden_states.shape[1], router_logits.shape[1]], dim=1)
+            hidden_states_ = hidden_states_.contiguous()
+            router_logits_ = router_logits_.contiguous()
 
-        expert_out = self.forward_impl(hidden_states_replicated, router_logits_replicated)
+        expert_out = self.forward_impl(hidden_states_, router_logits_)
 
         if is_shift_parallel_mode():
             output = expert_out
