@@ -26,13 +26,13 @@ import pandas as pd
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
-from arctic_inference.common.suffix_cache import SuffixCache
+from arctic_inference.suffix_decoding import SuffixDecodingCache
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 def suffix_decode(
-    suffix_cache: SuffixCache,
+    suffix_cache: SuffixDecodingCache,
     request_id: int,
     prompt: List[int],
     ground_truth_response: List[int],
@@ -159,7 +159,7 @@ def process_task(
     use_cached_prompt: bool,
     evict_fraction: float,
     evict_strategy: str,
-    max_cached_requests: Optional[int],
+    max_cached_requests: int,
 ) -> List[Dict]:
     eval_subset, train_subset = sample_data(
         dataset,
@@ -168,8 +168,8 @@ def process_task(
         num_train,
         seed,
     )
-    suffix_cache = SuffixCache(max_tree_depth=max_depth,
-                               max_cached_requests=max_cached_requests)
+    suffix_cache = SuffixDecodingCache(max_tree_depth=max_depth,
+                                       max_cached_requests=max_cached_requests)
     train_request_ids = []
     num_cached_tokens = {}  # request_id -> num tokens
     for request_id, example in tqdm(train_subset.iterrows(),
@@ -178,7 +178,9 @@ def process_task(
         # Use negative request_id to indicate training examples and avoid
         # conflicts with eval request_ids numbered 0, .., num_eval - 1.
         train_request_id = -1 - request_id
-        suffix_cache.insert_new_response(train_request_id, example["response"])
+        suffix_cache.start_request(train_request_id, example["prompt"])
+        suffix_cache.add_active_response(train_request_id, example["response"])
+        suffix_cache.stop_request(train_request_id)
         train_request_ids.append(train_request_id)
         num_cached_tokens[train_request_id] = len(example["response"])
 
@@ -194,7 +196,7 @@ def process_task(
             rng = random.Random(seed)
             evict_ids = rng.sample(cached_request_ids, num_evict)
         for request_id in tqdm(evict_ids, desc="Evicting cached responses"):
-            suffix_cache.evict_request(request_id)
+            suffix_cache.evict_cached_response(request_id)
 
     print("Checking cache integrity...", end=" ", flush=True)
     if ret := suffix_cache._global_tree.check_integrity():
@@ -550,8 +552,8 @@ def get_parser():
         "--max-cached-requests",
         type=int,
         nargs="+",
-        default=[None],
-        help="Max number of cached requests (if None, unlimited)",
+        default=[-1],
+        help="Max number of cached requests (if -1, unlimited)",
     )
     parser.add_argument(
         "--evict-fraction",
