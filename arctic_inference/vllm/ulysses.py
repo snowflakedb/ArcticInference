@@ -53,7 +53,7 @@ def apply_shift_parallel_patches():
     UlyssesMultiprocExecutor.apply_patch()
     UlyssesAttention.apply_patch()
     UlyssesCudagraphDispatcher.apply_patch()
-    UlyssesFusedMoE.apply_patch()
+    # UlyssesFusedMoE.apply_patch()
     UlyssesFusedMoEParallelConfig.apply_patch()
     UlyssesFp8MoEMethod_dense.apply_patch()
     # UlyssesFp8MoEMethod_sparse.apply_patch()
@@ -523,34 +523,34 @@ class UlyssesCudagraphDispatcher(ArcticPatch[CudagraphDispatcher]):
                     BatchDescriptor(num_tokens=bs * sp_size, uniform_decode=False))
 
 
-class UlyssesFusedMoE(ArcticPatch[FusedMoE]):
+# class UlyssesFusedMoE(ArcticPatch[FusedMoE]):
 
-    def forward(self, hidden_states: torch.Tensor,
-                router_logits: torch.Tensor):
-        # directly call forward_impl to bypass custom opt
-        # custom opt prevents using the shift model
+#     def forward(self, hidden_states: torch.Tensor,
+#                 router_logits: torch.Tensor):
+#         # directly call forward_impl to bypass custom opt
+#         # custom opt prevents using the shift model
 
-        if self.moe_parallel_config.use_ep:
-            sp_size = parallel_state._SP.world_size
-            sp_group = parallel_state._SP.device_group
-            senbuf = torch.cat([hidden_states, router_logits], dim=1)
-            recvbuf = torch.empty((senbuf.shape[0] * sp_size, senbuf.shape[1]), dtype=senbuf.dtype, device=senbuf.device)
-            torch.distributed.all_gather_into_tensor(recvbuf, senbuf, group=sp_group)
-            hidden_states_, router_logits_ = [chunk.contiguous() for chunk in 
-                                              recvbuf.split([hidden_states.shape[1], router_logits.shape[1]], dim=1)]
-        else:
-            hidden_states_ = hidden_states
-            router_logits_ = router_logits
+#         if self.moe_parallel_config.use_ep:
+#             sp_size = parallel_state._SP.world_size
+#             sp_group = parallel_state._SP.device_group
+#             senbuf = torch.cat([hidden_states, router_logits], dim=1)
+#             recvbuf = torch.empty((senbuf.shape[0] * sp_size, senbuf.shape[1]), dtype=senbuf.dtype, device=senbuf.device)
+#             torch.distributed.all_gather_into_tensor(recvbuf, senbuf, group=sp_group)
+#             hidden_states_, router_logits_ = [chunk.contiguous() for chunk in 
+#                                               recvbuf.split([hidden_states.shape[1], router_logits.shape[1]], dim=1)]
+#         else:
+#             hidden_states_ = hidden_states
+#             router_logits_ = router_logits
 
-        expert_out = self.forward_impl(hidden_states_, router_logits_)
+#         expert_out = self.forward_impl(hidden_states_, router_logits_)
 
-        if self.moe_parallel_config.use_ep:
-            output = torch.empty_like(hidden_states)
-            torch.distributed.reduce_scatter_tensor(output, expert_out, group=sp_group)
-        else:
-            return expert_out
+#         if self.moe_parallel_config.use_ep:
+#             output = torch.empty_like(hidden_states)
+#             torch.distributed.reduce_scatter_tensor(output, expert_out, group=sp_group)
+#         else:
+#             return expert_out
 
-        return output
+#         return output
 
 class UlyssesFusedMoEParallelConfig(ArcticPatch[FusedMoEParallelConfig]):
 
