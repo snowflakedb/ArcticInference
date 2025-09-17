@@ -53,10 +53,8 @@ def apply_shift_parallel_patches():
     UlyssesMultiprocExecutor.apply_patch()
     UlyssesAttention.apply_patch()
     UlyssesCudagraphDispatcher.apply_patch()
-    # UlyssesFusedMoE.apply_patch()
     UlyssesFusedMoEParallelConfig.apply_patch()
     UlyssesFp8MoEMethod_dense.apply_patch()
-    # UlyssesFp8MoEMethod_sparse.apply_patch()
 
 
 class UlyssesModelConfig(ArcticPatch[ModelConfig]):
@@ -609,9 +607,6 @@ class UlyssesFp8MoEMethod_dense(ArcticPatch[Fp8MoEMethod]):
     ) -> torch.Tensor:
 
         assert not enable_eplb
-
-        if torch.distributed.get_rank() == 0:
-            print(f"before select_experts x {x.shape}")
 
         topk_weights, topk_ids = FusedMoE.select_experts(
                 hidden_states=x,
