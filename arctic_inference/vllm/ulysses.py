@@ -39,8 +39,8 @@ from vllm.distributed.kv_transfer.kv_connector.utils import KVOutputAggregator
 from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
 from vllm.forward_context import BatchDescriptor
 from vllm.model_executor.layers.fused_moe import FusedMoE
-from vllm.model_executor.layers.fused_moe.config import FusedMoEParallelConfig
-from vllm.model_executor.layers.quantization.fp8 import Fp8MoEMethod
+from vllm.model_executor.layers.fused_moe.config import FusedMoEParallelConfig, FusedMoEConfig
+from vllm.model_executor.layers.quantization.fp8 import Fp8MoEMethod, Fp8Config
 
 
 from arctic_inference.patching import ArcticPatch
@@ -55,7 +55,8 @@ def apply_shift_parallel_patches():
     UlyssesCudagraphDispatcher.apply_patch()
     UlyssesFusedMoE.apply_patch()
     UlyssesFusedMoEParallelConfig.apply_patch()
-    # UlyssesFp8MoEMethod.apply_patch()
+    UlyssesFp8MoEMethod_dense.apply_patch()
+    # UlyssesFp8MoEMethod_sparse.apply_patch()
 
 
 class UlyssesModelConfig(ArcticPatch[ModelConfig]):
@@ -576,7 +577,110 @@ class UlyssesFusedMoEParallelConfig(ArcticPatch[FusedMoEParallelConfig]):
                                       ep_rank=_sp_rank,
                                       use_ep=use_ep)
 
-class UlyssesFp8MoEMethod(ArcticPatch[Fp8MoEMethod]):
+class UlyssesFp8MoEMethod_dense(ArcticPatch[Fp8MoEMethod]):
+
+    _orig_init = Fp8MoEMethod.__init__
+
+    def __init__(self, quant_config: Fp8Config, moe: FusedMoEConfig):
+        self._orig_init(quant_config, moe)
+        self.use_ep = moe.moe_parallel_config.use_ep
+
+    def apply(
+        self,
+        layer: torch.nn.Module,
+        x: torch.Tensor,
+        router_logits: torch.Tensor,
+        top_k: int,
+        renormalize: bool,
+        use_grouped_topk: bool = False,
+        topk_group: Optional[int] = None,
+        num_expert_group: Optional[int] = None,
+        global_num_experts: int = -1,
+        expert_map: Optional[torch.Tensor] = None,
+        custom_routing_function: Optional[Callable] = None,
+        scoring_func: str = "softmax",
+        e_score_correction_bias: Optional[torch.Tensor] = None,
+        apply_router_weight_on_input: bool = False,
+        activation: str = "silu",
+        enable_eplb: bool = False,
+        expert_load_view: Optional[torch.Tensor] = None,
+        logical_to_physical_map: Optional[torch.Tensor] = None,
+        logical_replica_count: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+
+        assert not enable_eplb
+
+        if torch.distributed.get_rank() == 0:
+            print(f"before select_experts x {x.shape}")
+
+        topk_weights, topk_ids = FusedMoE.select_experts(
+                hidden_states=x,
+                router_logits=router_logits,
+                use_grouped_topk=use_grouped_topk,
+                top_k=top_k,
+                renormalize=renormalize,
+                topk_group=topk_group,
+                num_expert_group=num_expert_group,
+                custom_routing_function=custom_routing_function,
+                scoring_func=scoring_func,
+                e_score_correction_bias=e_score_correction_bias,
+                indices_type=self.topk_indices_dtype,
+                enable_eplb=enable_eplb,
+                expert_map=expert_map,
+                expert_load_view=expert_load_view,
+                logical_to_physical_map=logical_to_physical_map,
+                logical_replica_count=logical_replica_count,
+            )
+
+        # dispatch
+        if self.use_ep:
+            from parallel_state import _SP
+            merge_buff = torch.cat([x, topk_weights, topk_ids.to(topk_weights.dtype)], dim=1)
+            merge = torch.empty((merge_buff.shape[0] * _SP.world_size, merge_buff.shape[1]), dtype=merge_buff.dtype, device=merge_buff.device)
+            torch.distributed.all_gather_into_tensor(merge, merge_buff, group=_SP.device_group)
+            output_tokens, output_weights, output_ids = merge.split([x.shape[1], topk_weights.shape[1], topk_ids.shape[1]], dim=1)
+            output_ids = output_ids.to(topk_ids.dtype)
+        else:
+            output_tokens, output_weights, output_ids = x, topk_weights, topk_ids
+
+        # call experts on GPU
+        from vllm.model_executor.layers.fused_moe import fused_experts
+        out_expert = fused_experts(
+                hidden_states=output_tokens,
+                # hidden_states=x,
+                w1=layer.w13_weight,
+                w2=layer.w2_weight,
+                topk_weights=output_weights,
+                # topk_weights=topk_weights,
+                topk_ids=output_ids,
+                # topk_ids=topk_ids,
+                inplace=True,
+                activation=activation,
+                global_num_experts=global_num_experts,
+                apply_router_weight_on_input=apply_router_weight_on_input,
+                expert_map=expert_map,
+                w1_scale=(layer.w13_weight_scale_inv
+                          if self.block_quant else layer.w13_weight_scale),
+                w2_scale=(layer.w2_weight_scale_inv
+                          if self.block_quant else layer.w2_weight_scale),
+                a1_scale=layer.w13_input_scale,
+                a2_scale=layer.w2_input_scale,
+                use_fp8_w8a8=True,
+                block_shape=self.quant_config.weight_block_size,
+                allow_deep_gemm=self.allow_deep_gemm,
+                allow_cutlass_block_scaled_grouped_gemm=(
+                    self.allow_cutlass_block_scaled_grouped_gemm))
+
+        # combine
+        if self.use_ep:
+            output = torch.empty_like(x)
+            torch.distributed.reduce_scatter_tensor(output, out_expert, group=_SP.device_group)
+        else:
+            return out_expert
+
+        return output
+
+class UlyssesFp8MoEMethod_sparse(ArcticPatch[Fp8MoEMethod]):
 
     def apply(
         self,
