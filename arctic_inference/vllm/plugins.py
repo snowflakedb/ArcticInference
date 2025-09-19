@@ -64,6 +64,11 @@ class WorkerBasePatch(ArcticPatch[WorkerBase]):
 
 
 def arctic_inference_plugin():
+    if not int(os.getenv("ARCTIC_INFERENCE_ENABLED", "0")):
+        logger.info("Arctic Inference is disabled. To enable, set "
+                    "ARCTIC_INFERENCE_ENABLED=1.")
+        return
+
     if not int(os.getenv("ARCTIC_INFERENCE_SKIP_VERSION_CHECK", "0")):
         compatible_version = get_compatible_vllm_version()
         if vllm.__version__ != compatible_version:
