@@ -17,13 +17,13 @@ import threading
 import weakref
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional, Any
+from typing import Optional, Callable
 
 import torch
 import vllm.distributed.parallel_state as parallel_state
 import vllm.envs as envs
 from vllm.attention.layer import Attention
-from vllm.config import ModelConfig, ParallelConfig
+from vllm.config import ModelConfig, ParallelConfig, CUDAGraphMode
 from vllm.distributed.device_communicators.shm_broadcast import MessageQueue
 from vllm.distributed.parallel_state import (init_model_parallel_group,
                                              get_world_group,
@@ -31,29 +31,33 @@ from vllm.distributed.parallel_state import (init_model_parallel_group,
                                              destroy_distributed_environment)
 from vllm.executor.multiproc_worker_utils import (
     set_multiprocessing_worker_envs)
-from vllm.utils import get_distributed_init_method, get_open_port
+from vllm.utils import get_distributed_init_method, get_open_port, get_loopback_ip
 from vllm.v1.executor.abstract import FailureCallback
 from vllm.v1.executor.multiproc_executor import (MultiprocExecutor, WorkerProc,
                                                  UnreadyWorkerProcHandle)
-from vllm.platforms import current_platform
-from vllm.utils import resolve_obj_by_qualname
-from vllm.compilation.backends import PiecewiseCompileInterpreter
+from vllm.distributed.kv_transfer.kv_connector.utils import KVOutputAggregator
+from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
+from vllm.forward_context import BatchDescriptor
 from vllm.model_executor.layers.fused_moe import FusedMoE
+from vllm.model_executor.layers.fused_moe.config import FusedMoEParallelConfig, FusedMoEConfig
+from vllm.model_executor.layers.quantization.fp8 import Fp8MoEMethod, Fp8Config
+
 
 from arctic_inference.patching import ArcticPatch
 
 
 def apply_shift_parallel_patches():
-    UlyssesModelConfigPatch.apply_patch()
-    UlyssesParallelStatePatch.apply_patch()
-    UlyssesWorkerProcPatch.apply_patch()
-    UlyssesMultiprocExecutorPatch.apply_patch()
-    UlyssesAttentionPatch.apply_patch()
-    PiecewiseCompileInterpreterPatch.apply_patch()
-    UlyssesFusedMoEPatch.apply_patch()
+    UlyssesModelConfig.apply_patch()
+    UlyssesParallelState.apply_patch()
+    UlyssesWorkerProc.apply_patch()
+    UlyssesMultiprocExecutor.apply_patch()
+    UlyssesAttention.apply_patch()
+    UlyssesCudagraphDispatcher.apply_patch()
+    UlyssesFusedMoEParallelConfig.apply_patch()
+    UlyssesFp8MoEMethod_dense.apply_patch()
 
 
-class UlyssesModelConfigPatch(ArcticPatch[ModelConfig]):
+class UlyssesModelConfig(ArcticPatch[ModelConfig]):
 
     _orig_get_num_kv_heads = ModelConfig.get_num_kv_heads
     _orig_get_num_attention_heads = ModelConfig.get_num_attention_heads
@@ -74,7 +78,8 @@ class UlyssesModelConfigPatch(ArcticPatch[ModelConfig]):
             self, parallel_config: "ParallelConfig") -> tuple[int, int]:
         from vllm.distributed.utils import get_pp_indices
         if (self.hf_text_config.model_type == "deepseek_mtp"
-                or self.hf_config.model_type == "mimo_mtp"):
+                or self.hf_config.model_type == "mimo_mtp"
+                or self.hf_config.model_type == "glm4_moe_mtp"):
             total_num_hidden_layers = getattr(self.hf_text_config,
                                               "num_nextn_predict_layers", 0)
         else:
@@ -90,7 +95,7 @@ class UlyssesModelConfigPatch(ArcticPatch[ModelConfig]):
         return start, end
 
 
-class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
+class UlyssesParallelState(ArcticPatch[parallel_state]):
 
     _SP = None
     _SP_TP = None
@@ -109,28 +114,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         pipeline_model_parallel_size: int = 1,
         backend: Optional[str] = None,
     ) -> None:
-        """
-        Initialize model parallel groups.
-
-        Arguments:
-            tensor_model_parallel_size: number of GPUs used for tensor model
-                parallelism.
-            pipeline_model_parallel_size: number of GPUs used for pipeline model
-                parallelism.
-
-        Let's say we have a total of 8 GPUs denoted by g0 ... g7 and we
-        use 2 GPUs to parallelize the model tensor, and 4 GPUs to parallelize
-        the model pipeline. The present function will
-        create 4 tensor model-parallel groups and 2 pipeline model-parallel groups:
-            4 tensor model-parallel groups:
-                [g0, g1], [g2, g3], [g4, g5], [g6, g7]
-            2 pipeline model-parallel groups:
-                [g0, g2, g4, g6], [g1, g3, g5, g7]
-        Note that for efficiency, the caller should make sure adjacent ranks
-        are on the same DGX box. For example if we are using 2 DGX-1 boxes
-        with a total of 16 GPUs, rank 0 to 7 belong to the first box and
-        ranks 8 to 15 belong to the second box.
-        """
+        
         from vllm.distributed.parallel_state import _DP, _EP, _PP, _TP
         # Get world size and rank. Ensure some consistencies.
         assert torch.distributed.is_initialized()
@@ -148,15 +132,6 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         sequence_parallel_size = \
             config.parallel_config.ulysses_sequence_parallel_size
 
-        # the layout order is: ExternalDP x DP x PP x SP x TP
-        # ExternalDP is the data parallel group that is not part of the model,
-        # every dp rank can generate independently (in verl integration).
-        # DP is the data parallel group that is part of the model,
-        # all the ranks in the same DP group should generate simultaneously,
-        # i.e. the `generate` call in the same DP group should be called together,
-        # otherwise it will cause deadlock.
-        # to get group_ranks for each dimension, transpose that dimension to the
-        # last dimension, then reshape to 2D, then unbind the last dimension
         all_ranks = torch.arange(world_size).reshape(
             -1, data_parallel_size, pipeline_model_parallel_size,
             sequence_parallel_size, tensor_model_parallel_size)  # noqa
@@ -245,6 +220,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         parallel_state._SP = _SP
         parallel_state._SP_TP = _SP_TP
         parallel_state._DP = _DP
+        parallel_state._EP = _EP
 
         # check if SP requires kv replication
         num_kv_heads = config.model_config._orig_get_num_kv_heads(config.parallel_config)
@@ -282,7 +258,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
 
         if get_world_group().local_rank == 0:
             parallel_state.logger.info(
-                    f"UlyssesParallelStatePatch initialized:\n"
+                    f"UlyssesParallelState initialized:\n"
                     f"  PP {_PP.world_size} ranks {PP_group_ranks}\n"
                     f"  TP {_TP.world_size} ranks {TP_group_ranks}\n"
                     f"  SP {_SP.world_size} ranks {SP_group_ranks}\n"
@@ -316,7 +292,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
             yield context
 
 
-class UlyssesWorkerProcPatch(ArcticPatch[WorkerProc]):
+class UlyssesWorkerProc(ArcticPatch[WorkerProc]):
 
     def destroy_model_parallel(self):
         from vllm.distributed.parallel_state import _SP, _SP_TP, _SP_AA, _SP_AG
@@ -342,7 +318,7 @@ class UlyssesWorkerProcPatch(ArcticPatch[WorkerProc]):
         destroy_distributed_environment()
 
 
-class UlyssesMultiprocExecutorPatch(ArcticPatch[MultiprocExecutor]):
+class UlyssesMultiprocExecutor(ArcticPatch[MultiprocExecutor]):
 
     def _init_executor(self) -> None:
         # Call self.shutdown at exit to clean up
@@ -369,9 +345,9 @@ class UlyssesMultiprocExecutorPatch(ArcticPatch[MultiprocExecutor]):
 
         # Multiprocessing-based executor does not support multi-node setting.
         # Since it only works for single node, we can use the loopback address
-        # 127.0.0.1 for communication.
+        # get_loopback_ip() for communication.
         distributed_init_method = get_distributed_init_method(
-            "127.0.0.1", get_open_port())
+            get_loopback_ip(), get_open_port())
 
         # Initialize worker and set up message queues for SchedulerOutputs
         # and ModelRunnerOutputs
@@ -410,21 +386,29 @@ class UlyssesMultiprocExecutorPatch(ArcticPatch[MultiprocExecutor]):
         finally:
             if not success:
                 # Clean up the worker procs if there was a failure.
+                # Close death_writers first to signal workers to exit
+                for uw in unready_workers:
+                    if uw.death_writer is not None:
+                        uw.death_writer.close()
                 self._ensure_worker_termination(
-                    [w.proc for w in unready_workers])
+                    [uw.proc for uw in unready_workers])
 
         # For pipeline parallel, we use a thread pool for asynchronous
         # execute_model.
         if self.max_concurrent_batches > 1:
             # Note: must use only 1 IO thread to keep dequeue sequence
             # from the response queue
+            # _async_aggregate_workers_output also assumes a single IO thread
             self.io_thread_pool = ThreadPoolExecutor(
                 max_workers=1, thread_name_prefix="mp_exec_io")
 
         self.output_rank = self._get_output_rank()
+        self.has_connector = self.vllm_config.kv_transfer_config is not None
+        self.kv_output_aggregator = KVOutputAggregator(
+            self.parallel_config.world_size)
 
 
-class UlyssesAttentionPatch(ArcticPatch[Attention]):
+class UlyssesAttention(ArcticPatch[Attention]):
 
     _orig_init = Attention.__init__
     _orig_forward = Attention.forward
@@ -440,7 +424,7 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
             if self.is_kv_replicated:
                 num_kv_heads = 1
                 assert parallel_state._SP_AA is not None and parallel_state._SP_AG is not None, (
-                    "UlyssesAttentionPatch requires SP_AA and SP_AG groups to be initialized.")
+                    "UlyssesAttention requires SP_AA and SP_AG groups to be initialized.")
                 self.sp_aa_device_group = parallel_state._SP_AA.device_group
                 self.sp_ag_device_group = parallel_state._SP_AG.device_group
                 self.sp_aa_size = parallel_state._SP_AA.world_size
@@ -519,81 +503,370 @@ class UlyssesAttentionPatch(ArcticPatch[Attention]):
         return output
 
 
-class PiecewiseCompileInterpreterPatch(ArcticPatch[PiecewiseCompileInterpreter]):
+class UlyssesCudagraphDispatcher(ArcticPatch[CudagraphDispatcher]):
 
-    # find the symbolic shape of the subgraph
-    def find_symbolic_shape(self, args: tuple[torch.fx.node.Argument,
-                                ...]) -> torch.SymInt:
-        symbols = set()
-        for x in args:
-            if isinstance(x, torch._subclasses.fake_tensor.FakeTensor):
-                for dim in x.shape:
-                    if isinstance(dim, torch.SymInt):
-                        symbols.update(dim.node.expr.free_symbols)
-        assert len(symbols) == 1, (
-            f"Expected exactly one symbolic shape, but found {len(symbols)}: {symbols}")
-        return list(symbols)[0]
-  
-    def call_module(self, target: torch.fx.node.Target,
-                    args: tuple[torch.fx.node.Argument,
-                                ...], kwargs: dict[str, Any]) -> Any:
-        assert isinstance(target, str)
-        # [Arctic Inference]
-        # Since monkeypatching inherits the original class
-        # through ArcticPatch class, we lose the access to the original class'
-        # super() function. Instead of using super(), we directly invoke call_module
-        # from the super class torch.fx.Interpreter of PiecewiseCompileInterpreter.
-        # see - v0.9.0.1/compilation/backends.py#L241
-        output = torch.fx.Interpreter.call_module(self, target, args, kwargs)
+    _orig_initialize_cudagraph_keys = CudagraphDispatcher.initialize_cudagraph_keys
 
-        if target in self.compile_submod_names:
-            index = self.compile_submod_names.index(target)
-            submod = self.fetch_attr(target)
-            # [Arctic Inference]
-            # Compiler may create subgraphs with certain symbolic
-            # integer values that violates vllm's assumption here:
-            # - v0.9.0.1/compilation/base_piecewise_backend.py#L64
-            # The index of the significant symbol determines the runtime shape here:
-            # - v0.9.0.1/compilation/cuda_piecewise_backend.py#L112
-            # The fix is relaxing vllm's original assumption that there is only a
-            # single symbolic that determines the shape.We then find the matching 
-            # symbol indices.
-            sym_shape = self.find_symbolic_shape(args)
-            sym_shape_indices = []
-            for i, x in enumerate(args):
-                if isinstance(x, torch.SymInt):
-                    if sym_shape == x:
-                        sym_shape_indices.append(i)
+    def initialize_cudagraph_keys(self, cudagraph_mode: CUDAGraphMode,
+                                  uniform_decode_query_len: int):
 
-            global compilation_start_time
-            compiled_graph_for_general_shape = self.vllm_backend.\
-                compiler_manager.compile(
-                submod,
-                args,
-                self.compilation_config.inductor_compile_config,
-                self.compilation_config,
-                graph_index=index,
-                num_graphs=len(self.compile_submod_names),
-                runtime_shape=None)
+        self._orig_initialize_cudagraph_keys(cudagraph_mode, uniform_decode_query_len)
 
-            piecewise_backend = resolve_obj_by_qualname(
-                current_platform.get_piecewise_backend_cls())
-            self.module.__dict__[target] = piecewise_backend(
-                submod, self.vllm_config, self.graph_pool, index,
-                len(self.compile_submod_names), sym_shape_indices,
-                compiled_graph_for_general_shape, self.vllm_backend)
+        # Ulysses specific keys
+        if cudagraph_mode.mixed_mode() != CUDAGraphMode.NONE:
+            sp_size = parallel_state._SP.world_size
+            for bs in self.compilation_config.cudagraph_capture_sizes:
+                self.add_cudagraph_key(
+                    cudagraph_mode.mixed_mode(),
+                    BatchDescriptor(num_tokens=bs * sp_size, uniform_decode=False))
 
-            from vllm.compilation.counter import compilation_counter
-            compilation_counter.num_piecewise_capturable_graphs_seen += 1
+
+# class UlyssesFusedMoE(ArcticPatch[FusedMoE]):
+
+#     def forward(self, hidden_states: torch.Tensor,
+#                 router_logits: torch.Tensor):
+#         # directly call forward_impl to bypass custom opt
+#         # custom opt prevents using the shift model
+
+#         if self.moe_parallel_config.use_ep:
+#             sp_size = parallel_state._SP.world_size
+#             sp_group = parallel_state._SP.device_group
+#             senbuf = torch.cat([hidden_states, router_logits], dim=1)
+#             recvbuf = torch.empty((senbuf.shape[0] * sp_size, senbuf.shape[1]), dtype=senbuf.dtype, device=senbuf.device)
+#             torch.distributed.all_gather_into_tensor(recvbuf, senbuf, group=sp_group)
+#             hidden_states_, router_logits_ = [chunk.contiguous() for chunk in 
+#                                               recvbuf.split([hidden_states.shape[1], router_logits.shape[1]], dim=1)]
+#         else:
+#             hidden_states_ = hidden_states
+#             router_logits_ = router_logits
+
+#         expert_out = self.forward_impl(hidden_states_, router_logits_)
+
+#         if self.moe_parallel_config.use_ep:
+#             output = torch.empty_like(hidden_states)
+#             torch.distributed.reduce_scatter_tensor(output, expert_out, group=sp_group)
+#         else:
+#             return expert_out
+
+#         return output
+
+class UlyssesFusedMoEParallelConfig(ArcticPatch[FusedMoEParallelConfig]):
+
+    _orig_make = FusedMoEParallelConfig.make
+
+    def make(tp_size_: int, dp_size_: int,
+             vllm_parallel_config: ParallelConfig) -> "FusedMoEParallelConfig":
+
+        _tp_size = parallel_state._TP.world_size
+        _tp_rank = parallel_state._TP.rank_in_group
+        _sp_size = parallel_state._SP.world_size
+        _sp_rank = parallel_state._SP.rank_in_group
+
+        from .model_runner import is_shift_parallel_mode
+        # ep logic
+        use_ep = True if (vllm_parallel_config.enable_expert_parallel and
+                          not is_shift_parallel_mode()) else False
+        # ep is not significant if use_ep == False
+        return FusedMoEParallelConfig(tp_size=_tp_size,
+                                      tp_rank=_tp_rank,
+                                      dp_size=1,
+                                      dp_rank=0,
+                                      ep_size=_sp_size,
+                                      ep_rank=_sp_rank,
+                                      use_ep=use_ep)
+
+class UlyssesFp8MoEMethod_dense(ArcticPatch[Fp8MoEMethod]):
+
+    _orig_init = Fp8MoEMethod.__init__
+
+    def __init__(self, quant_config: Fp8Config, moe: FusedMoEConfig):
+        self._orig_init(quant_config, moe)
+        self.use_ep = moe.moe_parallel_config.use_ep
+
+    def apply(
+        self,
+        layer: torch.nn.Module,
+        x: torch.Tensor,
+        router_logits: torch.Tensor,
+        top_k: int,
+        renormalize: bool,
+        use_grouped_topk: bool = False,
+        topk_group: Optional[int] = None,
+        num_expert_group: Optional[int] = None,
+        global_num_experts: int = -1,
+        expert_map: Optional[torch.Tensor] = None,
+        custom_routing_function: Optional[Callable] = None,
+        scoring_func: str = "softmax",
+        e_score_correction_bias: Optional[torch.Tensor] = None,
+        apply_router_weight_on_input: bool = False,
+        activation: str = "silu",
+        enable_eplb: bool = False,
+        expert_load_view: Optional[torch.Tensor] = None,
+        logical_to_physical_map: Optional[torch.Tensor] = None,
+        logical_replica_count: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+
+        assert not enable_eplb
+
+        topk_weights, topk_ids = FusedMoE.select_experts(
+                hidden_states=x,
+                router_logits=router_logits,
+                use_grouped_topk=use_grouped_topk,
+                top_k=top_k,
+                renormalize=renormalize,
+                topk_group=topk_group,
+                num_expert_group=num_expert_group,
+                custom_routing_function=custom_routing_function,
+                scoring_func=scoring_func,
+                e_score_correction_bias=e_score_correction_bias,
+                indices_type=self.topk_indices_dtype,
+                enable_eplb=enable_eplb,
+                expert_map=expert_map,
+                expert_load_view=expert_load_view,
+                logical_to_physical_map=logical_to_physical_map,
+                logical_replica_count=logical_replica_count,
+            )
+
+        # dispatch
+        if self.use_ep:
+            from parallel_state import _SP
+            merge_buff = torch.cat([x, topk_weights, topk_ids.to(topk_weights.dtype)], dim=1)
+            merge = torch.empty((merge_buff.shape[0] * _SP.world_size, merge_buff.shape[1]), dtype=merge_buff.dtype, device=merge_buff.device)
+            torch.distributed.all_gather_into_tensor(merge, merge_buff, group=_SP.device_group)
+            output_tokens, output_weights, output_ids = merge.split([x.shape[1], topk_weights.shape[1], topk_ids.shape[1]], dim=1)
+            output_ids = output_ids.to(topk_ids.dtype)
+        else:
+            output_tokens, output_weights, output_ids = x, topk_weights, topk_ids
+
+        # call experts on GPU
+        from vllm.model_executor.layers.fused_moe import fused_experts
+        out_expert = fused_experts(
+                hidden_states=output_tokens,
+                # hidden_states=x,
+                w1=layer.w13_weight,
+                w2=layer.w2_weight,
+                topk_weights=output_weights,
+                # topk_weights=topk_weights,
+                topk_ids=output_ids,
+                # topk_ids=topk_ids,
+                inplace=True,
+                activation=activation,
+                global_num_experts=global_num_experts,
+                apply_router_weight_on_input=apply_router_weight_on_input,
+                expert_map=expert_map,
+                w1_scale=(layer.w13_weight_scale_inv
+                          if self.block_quant else layer.w13_weight_scale),
+                w2_scale=(layer.w2_weight_scale_inv
+                          if self.block_quant else layer.w2_weight_scale),
+                a1_scale=layer.w13_input_scale,
+                a2_scale=layer.w2_input_scale,
+                use_fp8_w8a8=True,
+                block_shape=self.quant_config.weight_block_size,
+                allow_deep_gemm=self.allow_deep_gemm,
+                allow_cutlass_block_scaled_grouped_gemm=(
+                    self.allow_cutlass_block_scaled_grouped_gemm))
+
+        # combine
+        if self.use_ep:
+            output = torch.empty_like(x)
+            torch.distributed.reduce_scatter_tensor(output, out_expert, group=_SP.device_group)
+        else:
+            return out_expert
 
         return output
 
+class UlyssesFp8MoEMethod_sparse(ArcticPatch[Fp8MoEMethod]):
 
-class UlyssesFusedMoEPatch(ArcticPatch[FusedMoE]):
+    def apply(
+        self,
+        layer: torch.nn.Module,
+        x: torch.Tensor,
+        router_logits: torch.Tensor,
+        top_k: int,
+        renormalize: bool,
+        use_grouped_topk: bool = False,
+        topk_group: Optional[int] = None,
+        num_expert_group: Optional[int] = None,
+        global_num_experts: int = -1,
+        expert_map: Optional[torch.Tensor] = None,
+        custom_routing_function: Optional[Callable] = None,
+        scoring_func: str = "softmax",
+        e_score_correction_bias: Optional[torch.Tensor] = None,
+        apply_router_weight_on_input: bool = False,
+        activation: str = "silu",
+        enable_eplb: bool = False,
+        expert_load_view: Optional[torch.Tensor] = None,
+        logical_to_physical_map: Optional[torch.Tensor] = None,
+        logical_replica_count: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
 
-    def forward(self, hidden_states: torch.Tensor,
-                router_logits: torch.Tensor):
-        # directly call forward_impl to bypass custom opt
-        # custom opt prevents using the shift model
-        # we will expand this function to fuse SP with EP
-        return self.forward_impl(hidden_states, router_logits)
+        assert not enable_eplb
+
+        if torch.distributed.get_rank() == 0:
+            print(f"before select_experts x {x.shape}")
+
+        topk_weights, topk_ids = FusedMoE.select_experts(
+                hidden_states=x,
+                router_logits=router_logits,
+                use_grouped_topk=use_grouped_topk,
+                top_k=top_k,
+                renormalize=renormalize,
+                topk_group=topk_group,
+                num_expert_group=num_expert_group,
+                custom_routing_function=custom_routing_function,
+                scoring_func=scoring_func,
+                e_score_correction_bias=e_score_correction_bias,
+                indices_type=self.topk_indices_dtype,
+                enable_eplb=enable_eplb,
+                expert_map=expert_map,
+                expert_load_view=expert_load_view,
+                logical_to_physical_map=logical_to_physical_map,
+                logical_replica_count=logical_replica_count,
+            )
+
+        # dispatch
+        if expert_map is None:
+            # do it only if EP is on
+            output_tokens = x
+            output_weights = topk_weights
+            output_ids = topk_ids
+        else:
+            # print
+            from vllm.distributed import get_world_group
+            torch.cuda.synchronize()
+            get_world_group().barrier()
+            for i in range(get_world_group().world_size):
+                if torch.distributed.get_rank() == i:
+                    # print(f"mode_align_block_size topk_ids {topk_ids}, block_size {block_size}, num_experts, {num_experts}, expert_map {expert_map}, pad_sorted_ids {pad_sorted_ids}")
+                    print(f"before fused_experts topk_ids {topk_ids} expert_map {expert_map}")
+                get_world_group().barrier()
+
+            # find sparse mapping on CPU
+            from vllm.distributed.parallel_state import _SP
+            sp_size = _SP.world_size
+            num_tokens_per_gpu = [0] * sp_size
+            gather_ids = [[] for _ in range(sp_size)]
+            num_local_experts = expert_map.numel() // sp_size
+            for i in range(topk_ids.shape[0]):
+                for j in range(topk_ids.shape[1]):
+                    expert_id = topk_ids[i][j]
+                    gpu_id = expert_id // num_local_experts
+                    if num_tokens_per_gpu[gpu_id] == 0:
+                        num_tokens_per_gpu[gpu_id] += 1
+                        gather_ids[gpu_id].append(i)
+                    elif gather_ids[gpu_id][num_tokens_per_gpu[gpu_id]-1] < i:
+                        num_tokens_per_gpu[gpu_id] += 1
+                        gather_ids[gpu_id].append(i)
+
+            # sparse replication on GPU
+            dispatch_index = torch.tensor([i for sub in gather_ids for i in sub], device=x.device)
+            input_tokens = torch.index_select(x, 0, dispatch_index)
+            input_ids = torch.index_select(topk_ids, 0, dispatch_index)
+            input_weights = torch.index_select(topk_weights, 0, dispatch_index)
+
+            # exchange input/output split sizes on CPU
+            input_split = torch.tensor(num_tokens_per_gpu)
+            output_split = torch.empty_like(input_split)
+            torch.distributed.all_to_all_single(output_split, input_split, group=_SP.cpu_group)
+            num_input_token = input_split.sum()
+            num_output_token = output_split.sum()
+
+            # print
+            from vllm.distributed import get_world_group
+            torch.cuda.synchronize()
+            get_world_group().barrier()
+            for i in range(get_world_group().world_size):
+                if torch.distributed.get_rank() == i:
+                    print(f"input_split {input_split} {num_input_token} output_split {output_split} {num_output_token}, dispatch_index {dispatch_index}")
+                get_world_group().barrier()
+
+            # communications on GPU (TODO: fuse)
+            output_tokens = torch.empty((num_output_token, x.shape[1]), dtype=x.dtype, device=x.device)
+            output_ids = torch.empty((num_output_token, topk_ids.shape[1]), dtype=topk_ids.dtype, device=topk_ids.device)
+            output_weights = torch.empty((num_output_token, topk_weights.shape[1]), dtype=topk_weights.dtype, device=topk_weights.device)
+            torch.distributed.all_to_all_single(output_tokens, input_tokens, output_split.tolist(), input_split.tolist(), group=_SP.device_group)
+            torch.distributed.all_to_all_single(output_ids, input_ids, output_split.tolist(), input_split.tolist(), group=_SP.device_group)
+            torch.distributed.all_to_all_single(output_weights, input_weights, output_split.tolist(), input_split.tolist(), group=_SP.device_group)
+
+            # print
+            from vllm.distributed import get_world_group
+            torch.cuda.synchronize()
+            get_world_group().barrier()
+            for i in range(get_world_group().world_size):
+                if torch.distributed.get_rank() == i:
+                    print(f"num_input_token {num_input_token}, num_output_token {num_output_token}, input_tokens {input_tokens.shape} output_tokens {output_tokens.shape}")
+                    print(f"output_ids {output_ids}")
+                get_world_group().barrier()
+
+        # call experts on GPU
+        from vllm.model_executor.layers.fused_moe import fused_experts
+        out_expert = fused_experts(
+                hidden_states=output_tokens,
+                # hidden_states=x,
+                w1=layer.w13_weight,
+                w2=layer.w2_weight,
+                topk_weights=output_weights,
+                # topk_weights=topk_weights,
+                topk_ids=output_ids,
+                # topk_ids=topk_ids,
+                inplace=True,
+                activation=activation,
+                global_num_experts=global_num_experts,
+                apply_router_weight_on_input=apply_router_weight_on_input,
+                expert_map=expert_map,
+                w1_scale=(layer.w13_weight_scale_inv
+                          if self.block_quant else layer.w13_weight_scale),
+                w2_scale=(layer.w2_weight_scale_inv
+                          if self.block_quant else layer.w2_weight_scale),
+                a1_scale=layer.w13_input_scale,
+                a2_scale=layer.w2_input_scale,
+                use_fp8_w8a8=True,
+                block_shape=self.quant_config.weight_block_size,
+                allow_deep_gemm=self.allow_deep_gemm,
+                allow_cutlass_block_scaled_grouped_gemm=(
+                    self.allow_cutlass_block_scaled_grouped_gemm))
+
+        # print
+        from vllm.distributed import get_world_group
+        torch.cuda.synchronize()
+        get_world_group().barrier()
+        for i in range(get_world_group().world_size):
+            if torch.distributed.get_rank() == i:
+                print(f"after fused_experts out_expert {out_expert.shape}")
+            get_world_group().barrier()
+
+        # combine
+        if expert_map is None:
+            # reuse output_tokens
+            output_tokens = out_expert
+        else:
+            # communication on GPU
+            torch.distributed.all_to_all_single(input_tokens, out_expert, input_split.tolist(), output_split.tolist(), group=_SP.device_group)
+            # sparse reduction on GPU
+            ext_dispatch_index = dispatch_index.unsqueeze(1).repeat(1, input_tokens.shape[1])
+            output_tokens = torch.zeros_like(x).scatter_add(0, ext_dispatch_index, input_tokens)
+
+            # print
+            from vllm.distributed import get_world_group
+            torch.cuda.synchronize()
+            get_world_group().barrier()
+            for i in range(get_world_group().world_size):
+                if torch.distributed.get_rank() == i:
+                    print(f"after combine input_tokens {input_tokens.shape} output_tokens {output_tokens.shape}")
+                get_world_group().barrier()
+
+            import traceback
+            if torch.distributed.get_rank() == 0:
+                traceback.print_stack()
+
+        return output_tokens
+
+# import vllm.model_executor.layers.fused_moe.fused_moe
+# class UlyssesFusedMoE(ArcticPatch[ArcticPatch[vllm.model_executor.layers.fused_moe.fused_moe]]):
+
+#     _orig_fused_experts_impl = fused_moe.fused_experts_impl
+
+#     @static_method
+#     def fused_experts_impl(*args, **kwargs):
+#         print(f"fused_experts_impl")
+#         return self._orig_fused_expert_impl(*args, **kwargs)

@@ -874,9 +874,15 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         weights = collections.OrderedDict(weights)
         if self.method == "sum_lstm" and self.tie_lstm_embs:
-            weights.pop("input_emb.0.weight")
-            weights.pop("cell_emb.0.weight")
-            weights.pop("output_emb.0.weight")
+            try:
+                weights.pop("input_emb.0.weight")
+                weights.pop("cell_emb.0.weight")
+                weights.pop("output_emb.0.weight")
+            except KeyError:
+                # If the weights are not present, it means they are not tied
+                # and we should not try to pop them.
+                print("No tied LSTM embeddings found, skipping.")
+                pass
             for name, param in self.named_parameters():
                 if "projs." in name:
                     print(f"REPLACING {name}")
