@@ -67,8 +67,8 @@ class OriginalFp8LinearMethod(LinearMethodBase):
             self.use_marlin = False
 
         self.fp8_linear = Fp8LinearOp(
-            # Default to using per_token quantization if cutlass is supported
-            use_per_token_if_dynamic=cutlass_fp8_supported())
+            act_quant_static=False,
+            cutlass_fp8_supported=cutlass_fp8_supported())
 
     def create_weights(
         self,

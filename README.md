@@ -36,8 +36,7 @@ Arctic Inference achieves high throughput and low latency through a wholistic se
     <tbody>
         <tr>
             <td align="left">
-                Arctic Ulysses (<a href="https://www.snowflake.com/en/engineering-blog/ulysses-low-latency-llm-inference/">blog</a>,
-                                <a href="https://arxiv.org/abs/2507.11830">paper</a>)
+                Arctic Ulysses (<a href="https://www.snowflake.com/en/engineering-blog/ulysses-low-latency-llm-inference/">blog</a>)
                 <br>
                 Shift Parallelism (<a href="https://www.snowflake.com/en/engineering-blog/arctic-inference-shift-parallelism/">blog</a>)
             </td>
