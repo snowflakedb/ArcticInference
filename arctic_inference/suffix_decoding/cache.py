@@ -18,11 +18,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Hashable, KeysView, List, Optional, Sequence, Union
 
-from arctic_inference.common.suffix_cache._C import SuffixTree, Candidate
+from arctic_inference.suffix_decoding._C import SuffixTree, Candidate
 
 
 @dataclass
-class SuffixSpecResult:
+class SuffixDecodingDraft:
     """
     A dataclass representing the result of a speculation using SuffixDecoding.
 
@@ -44,8 +44,8 @@ class SuffixSpecResult:
     match_len: int = 0
 
     @staticmethod
-    def from_candidate(candidate: Candidate) -> SuffixSpecResult:
-        return SuffixSpecResult(
+    def from_candidate(candidate: Candidate) -> SuffixDecodingDraft:
+        return SuffixDecodingDraft(
             token_ids=candidate.token_ids,
             parents=candidate.parents,
             probs=candidate.probs,
@@ -54,20 +54,23 @@ class SuffixSpecResult:
         )
 
 
-class SuffixCache:
+class SuffixDecodingCache:
     
     def __init__(self,
                  max_tree_depth: int = 64,
-                 max_cached_requests: Optional[int] = None):
+                 max_cached_requests: int = -1):
         """
-        Initialize the SuffixCache.
+        Initialize the SuffixDecodingCache.
 
         Args:
             max_tree_depth (int): The maximum depth of the suffix trees.
             max_cached_requests (int, optional): The maximum number of cached
-                requests. Cache eviction is used when the limit is reached. If
-                `None`, there is no limit on the number of cached requests.
+                requests. Eviction is triggered when the limit is reached. `-1`
+                means no limit on the number of cached requests.
         """
+        if max_cached_requests > 0x7FFFFFFF:
+            raise ValueError("max_cached_requests must be at most 2^31")
+
         self._max_tree_depth = max_tree_depth
         self._max_cached_requests = max_cached_requests
 
@@ -78,7 +81,7 @@ class SuffixCache:
         self._local_trees = {}
 
         # Maps between Python request ID and int32_t sequence ID. Tracks all
-        # request IDs that are in the global tree or one of the local trees.
+        # request IDs that are in the global tree.
         self._req_to_seq_id = {}
         self._seq_to_req_id = {}
 
@@ -117,7 +120,9 @@ class SuffixCache:
         This method should be called when starting to process a new request. It
         will store the prompt for the request, allowing future speculations for
         the same request to use the prompt context. The prompt will be stored
-        until `stop_request` is called.
+        until `stop_request` is called. If `max_cached_requests != 0`, then a
+        new slot is allocated in the global cache for the response, triggering
+        cache eviction (FIFO order) if needed.
 
         Args:
             req_id (Hashable): The request identifier. Must be a hashable value
@@ -129,16 +134,23 @@ class SuffixCache:
             ValueError: If a request with the same `req_id` is already active
                 or cached.
         """
-        if req_id in self._req_to_seq_id:
-            raise ValueError(f"Request '{req_id}' is already active or cached")
-        seq_id = self._generate_seq_id(req_id)
+        if req_id in self._local_trees:
+            raise ValueError(f"Request '{req_id}' is already active")
         self._local_trees[req_id] = SuffixTree(self._max_tree_depth)
-        self._local_trees[req_id].extend(seq_id, prompt_token_ids)
+        self._local_trees[req_id].extend(0, prompt_token_ids)
+        if self._max_cached_requests != 0:
+            # Global cache is enabled.
+            if req_id in self._req_to_seq_id:
+                # Evict existing cached response for the request if present.
+                self.evict_cached_response(req_id)
+            # Allocate a new seq_id for the request.
+            self._generate_seq_id(req_id)
 
     def stop_request(self, req_id: Hashable):
         """
         This method should be called when a request is completed. It will evict
-        the prompt for the request, freeing up memory.
+        the prompt for the request, freeing up memory. The request's response
+        may still be cached in the global cache until it is evicted.
 
         Args:
             req_id (Hashable): The request identifier. Must be a hashable value
@@ -172,42 +184,23 @@ class SuffixCache:
         """
         if req_id not in self._local_trees:
             raise ValueError(f"Request '{req_id}' is not active")
-        seq_id = self._req_to_seq_id[req_id]
-        if isinstance(token_ids, int):
-            self._global_tree.append(seq_id, token_ids)
-            self._local_trees[req_id].append(seq_id, token_ids)
+        if isinstance(token_ids, Sequence):
+            self._local_trees[req_id].extend(0, token_ids)
         else:
-            self._global_tree.extend(seq_id, token_ids)
-            self._local_trees[req_id].extend(seq_id, token_ids)
-
-    def insert_new_response(
-        self,
-        req_id: Hashable,
-        token_ids: Union[int, Sequence[int]],
-    ):
-        """
-        Insert a complete response to the global cache for a request that is
-        not active and is not already cached.
-
-        Args:
-            req_id (Hashable): The unique identifier for the request.
-            token_ids (Sequence[int]): A sequence of token IDs to be inserted
-                as the response for the given request.
-
-        Raises:
-            ValueError: If a request with the same `req_id` is already active
-                or cached.
-        """
+            self._local_trees[req_id].append(0, token_ids)
+        # Also update the response if the request is in the global cache (it
+        # may be evicted from the global cache before the request is stopped).
         if req_id in self._req_to_seq_id:
-            raise ValueError(f"Request '{req_id}' is already active or cached")
-        seq_id = self._generate_seq_id(req_id)
-        self._global_tree.extend(seq_id, token_ids)
+            seq_id = self._req_to_seq_id[req_id]
+            if isinstance(token_ids, Sequence):
+                self._global_tree.extend(seq_id, token_ids)
+            else:
+                self._global_tree.append(seq_id, token_ids)
 
-    def evict_request(self, req_id: Hashable):
+    def evict_cached_response(self, req_id: Hashable):
         """
-        Evicts the given request's prompt and response from the cache. If the
-        request is active, it becomes inactive. The `req_id` can then be reused
-        after eviction.
+        Evicts the given request's response from the global cache. `req_id` can
+        be safely reused for a new request after eviction.
 
         Args:
             req_id (Hashable): The unique identifier for the request that
@@ -217,9 +210,7 @@ class SuffixCache:
             ValueError: If no response exists for the given request identifier.
         """
         if req_id not in self._req_to_seq_id:
-            raise ValueError(f"Request '{req_id}' is not active or cached")
-        if req_id in self._local_trees:
-            del self._local_trees[req_id]
+            raise ValueError(f"Request '{req_id}' is not cached")
         seq_id = self._req_to_seq_id.pop(req_id)
         self._seq_to_req_id.pop(seq_id)
         self._global_tree.remove(seq_id)
@@ -233,7 +224,7 @@ class SuffixCache:
         max_spec_offset: float = 0.0,
         min_token_prob: float = 0.1,
         use_tree_spec: bool = False,
-    ) -> SuffixSpecResult:
+    ) -> SuffixDecodingDraft:
         """
         Speculates and returns the most likely continuation of a given token
         pattern using the request's prompt and the global cache of previous
@@ -275,7 +266,7 @@ class SuffixCache:
             max_spec_offset,
             min_token_prob,
             use_tree_spec)
-        result = SuffixSpecResult.from_candidate(candidate)
+        result = SuffixDecodingDraft.from_candidate(candidate)
 
         candidate = self._global_tree.speculate(
             pattern,
@@ -285,7 +276,7 @@ class SuffixCache:
             min_token_prob,
             use_tree_spec)
         if candidate.score > result.score:
-            result = SuffixSpecResult.from_candidate(candidate)
+            result = SuffixDecodingDraft.from_candidate(candidate)
 
         return result
 
@@ -313,16 +304,15 @@ class SuffixCache:
         return seq_id
 
     def _maybe_evict_requests(self, new_seq_id: int):
-        if self._max_cached_requests is None:
+        if self._max_cached_requests < 0:
+            # Negative value means no global cache size limit.
             return
+        assert self._max_cached_requests != 0  # Global cache must be enabled.
         while len(self._req_to_seq_id) > self._max_cached_requests:
-            # Evict the first request that is not active. Should be FIFO order
-            # in python 3.7+ as dict preserves insertion order. We also want to
-            # avoid evicting the request that was just added (new_seq_id).
+            # Evict the first eligible request. Should be FIFO order in Python
+            # 3.7+ since dict preserves insertion order. Avoid evicting the
+            # request that was just added (new_seq_id).
             for req_id, seq_id in self._req_to_seq_id.items():
-                if seq_id != new_seq_id and req_id not in self._local_trees:
-                    self.evict_request(req_id)
+                if seq_id != new_seq_id:
+                    self.evict_cached_response(req_id)
                     break
-            else:
-                # All previously cached requests are active, cannot evict any.
-                break
