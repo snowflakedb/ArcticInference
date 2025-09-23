@@ -23,7 +23,7 @@ from arctic_inference.utils import get_compatible_vllm_version
 
 def arctic_inference_plugin():
     if not envs.ARCTIC_INFERENCE_ENABLED:
-        print("\x1b[35;1mArctic Inference is disabled. To enable, set "
+        print("\x1b[35;1mArctic Inference plugin is disabled. To enable, set "
               "ARCTIC_INFERENCE_ENABLED=1.\x1b[0m", file=sys.stderr)
         return
 
@@ -31,14 +31,16 @@ def arctic_inference_plugin():
         compatible_version = get_compatible_vllm_version()
         if vllm.__version__ != compatible_version:
             raise RuntimeError(
-                f"Arctic Inference requires vllm=={compatible_version} "
+                f"Arctic Inference plugin requires vllm=={compatible_version} "
                 f"but found vllm=={vllm.__version__}!")
     
     if not envs.ARCTIC_INFERENCE_SKIP_PLATFORM_CHECK:
         if not vllm.platforms.current_platform.is_cuda():
-            raise RuntimeError(f"Arctic Inference requires the cuda platform!")
+            raise RuntimeError(
+                f"Arctic Inference plugin requires the cuda platform!")
 
-    print("\x1b[36;1mArctic Inference is enabled!\x1b[0m", file=sys.stderr)
+    print("\x1b[36;1mArctic Inference plugin is enabled!\x1b[0m",
+          file=sys.stderr)
 
     # Lazy import to avoid potential errors when the plugin is disabled.
     from .patches import apply_arctic_patches
