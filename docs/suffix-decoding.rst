@@ -97,6 +97,8 @@ Minimal configuration for suffix-only decoding (for Llama-3.1-8B-Instruct):
 
 .. code-block:: bash
 
+  export ARCTIC_INFERENCE_ENABLED=1
+
   vllm serve meta-llama/Llama-3.1-8B-Instruct \
   --speculative-config '{
     "method": "suffix"
@@ -105,6 +107,8 @@ Minimal configuration for suffix-only decoding (for Llama-3.1-8B-Instruct):
 Configuration combining suffix decoding with Arctic Speculator:
 
 .. code-block:: bash
+
+  export ARCTIC_INFERENCE_ENABLED=1
 
   vllm serve meta-llama/Llama-3.1-8B-Instruct \
   --speculative-config '{

@@ -145,6 +145,8 @@ Minimal configuration with Arctic Speculator (LSTM-based):
 
 .. code-block:: bash
 
+   export ARCTIC_INFERENCE_ENABLED=1
+
    vllm serve meta-llama/Llama-3.1-8B-Instruct \
    --speculative-config '{
        "method": "arctic",
@@ -155,6 +157,8 @@ Minimal configuration with Arctic Speculator (LSTM-based):
 Combined Arctic Speculator with Suffix Decoding:
 
 .. code-block:: bash
+
+   export ARCTIC_INFERENCE_ENABLED=1
 
    vllm serve meta-llama/Llama-3.1-8B-Instruct \
    --speculative-config '{

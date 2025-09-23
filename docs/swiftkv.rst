@@ -39,6 +39,8 @@ you would select the `Snowflake/Llama-3.3-SwiftKV-70B-Instruct
 
 .. code-block:: bash
 
+   export ARCTIC_INFERENCE_ENABLED=1
+
    python -m vllm.entrypoints.openai.api_server \
        --model Snowflake/Llama-3.3-SwiftKV-70B-Instruct \
        --tensor-parallel-size 8

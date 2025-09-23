@@ -36,6 +36,8 @@ tensor and sequence parallelism across 8 GPUs (4 TP, 2 SP) with Arctic Inference
 
 .. code-block:: bash
 
+    export ARCTIC_INFERENCE_ENABLED=1
+
     python -m vllm.entrypoints.openai.api_server \
         --model meta-llama/Llama-3.3-70B-Instruct \
         --tensor-parallel-size 4 \
