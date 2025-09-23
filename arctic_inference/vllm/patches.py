@@ -28,6 +28,7 @@ from arctic_inference.vllm.config import (ParallelConfigPatch,
                                           MLPSpeculatorConfigPatch)
 from arctic_inference.vllm.stats import (SpecDecodingStatsPatch, 
                                          SpecDecodingLoggingPatch)
+from arctic_inference.vllm.structured_output import XgrammarBackendPatch
 from arctic_inference.vllm.ulysses import apply_shift_parallel_patches
 
 
@@ -102,6 +103,7 @@ def apply_arctic_patches():
     SpecDecodingStatsPatch.apply_patch()
     SpecDecodingLoggingPatch.apply_patch()
     VllmConfigPatch.apply_patch()
+    XgrammarBackendPatch.apply_patch()
     MLPSpeculatorConfigPatch.apply_patch()
 
     # Main optimization patches.
