@@ -56,6 +56,8 @@ Here is an example of how run Shift Parallelism with the
 
 .. code-block:: bash
 
+    export ARCTIC_INFERENCE_ENABLED=1
+
     python -m vllm.entrypoints.openai.api_server \
         --model meta-llama/Llama-3.3-70B-Instruct \
         --enable-shift-parallel \
