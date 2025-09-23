@@ -20,8 +20,14 @@ if TYPE_CHECKING:
     ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK: bool = False
 
 environment_variables: dict[str, Callable[[], Any]] = {
+    "ARCTIC_INFERENCE_ENABLED":
+    lambda: os.getenv("ARCTIC_INFERENCE_ENABLED", "0") == "1",
+    "ARCTIC_INFERENCE_SKIP_PLATFORM_CHECK":
+    lambda: os.getenv("ARCTIC_INFERENCE_SKIP_PLATFORM_CHECK", "0") == "1",
     "ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK":
     lambda: os.getenv("ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK", "0") == "1",
+    "ARCTIC_INFERENCE_SKIP_VERSION_CHECK":
+    lambda: os.getenv("ARCTIC_INFERENCE_SKIP_VERSION_CHECK", "0") == "1",
 }
 
 # temporary workaround for gpt-oss model

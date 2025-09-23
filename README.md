@@ -104,7 +104,7 @@ By using the examples below, you can get benefits from Shift Parallelism, Specul
 #### Serving
 
 ```console
-vllm serve Snowflake/Llama-3.1-SwiftKV-8B-Instruct \
+ARCTIC_INFERENCE_ENABLED=1 vllm serve Snowflake/Llama-3.1-SwiftKV-8B-Instruct \
     --quantization "fp8" \
     --tensor-parallel-size 1 \
     --ulysses-sequence-parallel-size 2 \
@@ -119,6 +119,8 @@ vllm serve Snowflake/Llama-3.1-SwiftKV-8B-Instruct \
 ```
 
 #### Offline
+
+Save the following script to `arctic_example.py`:
 
 ```python
 import vllm
@@ -153,6 +155,12 @@ sampling_params = SamplingParams(temperature=0.0, max_tokens=800)
 outputs = llm.chat(conversation, sampling_params=sampling_params)
 
 print(outputs[0].outputs[0].text)
+```
+
+Run the script with Arctic Inference enabled:
+
+```console
+ARCTIC_INFERENCE_ENABLED=1 python arctic_example.py
 ```
 
 ## Citation
