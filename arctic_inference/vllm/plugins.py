@@ -65,12 +65,13 @@ class WorkerBasePatch(ArcticPatch[WorkerBase]):
 
 
 def arctic_inference_plugin():
-    if (vllm.__version__ != get_compatible_vllm_version() and not
-            vllm.__version__.startswith("0.1.dev")):  # Make it work with dev
-        logger.warning(
-            f"ArcticInference requires vllm=={get_compatible_vllm_version()} "
-            f"but found vllm=={vllm.__version__}. Ignoring plugin!")
-        return
+    if not int(os.getenv("ARCTIC_INFERENCE_SKIP_VERSION_CHECK", "0")):
+        compatible_version = get_compatible_vllm_version()
+        if vllm.__version__ != compatible_version:
+            logger.warning(
+                f"ArcticInference requires vllm=={compatible_version} "
+                f"but found vllm=={vllm.__version__}. Ignoring plugin!")
+            return
     
     if not vllm.platforms.current_platform.is_cuda():
         logger.warning(

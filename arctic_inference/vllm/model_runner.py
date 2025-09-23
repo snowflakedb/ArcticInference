@@ -46,10 +46,10 @@ from vllm.v1.worker.gpu_model_runner import GPUModelRunner, logger
 if TYPE_CHECKING:
     from vllm.v1.core.sched.output import SchedulerOutput
 
-from arctic_inference.common.suffix_cache import SuffixCache
+from arctic_inference.suffix_decoding import (SuffixDecodingCache,
+                                              SuffixDecodingDraft)
 from arctic_inference.patching import ArcticPatch
 from arctic_inference.vllm.spec_dec.arctic_proposer import ArcticProposer
-from arctic_inference.common.suffix_cache import SuffixSpecResult
 
 SP_TP_MODE = None
 
@@ -152,8 +152,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 raise ValueError(
                     "Suffix decoding is only supported with the 'arctic', "
                     "'mlp_speculator' or 'suffix' spec decoding methods.")
-            self._suffix_cache = SuffixCache(
-                self.speculative_config.suffix_cache_max_depth)
+            spec_cfg = self.speculative_config
+            self._suffix_cache = SuffixDecodingCache(
+                max_tree_depth=spec_cfg.suffix_cache_max_depth,
+                max_cached_requests=spec_cfg.suffix_cache_max_requests)
 
     def profile_run(self) -> None:
         self._orig_profile_run()
@@ -664,18 +666,21 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 continue
 
             index = self.input_batch.req_id_to_index[req_id]
-            if not self._suffix_cache.has_cached_prompt(req_id):
+            if req_id not in self._suffix_cache.active_requests:
+                if req_id in self._suffix_cache.cached_requests:
+                    # Reset the suffix cache for this request.
+                    self._suffix_cache.evict_cached_response(req_id)
                 num_prompt_tokens = self.input_batch.num_prompt_tokens[index]
                 prompt_token_ids = (
                     self.input_batch.token_ids_cpu[index, :num_prompt_tokens])
-                self._suffix_cache.cache_prompt(req_id, prompt_token_ids)
+                self._suffix_cache.start_request(req_id, prompt_token_ids)
 
-            self._suffix_cache.update_response(req_id, sampled_ids)
+            self._suffix_cache.add_active_response(req_id, sampled_ids)
 
-        # Evict prompts that are not seen
-        for req_id in self._suffix_cache.cached_prompt_ids():
+        # Stop requests that are not seen
+        for req_id in list(self._suffix_cache.active_requests):
             if req_id not in seen_req_ids:
-                self._suffix_cache.evict_prompt(req_id)
+                self._suffix_cache.stop_request(req_id)
 
     def propose_suffix_draft_token_ids(
         self,
@@ -689,7 +694,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             num_sampled_ids = len(sampled_ids)
             if not num_sampled_ids:
                 # Skip speculative decoding.
-                results.append(SuffixSpecResult())
+                results.append(SuffixDecodingDraft())
                 continue
 
             req_id = self.input_batch.req_ids[i]
@@ -699,7 +704,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             end_idx = start_idx + len(sampled_ids)
 
             if end_idx >= self.max_model_len:
-                results.append(SuffixSpecResult())
+                results.append(SuffixDecodingDraft())
                 self.input_batch.token_ids_cpu[
                     i, start_idx:self.
                     max_model_len] = sampled_ids[:self.max_model_len -

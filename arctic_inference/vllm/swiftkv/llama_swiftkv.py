@@ -609,7 +609,7 @@ class LlamaSwiftKVModel(nn.Module):
                 kv_cache = attn.kv_cache[forward_context.virtual_engine]
                 if kv_cache.numel():
                     # different cache layouts
-                    if isinstance(attn_metadata, FlashInferMetadata):
+                    if FLASHINFER_AVAILABLE and isinstance(attn_metadata, FlashInferMetadata):
                         # FlashInfer: [num_blocks, 2, block_size, num_kv_heads, head_size]
                         key_caches.append(kv_cache[:, 0])
                         value_caches.append(kv_cache[:, 1])
@@ -637,7 +637,7 @@ class LlamaSwiftKVModel(nn.Module):
                 attn = layer.self_attn.attn
                 kv_cache = attn.kv_cache[forward_context.virtual_engine]
                 if kv_cache.numel():
-                    if isinstance(attn_metadata, FlashInferMetadata):
+                    if FLASHINFER_AVAILABLE and isinstance(attn_metadata, FlashInferMetadata):
                         # FlashInfer: [num_blocks, 2, block_size, num_kv_heads, head_size]
                         k_cache, v_cache = kv_cache.unbind(1)
                     else:
@@ -658,7 +658,7 @@ class LlamaSwiftKVModel(nn.Module):
         logits_indices = attn_metadata.swiftkv_logits_indices
         num_surviving_tokens = logits_indices.numel()
 
-        if isinstance(attn_metadata, FlashInferMetadata):
+        if FLASHINFER_AVAILABLE and isinstance(attn_metadata, FlashInferMetadata):
             # Handle FlashInfer metadata
             final_logits_indices = self._fix_flashinfer_metadata(attn_metadata, logits_indices, num_surviving_tokens)
         else:
@@ -716,7 +716,7 @@ class LlamaSwiftKVModel(nn.Module):
             logits_indices = attn_metadata.swiftkv_logits_indices
             batch_size = logits_indices.numel()
             
-            if isinstance(attn_metadata, FlashInferMetadata):
+            if FLASHINFER_AVAILABLE and isinstance(attn_metadata, FlashInferMetadata):
                 inverse_sort_indices = attn_metadata.swiftkv_inverse_sort_indices
                 orig_hidden_states[logits_indices] = hidden_states[inverse_sort_indices][:batch_size]
             else:
