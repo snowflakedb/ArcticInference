@@ -19,7 +19,7 @@ version = "0.0.9"
 description = "Snowflake LLM inference library"
 
 [project.entry-points."vllm.general_plugins"]
-arctic_inference = "arctic_inference.vllm.plugins:arctic_inference_plugin"
+arctic_inference = "arctic_inference.vllm.plugin:arctic_inference_plugin"
 
 [tool.setuptools]
 packages = [
