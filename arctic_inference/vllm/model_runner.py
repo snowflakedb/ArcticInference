@@ -98,6 +98,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     _orig_load_model = GPUModelRunner.load_model
     _orig_propose_draft_token_ids = GPUModelRunner.propose_draft_token_ids
     _orig_init = GPUModelRunner.__init__
+    _orig_execute_model = GPUModelRunner.execute_model
 
     def __init__(
         self,
@@ -159,6 +160,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             self._suffix_cache = SuffixDecodingCache(
                 max_tree_depth=spec_cfg.suffix_cache_max_depth,
                 max_cached_requests=spec_cfg.suffix_cache_max_requests)
+
+        self.bypass_arctic_inference_execute_model = True
 
     def profile_run(self) -> None:
         self._orig_profile_run()
@@ -232,6 +235,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         scheduler_output: "SchedulerOutput",
         intermediate_tensors: Optional[IntermediateTensors] = None,
     ) -> Union[ModelRunnerOutput, IntermediateTensors]:
+
+        if self.bypass_arctic_inference_execute_model:
+            return self._orig_execute_model(scheduler_output, intermediate_tensors)
+
         self._update_states(scheduler_output)
         if not scheduler_output.total_num_scheduled_tokens:
             if not has_kv_transfer_group():
@@ -776,6 +783,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         if self.parallel_config.ulysses_sequence_parallel_size > 1:
             self.monkeypatch_forward()
 
+        print('*********************** Monkey Patching MoE Router ***********************')
         self.monkeypatch_moe_router()
         
         if load_shift_model:
@@ -805,8 +813,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                                         CUDAGraphMode.PIECEWISE]
 
         # capture base model (SP) shapes
-        sp_size = parallel_state._SP.world_size
-        tp_size = parallel_state._TP.world_size
+        sp_size = parallel_state._SP.world_size if hasattr(parallel_state, '_SP') else 1
+        tp_size = parallel_state._TP.world_size if hasattr(parallel_state, '_TP') else 1
         compilation_cases_base = [
             shape * sp_size for shape in compilation_cases
             if shape * sp_size > self.shift_parallel_threshold and shape *
