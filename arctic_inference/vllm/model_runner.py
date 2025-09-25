@@ -686,7 +686,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         self,
         sampled_token_ids: list[list[int]],
         spec_token_ids: Optional[list[list[int]]] = None,
-    ) -> list[list[int]]:
+    ) -> list[SuffixDecodingDraft]:
         config = self.speculative_config
         results = []
         for i, sampled_ids in enumerate(sampled_token_ids):
