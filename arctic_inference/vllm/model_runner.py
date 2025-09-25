@@ -180,6 +180,12 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             meta.swiftkv_logits_indices = logits_indices
         return attn_metadata, logits_indices, spec_decode_metadata, *rest
 
+    def monkeypatch_moe_router(self: GPUModelRunner):
+        from arctic_inference.vllm.moe import MoERouter
+        moe_router = MoERouter()
+        from vllm.model_executor.layers.fused_moe import FusedMoE
+        FusedMoE.select_experts = moe_router
+
     def monkeypatch_forward(self: GPUModelRunner):
         sp_size = parallel_state._SP.world_size
         sp_rank = parallel_state._SP.rank_in_group
@@ -770,6 +776,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         if self.parallel_config.ulysses_sequence_parallel_size > 1:
             self.monkeypatch_forward()
 
+        self.monkeypatch_moe_router()
+        
         if load_shift_model:
             shift_config.parallel_config.tensor_parallel_size *= (
                 shift_config.parallel_config.ulysses_sequence_parallel_size)
