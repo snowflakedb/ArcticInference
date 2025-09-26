@@ -554,10 +554,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             # The score is an estimate of the acceptance length. Thus, the
             # heuristic is to use the suffix decoded tokens if the score is
             # greater than the # of tokens we would speculate otherwise.
-            min_score = (self.speculative_config.num_speculative_tokens
-                         if self.speculative_config.method != "suffix" else 0)
-            min_score = (0 if self.speculative_config.method == "suffix" else
-                         self.speculative_config.num_speculative_tokens)
+            if self.speculative_config.method == "suffix":
+                min_score = 0
+            else:
+                min_score = self.speculative_config.num_speculative_tokens
             for i, result in enumerate(results):
                 if result.score >= min_score:
                     # Use suffix decoded tokens, disable other speculation
@@ -686,7 +686,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         self,
         sampled_token_ids: list[list[int]],
         spec_token_ids: Optional[list[list[int]]] = None,
-    ) -> list[list[int]]:
+    ) -> list[SuffixDecodingDraft]:
         config = self.speculative_config
         results = []
         for i, sampled_ids in enumerate(sampled_token_ids):
