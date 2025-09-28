@@ -418,9 +418,6 @@ class UlyssesAttention(ArcticPatch[Attention]):
         self.sp_size = parallel_state._SP.world_size
         self.sp_device_group = parallel_state._SP.device_group
 
-        if self.use_mla:
-            num_heads //= self.sp_size
-            return self._orig_init(num_heads, *args, **kwargs)
 
         if not is_shift_parallel_mode():
             num_heads //= self.sp_size
@@ -441,7 +438,14 @@ class UlyssesAttention(ArcticPatch[Attention]):
             else:
                 num_kv_heads //= self.sp_size
             kwargs["num_kv_heads"] = num_kv_heads
-        return self._orig_init(num_heads, *args, **kwargs)
+
+            self._orig_init(num_heads, *args, **kwargs)
+
+            if torch.distributed.get_rank() == 0:
+                print(f"UlyssesAttention: num_heads {num_heads}, num_kv_heads {num_kv_heads}, is_kv_replicated {self.is_kv_replicated}, sp_size {self.sp_size}")
+                print(f"self.use_mla {self.use_mla}")
+
+        return
 
     def forward(self, query, key, value, **kwargs):
         from .model_runner import is_shift_parallel_mode
