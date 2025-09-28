@@ -451,6 +451,14 @@ class UlyssesAttention(ArcticPatch[Attention]):
         from .model_runner import is_shift_parallel_mode
         if self.sp_size == 1 or is_shift_parallel_mode():
             return self._orig_forward(query, key, value, **kwargs)
+        
+        from vllm.distributed import get_world_group
+        torch.cuda.synchronize()
+        get_world_group().barrier()
+        for i in range(get_world_group().world_size):
+            if torch.distributed.get_rank() == i:
+                print(f"rank {i}: before UlyssesAttention forward query {query.shape} key {key.shape} value {value.shape}")
+            get_world_group().barrier()
 
         if self.is_kv_replicated:
             # Ulysses all-to-all 1/2 (query)
