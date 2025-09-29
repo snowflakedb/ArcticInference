@@ -456,7 +456,7 @@ class UlyssesAttention(ArcticPatch[Attention]):
         get_world_group().barrier()
         for i in range(get_world_group().world_size):
             if torch.distributed.get_rank() == i:
-                print(f"rank {i}: before UlyssesAttention forward query {query.shape} key {key.shape} value {value.shape}")
+                print(f"rank {i}: before UlyssesAttention forward query {q.shape} key {kv_c_normed.shape} value {k_pe.shape}")
                 print(f"num_heads {self.num_heads}, num_kv_heads {self.num_kv_heads}, is_kv_replicated {self.is_kv_replicated}, sp_size {self.sp_size}")
                 print(f"self.use_mla {self.use_mla}")
             get_world_group().barrier()
