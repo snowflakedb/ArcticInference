@@ -14,7 +14,7 @@ class SwiftKVOpsBuilder(CUDAOpBuilder):
         return "arctic_inference" if os.path.isdir(ai_path) else ".."
 
     def sources(self):
-        return [
+        sources = [
             'csrc/custom_ops/torch_bindings.cpp',
             'csrc/custom_ops/kernels.cu',
         ]
@@ -23,7 +23,7 @@ class SwiftKVOpsBuilder(CUDAOpBuilder):
         return sources
 
     def include_paths(self):
-        return ['csrc/custom_ops']
+        sources = ['csrc/custom_ops']
         prefix = self.get_prefix()
         sources = [os.path.join(prefix, src) for src in sources]
         return sources
