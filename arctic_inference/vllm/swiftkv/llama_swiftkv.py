@@ -370,13 +370,9 @@ class LlamaSwiftKVModel(nn.Module):
 
         from arctic_inference.py_custom_ops import (try_load_torch_library,
                                                     try_load_jit_library)
-        self.use_custom_ops = False
-        if envs.ARCTIC_INFERENCE_PRECOMPILED_OPS:
-            self.use_custom_ops = try_load_torch_library()
-            print(f"Using precompiled custom ops: {self.use_custom_ops}")
-        elif try_load_jit_library():
-            self.use_custom_ops = True
-            print("Using JIT-compiled custom ops.")
+
+        self.use_custom_ops = try_load_torch_library() or try_load_jit_library()
+
 
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
