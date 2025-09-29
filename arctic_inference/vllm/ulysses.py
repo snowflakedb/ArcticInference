@@ -456,7 +456,7 @@ class UlyssesAttention(ArcticPatch[Attention]):
         d_h = q.shape[2]
 
         # Transpose query
-        q = q.view(-1, self.sp_size, self.num_heads, d_h).transpose(0, 1)
+        q = q.view(-1, self.sp_size, self.num_heads, d_h).transpose(0, 1).contiguous()
         q_ = torch.empty_like(q)
         torch.distributed.all_to_all_single(q_, q, group=self.sp_device_group)
         q_ = q_.reshape(-1, self.num_heads, d_h)
