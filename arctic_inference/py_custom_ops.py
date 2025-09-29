@@ -22,8 +22,8 @@ def try_load_torch_library() -> bool:
         return False
 
     try:
-        logger.info(f"Attempting to load custom ops from {library_path}...")
         torch.ops.load_library(library_path)
+        logger.info(f"Successfully loaded custom ops from {library_path}.")
         return True
     except RuntimeError as e:
         logger.info(
@@ -33,6 +33,25 @@ def try_load_torch_library() -> bool:
     except Exception as e:
         logger.info(
             f"Unable to load custom library from {library_path}. Exception: {e}. Falling back to original implementation."
+        )
+        return False
+
+
+def try_load_jit_library() -> bool:
+    try:
+        from arctic_inference.op_builder.swiftkv_ops_builder import SwiftKVOpsBuilder
+        swiftkv_ops_module = SwiftKVOpsBuilder().load()
+
+        logger.info("Successfully loaded SwiftKVOpsBuilder JIT library.")
+        return True
+    except ImportError as e:
+        logger.info(
+            f"Unable to import SwiftKVOpsBuilder. ImportError: {e}. Falling back to original implementation."
+        )
+        return False
+    except Exception as e:
+        logger.info(
+            f"Unable to load JIT library. Exception: {e}. Falling back to original implementation."
         )
         return False
 
