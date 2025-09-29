@@ -41,6 +41,8 @@ def try_load_jit_library() -> bool:
     try:
         from arctic_inference.op_builder.swiftkv_ops_builder import SwiftKVOpsBuilder
         swiftkv_ops_module = SwiftKVOpsBuilder().load()
+
+        return True
     else:
         logger.info("Could not find SwiftKVOpsBuilder, skipping JIT compilation.")
         return False
