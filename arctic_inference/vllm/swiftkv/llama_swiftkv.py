@@ -53,6 +53,7 @@ except ImportError:
 
 import arctic_inference.vllm.model_runner as model_runner
 from arctic_inference.common.swiftkv.configs import LlamaSwiftKVConfig
+import arctic_inference.envs as envs
 
 logger = init_logger(__name__)
 
@@ -367,8 +368,11 @@ class LlamaSwiftKVModel(nn.Module):
         self._init_prefill_runner(vllm_config)
         self._init_decode_runner(vllm_config)
 
-        from arctic_inference.py_custom_ops import try_load_torch_library
-        self.use_custom_ops = True if try_load_torch_library() else False
+        from arctic_inference.py_custom_ops import (try_load_torch_library,
+                                                    try_load_jit_library)
+
+        self.use_custom_ops = try_load_torch_library() or try_load_jit_library()
+
 
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
