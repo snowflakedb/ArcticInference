@@ -663,7 +663,9 @@ class UlyssesFp8MoEMethod_dense(ArcticPatch[Fp8MoEMethod]):
             merge = torch.empty((merge_buff.shape[0] * sp_size, merge_buff.shape[1]), dtype=merge_buff.dtype, device=merge_buff.device)
             torch.distributed.all_gather_into_tensor(merge, merge_buff, group=sp_group)
             output_tokens, output_weights, output_ids = merge.split([x.shape[1], topk_weights.shape[1], topk_ids.shape[1]], dim=1)
-            output_ids = output_ids.to(topk_ids.dtype)
+            output_tokens = output_tokens.contiguous()
+            output_weights = output_weights.contiguous()
+            output_ids = output_ids.to(topk_ids.dtype).contiguous()
         else:
             output_tokens, output_weights, output_ids = x, topk_weights, topk_ids
 
