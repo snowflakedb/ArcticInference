@@ -675,7 +675,9 @@ class UlyssesFp8MoEMethod_dense(ArcticPatch[Fp8MoEMethod]):
                 if torch.distributed.get_rank() == i:
                     print(f"rank {i}  merge {merge.shape} {merge.dtype} merge_buff {merge_buff.shape} {merge_buff.dtype}")
                 get_world_group().barrier()
-            output_tokens, output_weights, output_ids = merge.split([x.shape[1], topk_weights.shape[1], topk_ids.shape[1]], dim=1)
+            output_tokens, output_weights, output_ids = merge.split([x.shape[1] * x.dtype.element_size(), 
+                                                                     topk_weights.shape[1] * topk_weights.dtype.element_size(), 
+                                                                     topk_ids.shape[1] * topk_ids.dtype.element_size()], dim=1)
             output_tokens = output_tokens.view(x.dtype).contiguous()
             output_weights = output_weights.view(topk_weights.dtype).contiguous()
             output_ids = output_ids.view(topk_ids.dtype).contiguous()
