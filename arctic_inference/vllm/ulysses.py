@@ -687,14 +687,11 @@ class UlyssesFp8MoEMethod_dense(ArcticPatch[Fp8MoEMethod]):
         # call experts on GPU
         from vllm.model_executor.layers.fused_moe import fused_experts
         out_expert = fused_experts(
-                hidden_states=output_tokens,
-                # hidden_states=x,
+                hidden_states=output_tokens, # x
                 w1=layer.w13_weight,
                 w2=layer.w2_weight,
-                topk_weights=output_weights,
-                # topk_weights=topk_weights,
-                topk_ids=output_ids,
-                # topk_ids=topk_ids,
+                topk_weights=output_weights, # topk_weights
+                topk_ids=output_ids, # topk_ids
                 inplace=True,
                 activation=activation,
                 global_num_experts=global_num_experts,
@@ -716,13 +713,13 @@ class UlyssesFp8MoEMethod_dense(ArcticPatch[Fp8MoEMethod]):
         if self.use_ep:
             output = torch.empty_like(x)
 
-            from vllm.distributed import get_world_group
-            torch.cuda.synchronize()
-            get_world_group().barrier()
-            for i in range(get_world_group().world_size):
-                if torch.distributed.get_rank() == i:
-                    print(f"rank {i} before reduce_scatter_tensor out_expert {out_expert.shape} {out_expert.dtype} output {output.shape} {output.dtype}")
-                get_world_group().barrier()
+            # from vllm.distributed import get_world_group
+            # torch.cuda.synchronize()
+            # get_world_group().barrier()
+            # for i in range(get_world_group().world_size):
+            #     if torch.distributed.get_rank() == i:
+            #         print(f"rank {i} before reduce_scatter_tensor out_expert {out_expert.shape} {out_expert.dtype} output {output.shape} {output.dtype}")
+            #     get_world_group().barrier()
 
             torch.distributed.reduce_scatter_tensor(output, out_expert, group=sp_group)
         else:
