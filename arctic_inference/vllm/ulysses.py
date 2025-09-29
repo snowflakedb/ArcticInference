@@ -479,11 +479,12 @@ class UlyssesAttention(ArcticPatch[Attention]):
         import traceback
         if torch.distributed.get_rank() == 0:
             print(f"  output_shape {output_shape}")
+            print(f"self._orig_forward {self._orig_forward}")
             traceback.print_stack()
 
-        # c_ = self._orig_forward(q_, kv_c_normed_, k_pe_, output_shape=output_shape)
-        # if torch.distributed.get_rank() == 0:
-        #     print(f"  c_ {c_.shape}")
+        c_ = self._orig_forward(q_, kv_c_normed_, k_pe_, output_shape=output_shape)
+        if torch.distributed.get_rank() == 0:
+            print(f"  c_ {c_.shape}")
 
         return torch.randn(output_shape, dtype=q.dtype, device=q.device)
 
