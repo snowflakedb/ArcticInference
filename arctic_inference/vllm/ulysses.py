@@ -476,12 +476,14 @@ class UlyssesAttention(ArcticPatch[Attention]):
                 print(f"num_heads {self.num_heads} head_size {self.head_size}, num_kv_heads {self.num_kv_heads}, is_kv_replicated {self.is_kv_replicated}, sp_size {self.sp_size}")
                 print(f"self.use_mla {self.use_mla}")
             get_world_group().barrier()
-        # import traceback
+        import traceback
         if torch.distributed.get_rank() == 0:
             print(f"  output_shape {output_shape}")
-        #     traceback.print_stack()
+            traceback.print_stack()
 
-        c_ = self._orig_forward(q_, kv_c_normed_, k_pe_, output_shape=output_shape)
+        # c_ = self._orig_forward(q_, kv_c_normed_, k_pe_, output_shape=output_shape)
+        # if torch.distributed.get_rank() == 0:
+        #     print(f"  c_ {c_.shape}")
 
         return torch.randn(output_shape, dtype=q.dtype, device=q.device)
 
