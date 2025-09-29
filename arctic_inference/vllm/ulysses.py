@@ -658,6 +658,13 @@ class UlyssesFp8MoEMethod_dense(ArcticPatch[Fp8MoEMethod]):
         if self.use_ep:
             sp_size = parallel_state._SP.world_size
             sp_group = parallel_state._SP.device_group
+            from vllm.distributed import get_world_group
+            torch.cuda.synchronize()
+            get_world_group().barrier()
+            for i in range(get_world_group().world_size):
+                if torch.distributed.get_rank() == i:
+                    print(f"rank {i}  x {x.shape} {x.dtype} topk_weights {topk_weights.shape} {topk_weights.dtype} topk_ids {topk_ids.shape} {topk_ids.dtype}")
+                get_world_group().barrier()
             # gather x, topk_weights, topk_ids
             merge_buff = torch.cat([x, topk_weights, topk_ids.to(topk_weights.dtype)], dim=1)
             merge = torch.empty((merge_buff.shape[0] * sp_size, merge_buff.shape[1]), dtype=merge_buff.dtype, device=merge_buff.device)
