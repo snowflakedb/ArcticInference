@@ -481,6 +481,8 @@ class UlyssesAttention(ArcticPatch[Attention]):
             print(f"  output_shape {output_shape}")
         #     traceback.print_stack()
 
+        c_ = self._orig_forward(q_, kv_c_normed_, k_pe_, output_shape=output_shape)
+
         return torch.randn(output_shape, dtype=q.dtype, device=q.device)
 
 
