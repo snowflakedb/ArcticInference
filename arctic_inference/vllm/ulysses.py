@@ -451,23 +451,29 @@ class UlyssesAttention(ArcticPatch[Attention]):
 
         assert output_shape is not None
 
-        n = q.shape[0]
-        h = q.shape[1]
-        d_h = q.shape[2]
-
+        q_head_size = q.shape[2]
         # Transpose query
-        q = q.view(-1, self.sp_size, self.num_heads, d_h).transpose(0, 1).contiguous()
+        q = q.view(-1, self.sp_size, self.num_heads, q_head_size).transpose(0, 1).contiguous()
         q_ = torch.empty_like(q)
         torch.distributed.all_to_all_single(q_, q, group=self.sp_device_group)
-        q_ = q_.reshape(-1, self.num_heads, d_h)
+        q_ = q_.reshape(-1, self.num_heads, q_head_size)
+
+        # all-gather kv_c_normed
+        kv_c_normed_ = torch.empty((kv_c_normed.shape[0] * self.sp_size, kv_c_normed.shape[1]), dtype=kv_c_normed.dtype, device=kv_c_normed.device)
+        torch.distributed.all_gather_into_tensor(kv_c_normed_, kv_c_normed, group=self.sp_device_group)
+
+        # all-gather k_pe
+        k_pe_ = torch.empty((k_pe.shape[0] * self.sp_size, k_pe.shape[1], k_pe.shape[2]), dtype=k_pe.dtype, device=k_pe.device)
+        torch.distributed.all_gather_into_tensor(k_pe_, k_pe, group=self.sp_device_group)
 
         from vllm.distributed import get_world_group
         torch.cuda.synchronize()
         get_world_group().barrier()
         for i in range(get_world_group().world_size):
             if torch.distributed.get_rank() == i:
-                print(f"rank {i}: before UlyssesAttention forward query {q.shape} q_ {q_.shape} kv_c_normed {kv_c_normed.shape} k_pe {k_pe.shape}")
-                print(f"num_heads {self.num_heads}, num_kv_heads {self.num_kv_heads}, is_kv_replicated {self.is_kv_replicated}, sp_size {self.sp_size}")
+                print(f"rank {i}: before UlyssesAttention forward query {q.shape} kv_c_normed {kv_c_normed.shape} k_pe {k_pe.shape}")
+                print(f"rank {i}: before UlyssesAttention forward query {q_.shape} kv_c_normed {kv_c_normed_.shape} k_pe {k_pe_.shape}")
+                print(f"num_heads {self.num_heads} head_size {self.head_size}, num_kv_heads {self.num_kv_heads} kv_head_size {self.kv_head_size}, is_kv_replicated {self.is_kv_replicated}, sp_size {self.sp_size}")
                 print(f"self.use_mla {self.use_mla}")
             get_world_group().barrier()
         # import traceback
