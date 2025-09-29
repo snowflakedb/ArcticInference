@@ -487,7 +487,13 @@ class UlyssesAttention(ArcticPatch[Attention]):
         if torch.distributed.get_rank() == 0:
             print(f"  c_ {c_.shape}")
 
-        return torch.randn(output_shape, dtype=q.dtype, device=q.device)
+        c = torch.empty_like(c_)
+        torch.all_to_all_single(c, c_, group=self.sp_device_group)
+        c = (c.view(self.sp_size, -1, self.num_heads * self.v_head_size)
+             .transpose(0, 1)
+             .reshape(output_shape))
+
+        return c # torch.randn(output_shape, dtype=q.dtype, device=q.device)
 
     def forward(self, query, key, value, **kwargs):
         from .model_runner import is_shift_parallel_mode
