@@ -451,12 +451,17 @@ class UlyssesAttention(ArcticPatch[Attention]):
 
         assert output_shape is not None
 
+        q = q.view(-1, self.sp_size, self.num_heads, self.head_size).transpose(0, 1)
+        q_ = torch.empty_like(q)
+        torch.distributed.all_to_all_single(q_, q, group=self.sp_device_group)
+        q_ = q_.reshape(-1, self.num_heads, self.head_size)
+
         from vllm.distributed import get_world_group
         torch.cuda.synchronize()
         get_world_group().barrier()
         for i in range(get_world_group().world_size):
             if torch.distributed.get_rank() == i:
-                print(f"rank {i}: before UlyssesAttention forward query {q.shape} key {kv_c_normed.shape} value {k_pe.shape}")
+                print(f"rank {i}: before UlyssesAttention forward query {q.shape} q_ {q_.shape} kv_c_normed {kv_c_normed.shape} k_pe {k_pe.shape}")
                 print(f"num_heads {self.num_heads}, num_kv_heads {self.num_kv_heads}, is_kv_replicated {self.is_kv_replicated}, sp_size {self.sp_size}")
                 print(f"self.use_mla {self.use_mla}")
             get_world_group().barrier()
