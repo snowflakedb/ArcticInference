@@ -43,9 +43,6 @@ def try_load_jit_library() -> bool:
         swiftkv_ops_module = SwiftKVOpsBuilder().load()
 
         return True
-    else:
-        logger.info("Could not find SwiftKVOpsBuilder, skipping JIT compilation.")
-        return False
     except ImportError as e:
         logger.info(
             f"Unable to import SwiftKVOpsBuilder. ImportError: {e}. Falling back to original implementation."
