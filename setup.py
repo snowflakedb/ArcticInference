@@ -26,6 +26,8 @@ from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build_py import build_py as _build_py
 
+import arctic_inference.envs as envs
+
 # Convert distutils Windows platform specifiers to CMake -A arguments
 PLAT_TO_CMAKE = {
     "win32": "Win32",
@@ -171,12 +173,18 @@ class CompileGrpc(_build_py):
         _build_py.run(self)
 
 
-setup(
-    ext_modules=[
-        CMakeExtension("arctic_inference.suffix_decoding._C",
-                       "csrc/suffix_decoding"),
+ext_modules=[
+    CMakeExtension("arctic_inference.suffix_decoding._C",
+                   "csrc/suffix_decoding"),
+]
+
+if envs.ARCTIC_INFERENCE_PRECOMPILED_OPS:
+    ext_modules.append(
         CMakeExtension("arctic_inference.custom_ops", "csrc/custom_ops"),
-    ],
+    )
+
+setup(
+    ext_modules=ext_modules,
     cmdclass={
         "build_ext": CMakeBuild,
         'build_py': CompileGrpc

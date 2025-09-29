@@ -22,6 +22,8 @@ if TYPE_CHECKING:
 environment_variables: dict[str, Callable[[], Any]] = {
     "ARCTIC_INFERENCE_ENABLED":
     lambda: os.getenv("ARCTIC_INFERENCE_ENABLED", "0") == "1",
+    "ARCTIC_INFERENCE_PRECOMPILED_OPS":
+    lambda: os.getenv("ARCTIC_INFERENCE_PRECOMPILED_OPS", "0") == "1",
     "ARCTIC_INFERENCE_SKIP_PLATFORM_CHECK":
     lambda: os.getenv("ARCTIC_INFERENCE_SKIP_PLATFORM_CHECK", "0") == "1",
     "ARCTIC_INFERENCE_SKIP_SPEC_MODEL_CHECK":

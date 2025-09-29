@@ -37,6 +37,25 @@ def try_load_torch_library() -> bool:
         return False
 
 
+def try_load_jit_library() -> bool:
+    try:
+        from arctic_inference.op_builder.swiftkv_ops_builder import SwiftKVOpsBuilder
+        swiftkv_ops_module = SwiftKVOpsBuilder().load()
+    else:
+        logger.info("Could not find SwiftKVOpsBuilder, skipping JIT compilation.")
+        return False
+    except ImportError as e:
+        logger.info(
+            f"Unable to import SwiftKVOpsBuilder. ImportError: {e}. Falling back to original implementation."
+        )
+        return False
+    except Exception as e:
+        logger.info(
+            f"Unable to load JIT library. Exception: {e}. Falling back to original implementation."
+        )
+        return False
+
+
 def reshape_and_cache_flash_bulk(
     keys: list[torch.Tensor],
     values: list[torch.Tensor],

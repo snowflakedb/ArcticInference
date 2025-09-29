@@ -1,5 +1,6 @@
 #include "custom_ops.h"
 
+#include <torch/extension.h>
 #include <torch/library.h>
 
 TORCH_LIBRARY(arctic_inference, ops) {
@@ -16,4 +17,7 @@ TORCH_LIBRARY(arctic_inference, ops) {
       "                             int head_size) -> ()");
   ops.impl("reshape_and_cache_flash_bulk", torch::kCUDA,
            &reshape_and_cache_flash_bulk);
+}
+
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 }
