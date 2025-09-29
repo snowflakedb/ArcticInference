@@ -447,7 +447,7 @@ class UlyssesAttention(ArcticPatch[Attention]):
 
         return
 
-    def forward_mla(self, q, kv_c_normed, k_pe, output_shape=None):
+    def forward_mla(self, q, kv_c_normed, k_pe, output_shape):
 
         assert output_shape is not None
 
@@ -475,7 +475,7 @@ class UlyssesAttention(ArcticPatch[Attention]):
             return self._orig_forward(query, key, value, **kwargs)
 
         if self.use_mla: 
-            return self.forward_mla(query, key, value, **kwargs)
+            return self.forward_mla(query, key, value, kwargs["output_shape"])
 
         if self.is_kv_replicated:
             # Ulysses all-to-all 1/2 (query)
