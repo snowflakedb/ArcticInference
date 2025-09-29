@@ -33,7 +33,11 @@ packages = [
     "arctic_inference.vllm.swiftkv",
     "arctic_inference.vllm.spec_dec",
     "arctic_inference.embedding",
+    "arctic_inference.csrc",
 ]
+
+[tool.setuptools.package-dir]
+"arctic_inference.csrc" = "csrc"
 
 [tool.setuptools.package-data]
 "arctic_inference.embedding" = ["arctic_inference/embedding/proto/*.proto"]
