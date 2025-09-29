@@ -467,6 +467,8 @@ class UlyssesAttention(ArcticPatch[Attention]):
             if torch.distributed.get_rank() == 0:
                 print(f"  output_shape {output_shape}")
                 traceback.print_stack()
+            
+            return torch.randn(output_shape, dtype=query.dtype, device=query.device)
 
         if self.is_kv_replicated:
             # Ulysses all-to-all 1/2 (query)
