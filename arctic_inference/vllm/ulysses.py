@@ -453,20 +453,20 @@ class UlyssesAttention(ArcticPatch[Attention]):
             return self._orig_forward(query, key, value, **kwargs)
 
         if self.use_mla: 
-            # from vllm.distributed import get_world_group
-            # torch.cuda.synchronize()
-            # get_world_group().barrier()
-            # for i in range(get_world_group().world_size):
-            #     if torch.distributed.get_rank() == i:
-            #         print(f"rank {i}: before UlyssesAttention forward query {query.shape} key {key.shape} value {value.shape}")
-            #         print(f"num_heads {self.num_heads}, num_kv_heads {self.num_kv_heads}, is_kv_replicated {self.is_kv_replicated}, sp_size {self.sp_size}")
-            #         print(f"self.use_mla {self.use_mla}")
-            #     get_world_group().barrier()
-            # import traceback
-            # if torch.distributed.get_rank() == 0:
-            #     print(f"  output_shape {output_shape}")
-            #     traceback.print_stack()
+            from vllm.distributed import get_world_group
+            torch.cuda.synchronize()
+            get_world_group().barrier()
+            for i in range(get_world_group().world_size):
+                if torch.distributed.get_rank() == i:
+                    print(f"rank {i}: before UlyssesAttention forward query {query.shape} key {key.shape} value {value.shape}")
+                    print(f"num_heads {self.num_heads}, num_kv_heads {self.num_kv_heads}, is_kv_replicated {self.is_kv_replicated}, sp_size {self.sp_size}")
+                    print(f"self.use_mla {self.use_mla}")
+                get_world_group().barrier()
+            import traceback
             output_shape = kwargs.get("output_shape", None)
+            if torch.distributed.get_rank() == 0:
+                print(f"  output_shape {output_shape}")
+                traceback.print_stack()
             
             return torch.randn(output_shape, dtype=query.dtype, device=query.device)
 
@@ -658,23 +658,23 @@ class UlyssesFp8MoEMethod_dense(ArcticPatch[Fp8MoEMethod]):
         if self.use_ep:
             sp_size = parallel_state._SP.world_size
             sp_group = parallel_state._SP.device_group
-            # from vllm.distributed import get_world_group
-            # torch.cuda.synchronize()
-            # get_world_group().barrier()
-            # for i in range(get_world_group().world_size):
-            #     if torch.distributed.get_rank() == i:
-            #         print(f"rank {i}  x {x.shape} {x.dtype} topk_weights {topk_weights.shape} {topk_weights.dtype} topk_ids {topk_ids.shape} {topk_ids.dtype}")
-            #     get_world_group().barrier()
+            from vllm.distributed import get_world_group
+            torch.cuda.synchronize()
+            get_world_group().barrier()
+            for i in range(get_world_group().world_size):
+                if torch.distributed.get_rank() == i:
+                    print(f"rank {i}  x {x.shape} {x.dtype} topk_weights {topk_weights.shape} {topk_weights.dtype} topk_ids {topk_ids.shape} {topk_ids.dtype}")
+                get_world_group().barrier()
             # gather x, topk_weights, topk_ids
             merge_buff = torch.cat([x.view(torch.uint8), topk_weights.view(torch.uint8), topk_ids.view(torch.uint8)], dim=1)
             merge = torch.empty((merge_buff.shape[0] * sp_size, merge_buff.shape[1]), dtype=merge_buff.dtype, device=merge_buff.device)
-            # torch.distributed.all_gather_into_tensor(merge, merge_buff, group=sp_group)
-            # torch.cuda.synchronize()
-            # get_world_group().barrier()
-            # for i in range(get_world_group().world_size):
-            #     if torch.distributed.get_rank() == i:
-            #         print(f"rank {i}  merge {merge.shape} {merge.dtype} merge_buff {merge_buff.shape} {merge_buff.dtype}")
-            #     get_world_group().barrier()
+            torch.distributed.all_gather_into_tensor(merge, merge_buff, group=sp_group)
+            torch.cuda.synchronize()
+            get_world_group().barrier()
+            for i in range(get_world_group().world_size):
+                if torch.distributed.get_rank() == i:
+                    print(f"rank {i}  merge {merge.shape} {merge.dtype} merge_buff {merge_buff.shape} {merge_buff.dtype}")
+                get_world_group().barrier()
             output_tokens, output_weights, output_ids = merge.split([x.shape[1] * x.element_size(), 
                                                                      topk_weights.shape[1] * topk_weights.element_size(), 
                                                                      topk_ids.shape[1] * topk_ids.element_size()], dim=1)
@@ -715,13 +715,15 @@ class UlyssesFp8MoEMethod_dense(ArcticPatch[Fp8MoEMethod]):
         # combine
         if self.use_ep:
             output = torch.empty_like(x)
-            # from vllm.distributed import get_world_group
-            # torch.cuda.synchronize()
-            # get_world_group().barrier()
-            # for i in range(get_world_group().world_size):
-            #     if torch.distributed.get_rank() == i:
-            #         print(f"rank {i} before reduce_scatter_tensor out_expert {out_expert.shape} {out_expert.dtype} output {output.shape} {output.dtype}")
-            #     get_world_group().barrier()
+
+            from vllm.distributed import get_world_group
+            torch.cuda.synchronize()
+            get_world_group().barrier()
+            for i in range(get_world_group().world_size):
+                if torch.distributed.get_rank() == i:
+                    print(f"rank {i} before reduce_scatter_tensor out_expert {out_expert.shape} {out_expert.dtype} output {output.shape} {output.dtype}")
+                get_world_group().barrier()
+
             torch.distributed.reduce_scatter_tensor(output, out_expert, group=sp_group)
         else:
             return out_expert
