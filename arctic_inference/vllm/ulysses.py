@@ -700,6 +700,10 @@ class UlyssesFp8MoEMethod_dense(ArcticPatch[Fp8MoEMethod]):
         # combine
         if self.use_ep:
             output = torch.empty_like(x)
+
+            if torch.distributed.get_rank() == 0:
+                print(f"before reduce_scatter_tensor out_expert {out_expert.shape} {out_expert.dtype} output {output.shape} {output.dtype}")
+
             torch.distributed.reduce_scatter_tensor(output, out_expert, group=sp_group)
         else:
             return out_expert
