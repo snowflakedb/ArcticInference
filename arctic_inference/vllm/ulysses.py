@@ -453,20 +453,20 @@ class UlyssesAttention(ArcticPatch[Attention]):
             return self._orig_forward(query, key, value, **kwargs)
 
         if self.use_mla: 
-            from vllm.distributed import get_world_group
-            torch.cuda.synchronize()
-            get_world_group().barrier()
-            for i in range(get_world_group().world_size):
-                if torch.distributed.get_rank() == i:
-                    print(f"rank {i}: before UlyssesAttention forward query {query.shape} key {key.shape} value {value.shape}")
-                    print(f"num_heads {self.num_heads}, num_kv_heads {self.num_kv_heads}, is_kv_replicated {self.is_kv_replicated}, sp_size {self.sp_size}")
-                    print(f"self.use_mla {self.use_mla}")
-                get_world_group().barrier()
-            import traceback
+            # from vllm.distributed import get_world_group
+            # torch.cuda.synchronize()
+            # get_world_group().barrier()
+            # for i in range(get_world_group().world_size):
+            #     if torch.distributed.get_rank() == i:
+            #         print(f"rank {i}: before UlyssesAttention forward query {query.shape} key {key.shape} value {value.shape}")
+            #         print(f"num_heads {self.num_heads}, num_kv_heads {self.num_kv_heads}, is_kv_replicated {self.is_kv_replicated}, sp_size {self.sp_size}")
+            #         print(f"self.use_mla {self.use_mla}")
+            #     get_world_group().barrier()
+            # import traceback
             output_shape = kwargs.get("output_shape", None)
-            if torch.distributed.get_rank() == 0:
-                print(f"  output_shape {output_shape}")
-                traceback.print_stack()
+            # if torch.distributed.get_rank() == 0:
+            #     print(f"  output_shape {output_shape}")
+            #     traceback.print_stack()
             
             return torch.randn(output_shape, dtype=query.dtype, device=query.device)
 
