@@ -451,10 +451,15 @@ class UlyssesAttention(ArcticPatch[Attention]):
 
         assert output_shape is not None
 
-        q = q.view(-1, self.sp_size, self.num_heads, self.head_size).transpose(0, 1)
+        n = q.shape[0]
+        h = q.shape[1]
+        d_h = q.shape[2]
+
+        # Transpose query
+        q = q.view(-1, self.sp_size, self.num_heads, d_h).transpose(0, 1)
         q_ = torch.empty_like(q)
         torch.distributed.all_to_all_single(q_, q, group=self.sp_device_group)
-        q_ = q_.reshape(-1, self.num_heads, self.head_size)
+        q_ = q_.reshape(-1, self.num_heads, d_h)
 
         from vllm.distributed import get_world_group
         torch.cuda.synchronize()
