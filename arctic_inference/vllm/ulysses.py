@@ -41,6 +41,7 @@ from vllm.forward_context import BatchDescriptor
 from vllm.model_executor.layers.fused_moe import FusedMoE
 from vllm.model_executor.layers.fused_moe.config import FusedMoEParallelConfig, FusedMoEConfig
 from vllm.model_executor.layers.quantization.fp8 import Fp8MoEMethod, Fp8Config
+from vllm.model_executer.models.deepseek_v2 import DeepseekV2MLAAttention
 
 
 from arctic_inference.patching import ArcticPatch
@@ -55,6 +56,7 @@ def apply_shift_parallel_patches():
     UlyssesCudagraphDispatcher.apply_patch()
     UlyssesFusedMoEParallelConfig.apply_patch()
     UlyssesFp8MoEMethod_dense.apply_patch()
+    UlyssesDeepseekV2MLAAttention.apply_patch()
 
 
 class UlyssesModelConfig(ArcticPatch[ModelConfig]):
@@ -473,7 +475,7 @@ class UlyssesAttention(ArcticPatch[Attention]):
         # Ulysses all-to-all
         c = torch.empty_like(c_)
         torch.distributed.all_to_all_single(c, c_, group=self.sp_device_group)
-        c = (c.view(self.sp_size, -1, self.num_heads * 128)
+        c = (c.view(self.sp_size, -1)
              .transpose(0, 1)
              .reshape(output_shape))
 
@@ -485,7 +487,16 @@ class UlyssesAttention(ArcticPatch[Attention]):
             return self._orig_forward(query, key, value, **kwargs)
 
         if self.use_mla: 
-            return self.forward_mla(query, key, value, kwargs["output_shape"])
+            # return self.forward_mla(query, key, value, kwargs["output_shape"])
+            output_shape = kwargs.get("output_shape", None)
+            c_ = self.forward_mla(query, key, value, (output_shape[0] * self.sp_size,
+                                                     output_shape[1] // self.sp_size))
+            # Ulysses all-to-all
+            c = torch.empty_like(c_)
+            torch.distributed.all_to_all_single(c, c_, group=self.sp_device_group)
+            return (c.view(self.sp_size, -1)
+                .transpose(0, 1)
+                .reshape(output_shape))
 
         if self.is_kv_replicated:
             # Ulysses all-to-all 1/2 (query)
@@ -545,6 +556,50 @@ class UlyssesAttention(ArcticPatch[Attention]):
                   .reshape(-1, self.num_heads * self.sp_size * self.head_size))
         
         return output
+
+class UlyssesDeepseekV2MLAAttention(ArcticPatch[DeepseekV2MLAAttention]):
+    def forward(
+        self,
+        positions: torch.Tensor,
+        hidden_states: torch.Tensor,
+    ) -> torch.Tensor:
+        q_c = None
+        kv_lora = None
+
+        if self.q_lora_rank is not None:
+            qkv_lora = self.fused_qkv_a_proj(hidden_states)[0]
+            qkv_lora_ = torch.empty((qkv_lora.shape[0] * self.sp_size, qkv_lora.shape[1]), dtype=qkv_lora.dtype, device=qkv_lora.device)
+            torch.distributed.all_gather_into_tensor(qkv_lora_, qkv_lora, group=self.sp_device_group)
+            qkv_lora = qkv_lora_
+            q_c, kv_lora = qkv_lora.split(
+                [self.q_lora_rank, self.kv_lora_rank + self.qk_rope_head_dim],
+                dim=-1,
+            )
+            q_c = self.q_a_layernorm(q_c)
+            q = self.q_b_proj(q_c)[0]
+        else:
+            assert False, "not implemented"
+            kv_lora = self.kv_a_proj_with_mqa(hidden_states)[0]
+            q = self.q_proj(hidden_states)[0]
+
+        kv_c, k_pe = kv_lora.split([self.kv_lora_rank, self.qk_rope_head_dim],
+                                   dim=-1)
+        kv_c_normed = self.kv_a_layernorm(kv_c)
+
+        q = q.view(-1, self.num_local_heads, self.qk_head_dim)
+        # Add head dim of 1 to k_pe
+        k_pe = k_pe.unsqueeze(1)
+
+        q[..., self.qk_nope_head_dim:], k_pe = self.rotary_emb(
+            positions, q[..., self.qk_nope_head_dim:], k_pe)
+
+        attn_out = self.mla_attn(
+            q,
+            kv_c_normed,
+            k_pe,
+            output_shape=(hidden_states.shape[0],
+                          self.num_local_heads * self.v_head_dim))
+        return self.o_proj(attn_out)[0]
 
 
 class UlyssesCudagraphDispatcher(ArcticPatch[CudagraphDispatcher]):
