@@ -494,9 +494,7 @@ class UlyssesAttention(ArcticPatch[Attention]):
             # Ulysses all-to-all
             c = torch.empty_like(c_)
             torch.distributed.all_to_all_single(c, c_, group=self.sp_device_group)
-            return (c.view(self.sp_size, -1)
-                .transpose(0, 1)
-                .reshape(output_shape))
+            return (c.view(self.sp_size, -1).transpose(0, 1).reshape(output_shape))
 
         if self.is_kv_replicated:
             # Ulysses all-to-all 1/2 (query)
