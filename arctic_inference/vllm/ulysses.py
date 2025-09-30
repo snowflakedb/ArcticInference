@@ -41,7 +41,7 @@ from vllm.forward_context import BatchDescriptor
 from vllm.model_executor.layers.fused_moe import FusedMoE
 from vllm.model_executor.layers.fused_moe.config import FusedMoEParallelConfig, FusedMoEConfig
 from vllm.model_executor.layers.quantization.fp8 import Fp8MoEMethod, Fp8Config
-from vllm.model_executer.models.deepseek_v2 import DeepseekV2MLAAttention
+from vllm.model_executor.models.deepseek_v2 import DeepseekV2MLAAttention
 
 
 from arctic_inference.patching import ArcticPatch
