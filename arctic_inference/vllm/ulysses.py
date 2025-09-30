@@ -568,7 +568,8 @@ class UlyssesDeepseekV2MLAAttention(ArcticPatch[DeepseekV2MLAAttention]):
 
         if self.q_lora_rank is not None:
             qkv_lora = self.fused_qkv_a_proj(hidden_states)[0]
-            qkv_lora_ = torch.empty((qkv_lora.shape[0] * self.sp_size, qkv_lora.shape[1]), dtype=qkv_lora.dtype, device=qkv_lora.device)
+            sp_size = parallel_state._SP.world_size
+            qkv_lora_ = torch.empty((qkv_lora.shape[0] * sp_size, qkv_lora.shape[1]), dtype=qkv_lora.dtype, device=qkv_lora.device)
             torch.distributed.all_gather_into_tensor(qkv_lora_, qkv_lora, group=self.sp_device_group)
             qkv_lora = qkv_lora_
             q_c, kv_lora = qkv_lora.split(
