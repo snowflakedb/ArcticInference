@@ -569,7 +569,7 @@ class UlyssesDeepseekV2MLAAttention(ArcticPatch[DeepseekV2MLAAttention]):
             sp_size = parallel_state._SP.world_size
             sp_device_group = parallel_state._SP.device_group
             qkv_lora_ = torch.empty((qkv_lora.shape[0] * sp_size, qkv_lora.shape[1]), dtype=qkv_lora.dtype, device=qkv_lora.device)
-            positions_ = torch.empty((positions.shape[0] * sp_size, positions.shape[1]), dtype=positions.dtype, device=positions.device)
+            positions_ = torch.empty((positions.shape[0] * sp_size), dtype=positions.dtype, device=positions.device)
             torch.distributed.all_gather_into_tensor(qkv_lora_, qkv_lora, group=sp_device_group)
             torch.distributed.all_gather_into_tensor(positions_, positions, group=sp_device_group)
             qkv_lora = qkv_lora_
