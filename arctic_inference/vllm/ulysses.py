@@ -56,7 +56,7 @@ def apply_shift_parallel_patches():
     UlyssesCudagraphDispatcher.apply_patch()
     UlyssesFusedMoEParallelConfig.apply_patch()
     UlyssesFp8MoEMethod_dense.apply_patch()
-    # UlyssesDeepseekV2MLAAttention.apply_patch()
+    UlyssesDeepseekV2MLAAttention.apply_patch()
 
 
 class UlyssesModelConfig(ArcticPatch[ModelConfig]):
@@ -482,7 +482,7 @@ class UlyssesAttention(ArcticPatch[Attention]):
             return self._orig_forward(query, key, value, **kwargs)
 
         if self.use_mla: 
-            return self.forward_mla(query, key, value, kwargs["output_shape"])
+            # return self.forward_mla(query, key, value, kwargs["output_shape"])
             output_shape = kwargs.get("output_shape", None)
             c_ = self._orig_forward(query, key, value, (output_shape[0] * self.sp_size,
                                                      output_shape[1] // self.sp_size))
