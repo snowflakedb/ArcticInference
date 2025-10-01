@@ -489,7 +489,7 @@ class UlyssesAttention(ArcticPatch[Attention]):
         if self.use_mla: 
             # return self.forward_mla(query, key, value, kwargs["output_shape"])
             output_shape = kwargs.get("output_shape", None)
-            c_ = self.forward_mla(query, key, value, (output_shape[0] * self.sp_size,
+            c_ = self._orig_forward(query, key, value, (output_shape[0] * self.sp_size,
                                                      output_shape[1] // self.sp_size))
             # Ulysses all-to-all
             c = torch.empty_like(c_)
