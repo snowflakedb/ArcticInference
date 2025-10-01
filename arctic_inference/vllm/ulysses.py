@@ -594,12 +594,12 @@ class UlyssesDeepseekV2MLAAttention(ArcticPatch[DeepseekV2MLAAttention]):
         # Add head dim of 1 to k_pe
         k_pe = k_pe.unsqueeze(1)
 
-        from vllm.distributed.parallel_state import get_world_group
-        get_world_group().barrier()
-        for i in range(get_world_group().world_size):
-            if i == torch.distributed.get_rank():
-                print(f"rank {i} q shape {q.shape}, kv_c_normed shape {kv_c_normed.shape}, k_pe shape {k_pe.shape}")
-            get_world_group().barrier()
+        # from vllm.distributed.parallel_state import get_world_group
+        # get_world_group().barrier()
+        # for i in range(get_world_group().world_size):
+        #     if i == torch.distributed.get_rank():
+        #         print(f"rank {i} q shape {q.shape}, kv_c_normed shape {kv_c_normed.shape}, k_pe shape {k_pe.shape}")
+        #     get_world_group().barrier()
 
         q[..., self.qk_nope_head_dim:], k_pe = self.rotary_emb(
             positions, q[..., self.qk_nope_head_dim:], k_pe)
