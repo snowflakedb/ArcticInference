@@ -488,7 +488,7 @@ class UlyssesAttention(ArcticPatch[Attention]):
                                                      output_shape[1] // self.sp_size))
             # Ulysses all-to-all
             c = torch.empty_like(c_)
-            torch.distributed.all_to_all_single(c, c_, group=self.sp_device_group)
+            # torch.distributed.all_to_all_single(c, c_, group=self.sp_device_group)
 
             # from vllm.distributed.parallel_state import get_world_group
             # get_world_group().barrier()
@@ -573,8 +573,8 @@ class UlyssesDeepseekV2MLAAttention(ArcticPatch[DeepseekV2MLAAttention]):
             sp_device_group = parallel_state._SP.device_group
             qkv_lora_ = torch.empty((qkv_lora.shape[0] * sp_size, qkv_lora.shape[1]), dtype=qkv_lora.dtype, device=qkv_lora.device)
             positions_ = torch.empty((positions.shape[0] * sp_size), dtype=positions.dtype, device=positions.device)
-            torch.distributed.all_gather_into_tensor(qkv_lora_, qkv_lora, group=sp_device_group)
-            torch.distributed.all_gather_into_tensor(positions_, positions, group=sp_device_group)
+            # torch.distributed.all_gather_into_tensor(qkv_lora_, qkv_lora, group=sp_device_group)
+            # torch.distributed.all_gather_into_tensor(positions_, positions, group=sp_device_group)
             qkv_lora = qkv_lora_
             positions = positions_
             q_c, kv_lora = qkv_lora.split(
