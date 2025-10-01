@@ -490,12 +490,12 @@ class UlyssesAttention(ArcticPatch[Attention]):
             c = torch.empty_like(c_)
             torch.distributed.all_to_all_single(c, c_, group=self.sp_device_group)
 
-            from vllm.distributed.parallel_state import get_world_group
-            get_world_group().barrier()
-            for i in range(get_world_group().world_size):
-                if i == torch.distributed.get_rank():
-                    print(f"rank {i} c {c.shape} c_ {c_.shape} output_shape {output_shape}")
-                get_world_group().barrier()
+            # from vllm.distributed.parallel_state import get_world_group
+            # get_world_group().barrier()
+            # for i in range(get_world_group().world_size):
+            #     if i == torch.distributed.get_rank():
+            #         print(f"rank {i} c {c.shape} c_ {c_.shape} output_shape {output_shape}")
+            #     get_world_group().barrier()
 
             return (c.view(self.sp_size, -1, c.shape[-1]).transpose(0, 1).reshape(output_shape))
 
