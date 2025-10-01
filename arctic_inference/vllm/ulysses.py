@@ -443,9 +443,8 @@ class UlyssesAttention(ArcticPatch[Attention]):
 
             self._orig_init(num_heads, *args, **kwargs)
 
-            # if torch.distributed.get_rank() == 0:
-            #     print(f"UlyssesAttention: num_heads {num_heads}, num_kv_heads {num_kv_heads}, is_kv_replicated {self.is_kv_replicated}, sp_size {self.sp_size}")
-            #     print(f"self.use_mla {self.use_mla}")
+            if torch.distributed.get_rank() == 0:
+                print(f"UlyssesAttention: num_heads {num_heads}, num_kv_heads {num_kv_heads}, is_kv_replicated {self.is_kv_replicated}, sp_size {self.sp_size}, use_mla {self.use_mla}")
 
         return
 
