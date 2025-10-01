@@ -501,7 +501,7 @@ class UlyssesAttention(ArcticPatch[Attention]):
                     print(f"rank {i} c {c.shape} c_ {c_.shape} output_shape {output_shape}")
                 get_world_group().barrier()
 
-            return (c.view(self.sp_size, -1).transpose(0, 1).reshape(output_shape))
+            return (c.view(self.sp_size, -1, c.shape[-1]).transpose(0, 1).reshape(output_shape))
 
         if self.is_kv_replicated:
             # Ulysses all-to-all 1/2 (query)
