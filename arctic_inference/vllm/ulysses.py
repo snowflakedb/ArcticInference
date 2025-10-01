@@ -474,11 +474,7 @@ class UlyssesAttention(ArcticPatch[Attention]):
         # Ulysses all-to-all
         c = torch.empty_like(c_)
         torch.distributed.all_to_all_single(c, c_, group=self.sp_device_group)
-        c = (c.view(self.sp_size, -1)
-             .transpose(0, 1)
-             .reshape(output_shape))
-
-        return c # torch.randn(output_shape, dtype=q.dtype, device=q.device)
+        return (c.view(self.sp_size, -1, c.shape[-1]).transpose(0, 1).reshape(output_shape))
 
     def forward(self, query, key, value, **kwargs):
         from .model_runner import is_shift_parallel_mode
@@ -486,7 +482,7 @@ class UlyssesAttention(ArcticPatch[Attention]):
             return self._orig_forward(query, key, value, **kwargs)
 
         if self.use_mla: 
-            # return self.forward_mla(query, key, value, kwargs["output_shape"])
+            return self.forward_mla(query, key, value, kwargs["output_shape"])
             output_shape = kwargs.get("output_shape", None)
             c_ = self._orig_forward(query, key, value, (output_shape[0] * self.sp_size,
                                                      output_shape[1] // self.sp_size))
