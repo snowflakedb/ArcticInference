@@ -589,7 +589,8 @@ class UlyssesDeepseekV2MLAAttention(ArcticPatch[DeepseekV2MLAAttention]):
                                    dim=-1)
         kv_c_normed = self.kv_a_layernorm(kv_c)
 
-        q = q.view(-1, self.num_local_heads, self.qk_head_dim)
+        sp_tp_size = parallel_state._SP_TP.world_size
+        q = q.view(-1, self.num_heads // sp_tp_size, self.qk_head_dim)
         # Add head dim of 1 to k_pe
         k_pe = k_pe.unsqueeze(1)
 
