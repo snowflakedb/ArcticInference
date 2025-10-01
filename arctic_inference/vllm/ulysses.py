@@ -56,7 +56,7 @@ def apply_shift_parallel_patches():
     UlyssesCudagraphDispatcher.apply_patch()
     UlyssesFusedMoEParallelConfig.apply_patch()
     UlyssesFp8MoEMethod_dense.apply_patch()
-    UlyssesDeepseekV2MLAAttention.apply_patch()
+    # UlyssesDeepseekV2MLAAttention.apply_patch()
 
 
 class UlyssesModelConfig(ArcticPatch[ModelConfig]):
