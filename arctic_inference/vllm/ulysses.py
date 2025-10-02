@@ -459,15 +459,17 @@ class UlyssesAttention(ArcticPatch[Attention]):
         torch.distributed.all_to_all_single(q_, q, group=self.sp_device_group)
         q_ = q_.reshape(-1, self.num_heads, q_head_size)
 
+        # all-gather
+        kv_c_normed_ = parallel_state._SP.all_gather(kv_c_normed, dim=0)
+        k_pe_ = parallel_state._SP.all_gather(k_pe, dim=0)
+
         # all-gather kv_c_normed
         # kv_c_normed_ = torch.empty((kv_c_normed.shape[0] * self.sp_size, kv_c_normed.shape[1]), dtype=kv_c_normed.dtype, device=kv_c_normed.device)
         # torch.distributed.all_gather_into_tensor(kv_c_normed_, kv_c_normed, group=self.sp_device_group)
-        kv_c_normed_ = parallel_state._SP.all_gather(kv_c_normed, dim=0)
 
         # all-gather k_pe
         # k_pe_ = torch.empty((k_pe.shape[0] * self.sp_size, k_pe.shape[1], k_pe.shape[2]), dtype=k_pe.dtype, device=k_pe.device)
         # torch.distributed.all_gather_into_tensor(k_pe_, k_pe, group=self.sp_device_group)
-        k_pe_ = parallel_state._SP.all_gather(k_pe, dim=0)
 
         # original attention
         c_ = self._orig_forward(q_, kv_c_normed_, k_pe_, output_shape=(output_shape[0] * self.sp_size,
@@ -475,7 +477,7 @@ class UlyssesAttention(ArcticPatch[Attention]):
 
         # Ulysses all-to-all
         c = torch.empty_like(c_)
-        # torch.distributed.all_to_all_single(c, c_, group=self.sp_device_group)
+        torch.distributed.all_to_all_single(c, c_, group=self.sp_device_group)
         return (c.view(self.sp_size, -1, c.shape[-1]).transpose(0, 1).reshape(output_shape))
 
     def forward(self, query, key, value, **kwargs):
