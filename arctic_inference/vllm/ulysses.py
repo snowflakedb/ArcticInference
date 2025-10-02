@@ -760,7 +760,8 @@ class UlyssesFp8MoEMethod_dense(ArcticPatch[Fp8MoEMethod]):
 
         # combine
         if self.use_ep:
-            output = parallel_state._SP.reduce_scatter(out_expert, dim=0)
+            # output = parallel_state._SP.reduce_scatter(out_expert, dim=0)
+            output = out_expert
         else:
             return out_expert
 
