@@ -501,7 +501,7 @@ class UlyssesAttention(ArcticPatch[Attention]):
             #         print(f"rank {i} c {c.shape} c_ {c_.shape} output_shape {output_shape}")
             #     get_world_group().barrier()
 
-            return (c.view(self.sp_size, -1, c.shape[1]).transpose(0, 1).reshape(output_shape))
+            return (c.view(self.sp_size, -1, c.shape[-1]).transpose(0, 1).reshape(output_shape))
 
         if self.is_kv_replicated:
             # Ulysses all-to-all 1/2 (query)
@@ -520,7 +520,13 @@ class UlyssesAttention(ArcticPatch[Attention]):
             kv_part = torch.empty_like(kv)
             torch.distributed.all_to_all_single(kv_part, kv, group=self.sp_aa_device_group)
             # Ulysses all-gather (key, value)
-            kv_ = parallel_state._SP_AG.all_gather(kv_part, dim=0)
+            kv_ = torch.empty(q_.shape[0],
+                              2 * self.num_kv_heads * self.head_size,
+                              dtype=query.dtype,
+                              device=query.device)
+            torch.distributed.all_gather_into_tensor(kv_,
+                                                     kv_part,
+                                                     group=self.sp_ag_device_group)
             # reorder
             kv_chunk = kv_.chunk(self.sp_size)
             kv_ordered = torch.cat([kv_chunk[i] for i in self.order])
@@ -567,9 +573,9 @@ class UlyssesDeepseekV2MLAAttention(ArcticPatch[DeepseekV2MLAAttention]):
 
         if self.q_lora_rank is not None:
             qkv_lora = self.fused_qkv_a_proj(hidden_states)[0]
-            qkv_lora = parallel_state._SP.all_gather(qkv_lora, dim=0)
-            positions = parallel_state._SP.all_gather(positions, dim=0)
-            # qkv_lora = parallel_state._SP_TP.all_reduce(qkv_lora)
+            qkv_lora = parallel_state._SP_TP.all_reduce(qkv_lora)
+            # qkv_lora = parallel_state._SP.all_gather(qkv_lora, dim=0)
+            # positions = parallel_state._SP.all_gather(positions, dim=0)
             # sp_size = parallel_state._SP.world_size
             # sp_device_group = parallel_state._SP.device_group
             # qkv_lora_ = torch.empty((qkv_lora.shape[0] * sp_size, qkv_lora.shape[1]), dtype=qkv_lora.dtype, device=qkv_lora.device)
@@ -717,6 +723,8 @@ class UlyssesFp8MoEMethod_dense(ArcticPatch[Fp8MoEMethod]):
             merge_buff = torch.cat([x.view(torch.uint8), topk_weights.view(torch.uint8), topk_ids.view(torch.uint8)], dim=1)
             # all-gather
             merge = parallel_state._SP.all_gather(merge_buff, dim=0)
+            # merge = torch.empty((merge_buff.shape[0] * parallel_state._SP.world_size, merge_buff.shape[1]), dtype=merge_buff.dtype, device=merge_buff.device)
+            # parallel_state._SP_TP.all_reduce(merge)
             # split
             output_tokens, output_weights, output_ids = merge.split([x.shape[1] * x.element_size(), 
                                                                      topk_weights.shape[1] * topk_weights.element_size(), 
@@ -755,9 +763,12 @@ class UlyssesFp8MoEMethod_dense(ArcticPatch[Fp8MoEMethod]):
 
         # combine
         if self.use_ep:
-            return parallel_state._SP.reduce_scatter(out_expert, dim=0)
+            # output = parallel_state._SP.reduce_scatter(out_expert, dim=0)
+            output = out_expert
         else:
             return out_expert
+
+        return output
 
 class UlyssesFp8MoEMethod_sparse(ArcticPatch[Fp8MoEMethod]):
 
