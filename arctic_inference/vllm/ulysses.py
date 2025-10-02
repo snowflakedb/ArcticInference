@@ -463,14 +463,6 @@ class UlyssesAttention(ArcticPatch[Attention]):
         kv_c_normed_ = parallel_state._SP.all_gather(kv_c_normed, dim=0)
         k_pe_ = parallel_state._SP.all_gather(k_pe, dim=0)
 
-        # all-gather kv_c_normed
-        # kv_c_normed_ = torch.empty((kv_c_normed.shape[0] * self.sp_size, kv_c_normed.shape[1]), dtype=kv_c_normed.dtype, device=kv_c_normed.device)
-        # torch.distributed.all_gather_into_tensor(kv_c_normed_, kv_c_normed, group=self.sp_device_group)
-
-        # all-gather k_pe
-        # k_pe_ = torch.empty((k_pe.shape[0] * self.sp_size, k_pe.shape[1], k_pe.shape[2]), dtype=k_pe.dtype, device=k_pe.device)
-        # torch.distributed.all_gather_into_tensor(k_pe_, k_pe, group=self.sp_device_group)
-
         # original attention
         c_ = self._orig_forward(q_, kv_c_normed_, k_pe_, output_shape=(output_shape[0] * self.sp_size,
                                                                        output_shape[1] // self.sp_size))
@@ -486,7 +478,7 @@ class UlyssesAttention(ArcticPatch[Attention]):
             return self._orig_forward(query, key, value, **kwargs)
 
         if self.use_mla: 
-            # return self.forward_mla(query, key, value, kwargs["output_shape"])
+            return self.forward_mla(query, key, value, kwargs["output_shape"])
             output_shape = kwargs.get("output_shape", None)
             c_ = self._orig_forward(query, key, value, (output_shape[0] * self.sp_size,
                                                      output_shape[1] // self.sp_size))
