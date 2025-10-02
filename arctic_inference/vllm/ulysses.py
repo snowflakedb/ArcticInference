@@ -761,9 +761,9 @@ class UlyssesFp8MoEMethod_dense(ArcticPatch[Fp8MoEMethod]):
 
         # combine
         if self.use_ep:
-            output = torch.empty_like(x)
+            # output = torch.empty_like(x)
             # torch.distributed.reduce_scatter_tensor(output, out_expert, group=sp_group)
-            output = parallel_state._SP.reduce_scatter(output, out_expert, dim=0)
+            output = parallel_state._SP.reduce_scatter(out_expert, dim=0)
         else:
             return out_expert
 
