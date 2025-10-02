@@ -715,13 +715,9 @@ class UlyssesFp8MoEMethod_dense(ArcticPatch[Fp8MoEMethod]):
 
         # dispatch
         if self.use_ep:
-            sp_size = parallel_state._SP.world_size
-            sp_group = parallel_state._SP.device_group
             # convert to uint8
             merge_buff = torch.cat([x.view(torch.uint8), topk_weights.view(torch.uint8), topk_ids.view(torch.uint8)], dim=1)
-            # merge = torch.empty((merge_buff.shape[0] * sp_size, merge_buff.shape[1]), dtype=merge_buff.dtype, device=merge_buff.device)
             # all-gather
-            # torch.distributed.all_gather_into_tensor(merge, merge_buff, group=sp_group)
             merge = parallel_state._SP.all_gather(merge_buff, dim=0)
             # split
             output_tokens, output_weights, output_ids = merge.split([x.shape[1] * x.element_size(), 
@@ -761,8 +757,6 @@ class UlyssesFp8MoEMethod_dense(ArcticPatch[Fp8MoEMethod]):
 
         # combine
         if self.use_ep:
-            # output = torch.empty_like(x)
-            # torch.distributed.reduce_scatter_tensor(output, out_expert, group=sp_group)
             output = parallel_state._SP.reduce_scatter(out_expert, dim=0)
         else:
             return out_expert
