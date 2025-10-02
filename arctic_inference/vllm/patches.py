@@ -107,4 +107,4 @@ def apply_arctic_patches():
     MLPSpeculatorConfigPatch.apply_patch()
 
     # Main optimization patches.
-    apply_shift_parallel_patches()
+    # apply_shift_parallel_patches()
