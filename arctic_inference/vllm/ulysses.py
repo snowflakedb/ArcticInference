@@ -573,8 +573,9 @@ class UlyssesDeepseekV2MLAAttention(ArcticPatch[DeepseekV2MLAAttention]):
 
         if self.q_lora_rank is not None:
             qkv_lora = self.fused_qkv_a_proj(hidden_states)[0]
-            qkv_lora = parallel_state._SP.all_gather(qkv_lora, dim=0)
-            positions = parallel_state._SP.all_gather(positions, dim=0)
+            qkv_lora = parallel_state._SP_TP.all_reduce(qkv_lora)
+            # qkv_lora = parallel_state._SP.all_gather(qkv_lora, dim=0)
+            # positions = parallel_state._SP.all_gather(positions, dim=0)
             # sp_size = parallel_state._SP.world_size
             # sp_device_group = parallel_state._SP.device_group
             # qkv_lora_ = torch.empty((qkv_lora.shape[0] * sp_size, qkv_lora.shape[1]), dtype=qkv_lora.dtype, device=qkv_lora.device)
@@ -762,7 +763,8 @@ class UlyssesFp8MoEMethod_dense(ArcticPatch[Fp8MoEMethod]):
 
         # combine
         if self.use_ep:
-            output = parallel_state._SP.reduce_scatter(out_expert, dim=0)
+            # output = parallel_state._SP.reduce_scatter(out_expert, dim=0)
+            output = out_expert
         else:
             return out_expert
 
