@@ -56,7 +56,7 @@ def apply_shift_parallel_patches():
     UlyssesCudagraphDispatcher.apply_patch()
     UlyssesFusedMoEParallelConfig.apply_patch()
     UlyssesFp8MoEMethod_dense.apply_patch()
-    # UlyssesDeepseekV2MLAAttention.apply_patch()
+    UlyssesDeepseekV2MLAAttention.apply_patch()
 
 
 class UlyssesModelConfig(ArcticPatch[ModelConfig]):
@@ -486,7 +486,7 @@ class UlyssesAttention(ArcticPatch[Attention]):
             return self._orig_forward(query, key, value, **kwargs)
 
         if self.use_mla: 
-            return self.forward_mla(query, key, value, kwargs["output_shape"])
+            # return self.forward_mla(query, key, value, kwargs["output_shape"])
             output_shape = kwargs.get("output_shape", None)
             c_ = self._orig_forward(query, key, value, (output_shape[0] * self.sp_size,
                                                      output_shape[1] // self.sp_size))
@@ -573,14 +573,16 @@ class UlyssesDeepseekV2MLAAttention(ArcticPatch[DeepseekV2MLAAttention]):
 
         if self.q_lora_rank is not None:
             qkv_lora = self.fused_qkv_a_proj(hidden_states)[0]
-            sp_size = parallel_state._SP.world_size
-            sp_device_group = parallel_state._SP.device_group
-            qkv_lora_ = torch.empty((qkv_lora.shape[0] * sp_size, qkv_lora.shape[1]), dtype=qkv_lora.dtype, device=qkv_lora.device)
-            positions_ = torch.empty((positions.shape[0] * sp_size), dtype=positions.dtype, device=positions.device)
-            torch.distributed.all_gather_into_tensor(qkv_lora_, qkv_lora, group=sp_device_group)
-            torch.distributed.all_gather_into_tensor(positions_, positions, group=sp_device_group)
-            qkv_lora = qkv_lora_
-            positions = positions_
+            qkv_lora = parallel_state._SP.all_gather(qkv_lora, dim=0)
+            positions = parallel_state._SP.all_gather(positions, dim=0)
+            # sp_size = parallel_state._SP.world_size
+            # sp_device_group = parallel_state._SP.device_group
+            # qkv_lora_ = torch.empty((qkv_lora.shape[0] * sp_size, qkv_lora.shape[1]), dtype=qkv_lora.dtype, device=qkv_lora.device)
+            # positions_ = torch.empty((positions.shape[0] * sp_size), dtype=positions.dtype, device=positions.device)
+            # torch.distributed.all_gather_into_tensor(qkv_lora_, qkv_lora, group=sp_device_group)
+            # torch.distributed.all_gather_into_tensor(positions_, positions, group=sp_device_group)
+            # qkv_lora = qkv_lora_
+            # positions = positions_
             q_c, kv_lora = qkv_lora.split(
                 [self.q_lora_rank, self.kv_lora_rank + self.qk_rope_head_dim],
                 dim=-1,
@@ -596,6 +598,7 @@ class UlyssesDeepseekV2MLAAttention(ArcticPatch[DeepseekV2MLAAttention]):
                                    dim=-1)
         kv_c_normed = self.kv_a_layernorm(kv_c)
 
+        sp_size = parallel_state._SP.world_size
         q = q.view(-1, self.num_local_heads // sp_size, self.qk_head_dim)
         # Add head dim of 1 to k_pe
         k_pe = k_pe.unsqueeze(1)
