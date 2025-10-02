@@ -198,11 +198,13 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             N_offset = N_ulysses * sp_rank
 
             # narrow the input
-            kwargs[input_key] = input_tensor[N_offset:N_offset + N_ulysses]
-            kwargs['positions'] = positions[N_offset:N_offset + N_ulysses]
+            # kwargs[input_key] = input_tensor[N_offset:N_offset + N_ulysses]
+            # kwargs['positions'] = positions[N_offset:N_offset + N_ulysses]
 
             with set_shift_parallel_mode(False):
                 output = model_forward(*args, **kwargs)
+
+            return output
 
             if output.size(0) == N_ulysses:
                 # all-gather model_output
