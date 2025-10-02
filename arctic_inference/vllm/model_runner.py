@@ -183,6 +183,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     def monkeypatch_forward(self: GPUModelRunner):
         sp_size = parallel_state._SP.world_size
         sp_rank = parallel_state._SP.rank_in_group
+        device_group = parallel_state._SP.device_group
         model_forward = self.model.forward
         input_key = 'inputs_embeds' if self.supports_mm_inputs else 'input_ids'
 
@@ -197,15 +198,22 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             N_offset = N_ulysses * sp_rank
 
             # narrow the input
-            kwargs[input_key] = input_tensor[N_offset:N_offset + N_ulysses]
-            kwargs['positions'] = positions[N_offset:N_offset + N_ulysses]
+            # kwargs[input_key] = input_tensor[N_offset:N_offset + N_ulysses]
+            # kwargs['positions'] = positions[N_offset:N_offset + N_ulysses]
 
             with set_shift_parallel_mode(False):
                 output = model_forward(*args, **kwargs)
 
+            return output
+
             if output.size(0) == N_ulysses:
                 # all-gather model_output
-                model_output = parallel_state._SP.all_gather(output, dim=0)
+                model_output = torch.empty((N, self.hidden_size),
+                                           dtype=output.dtype,
+                                           device=output.device)
+                torch.distributed.all_gather_into_tensor(model_output,
+                                                         output,
+                                                         group=device_group)
             else:
                 # SwiftKV models will already have all-gathered the output.
                 assert output.size(0) == N
