@@ -249,6 +249,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         parallel_state._SP = _SP
         parallel_state._SP_TP = _SP_TP
         parallel_state._DP = _DP
+        parallel_state._EP = _EP
 
         # check if SP requires kv replication
         num_kv_heads = config.model_config._orig_get_num_kv_heads(config.parallel_config)
@@ -622,7 +623,7 @@ class UlyssesFusedMoEPatch(ArcticPatch[FusedMoE]):
 
     def forward(self, hidden_states: torch.Tensor,
                 router_logits: torch.Tensor):
-        # directly call forward_impl to bypass custom opt
-        # custom opt prevents using the shift model
-        # we will expand this function to fuse SP with EP
-        return self.forward_impl(hidden_states, router_logits)
+        # Call the dispatched forward method directly
+        # self._forward_method is set by CustomOp.__init__ and contains
+        # the appropriate backend-specific forward method
+        return self._forward_method(hidden_states, router_logits)
