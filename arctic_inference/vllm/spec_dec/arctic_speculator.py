@@ -817,6 +817,9 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
 
             if g is None:
                 device = torch.cuda.current_device()
+                for i in range(num_predict_tokens):
+                    self.static_cuda_buffers["next_tokens"][i][:padded_size] = torch.zeros(
+                        (padded_size, 1), dtype=torch.long, device=device)
                 with graph_capture(device=device) as capture_context:
                     g = torch.cuda.CUDAGraph()
                     with torch.cuda.graph(g, stream=capture_context.stream):
