@@ -23,8 +23,9 @@ import torch
 import vllm.distributed.parallel_state as parallel_state
 import vllm.envs as envs
 from vllm.attention.layer import Attention
-from vllm.config import ModelConfig, ParallelConfig
+from vllm.config import ModelConfig, ParallelConfig, CompilationConfig, CUDAGraphMode, VllmConfig
 from vllm.distributed.device_communicators.shm_broadcast import MessageQueue
+from vllm.distributed.kv_transfer.kv_connector.utils import KVOutputAggregator
 from vllm.distributed.parallel_state import (init_model_parallel_group,
                                              get_world_group,
                                              destroy_model_parallel,
@@ -107,6 +108,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
     def initialize_model_parallel(
         tensor_model_parallel_size: int = 1,
         pipeline_model_parallel_size: int = 1,
+        decode_context_model_parallel_size: Optional[int] = 1,
         backend: Optional[str] = None,
     ) -> None:
         """
@@ -117,6 +119,8 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
                 parallelism.
             pipeline_model_parallel_size: number of GPUs used for pipeline model
                 parallelism.
+            decode_context_model_parallel_size: number of GPUs used for decode context
+                parallelism (currently unused in Arctic Inference).
 
         Let's say we have a total of 8 GPUs denoted by g0 ... g7 and we
         use 2 GPUs to parallelize the model tensor, and 4 GPUs to parallelize
@@ -245,6 +249,7 @@ class UlyssesParallelStatePatch(ArcticPatch[parallel_state]):
         parallel_state._SP = _SP
         parallel_state._SP_TP = _SP_TP
         parallel_state._DP = _DP
+        parallel_state._EP = _EP
 
         # check if SP requires kv replication
         num_kv_heads = config.model_config._orig_get_num_kv_heads(config.parallel_config)
@@ -422,6 +427,9 @@ class UlyssesMultiprocExecutorPatch(ArcticPatch[MultiprocExecutor]):
                 max_workers=1, thread_name_prefix="mp_exec_io")
 
         self.output_rank = self._get_output_rank()
+        self.has_connector = self.vllm_config.kv_transfer_config is not None
+        self.kv_output_aggregator = KVOutputAggregator(
+            self.parallel_config.world_size)
 
 
 class UlyssesAttentionPatch(ArcticPatch[Attention]):
@@ -575,13 +583,35 @@ class PiecewiseCompileInterpreterPatch(ArcticPatch[PiecewiseCompileInterpreter])
                 graph_index=index,
                 num_graphs=len(self.compile_submod_names),
                 runtime_shape=None)
+            # Lazy import here to avoid circular import
+            from vllm.compilation.cuda_graph import CUDAGraphOptions
+            from vllm.compilation.cuda_piecewise_backend import PiecewiseBackend
 
-            piecewise_backend = resolve_obj_by_qualname(
-                current_platform.get_piecewise_backend_cls())
-            self.module.__dict__[target] = piecewise_backend(
-                submod, self.vllm_config, self.graph_pool, index,
+            piecewise_backend = PiecewiseBackend(
+                submod, self.vllm_config, index,
                 len(self.compile_submod_names), sym_shape_indices,
                 compiled_graph_for_general_shape, self.vllm_backend)
+
+            if self.compilation_config.cudagraph_mode != CUDAGraphMode.NONE:
+                # resolve the static graph wrapper class (e.g. CUDAGraphWrapper
+                # class) as platform dependent.
+                static_graph_wrapper_class = resolve_obj_by_qualname(
+                    current_platform.get_static_graph_wrapper_cls())
+
+                # Always assign PIECEWISE runtime mode to the
+                # CUDAGraphWrapper for piecewise_backend, to distinguish
+                # it from the FULL cudagraph runtime mode, no matter it
+                # is wrapped on a full or piecewise fx graph.
+                self.module.__dict__[target] = static_graph_wrapper_class(
+                    runnable=piecewise_backend,
+                    vllm_config=self.vllm_config,
+                    runtime_mode=CUDAGraphMode.PIECEWISE,
+                    cudagraph_options=CUDAGraphOptions(
+                        debug_log_enable=piecewise_backend.is_first_graph,
+                        gc_disable=not piecewise_backend.is_first_graph,
+                        weak_ref_output=piecewise_backend.is_last_graph))
+            else:
+                self.module.__dict__[target] = piecewise_backend
 
             from vllm.compilation.counter import compilation_counter
             compilation_counter.num_piecewise_capturable_graphs_seen += 1
@@ -593,7 +623,7 @@ class UlyssesFusedMoEPatch(ArcticPatch[FusedMoE]):
 
     def forward(self, hidden_states: torch.Tensor,
                 router_logits: torch.Tensor):
-        # directly call forward_impl to bypass custom opt
-        # custom opt prevents using the shift model
-        # we will expand this function to fuse SP with EP
-        return self.forward_impl(hidden_states, router_logits)
+        # Call the dispatched forward method directly
+        # self._forward_method is set by CustomOp.__init__ and contains
+        # the appropriate backend-specific forward method
+        return self._forward_method(hidden_states, router_logits)
