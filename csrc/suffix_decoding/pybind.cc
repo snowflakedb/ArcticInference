@@ -13,24 +13,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
 
 #include "suffix_tree.h"
 
-namespace py = pybind11;
+namespace nb = nanobind;
 
+NB_MODULE(_C, m) {
+    nb::class_<Candidate>(m, "Candidate")
+        .def_rw("token_ids", &Candidate::token_ids)
+        .def_rw("parents", &Candidate::parents)
+        .def_rw("probs", &Candidate::probs)
+        .def_rw("score", &Candidate::score)
+        .def_rw("match_len", &Candidate::match_len);
 
-PYBIND11_MODULE(_C, m) {
-    py::class_<Candidate>(m, "Candidate")
-        .def_readwrite("token_ids", &Candidate::token_ids)
-        .def_readwrite("parents", &Candidate::parents)
-        .def_readwrite("probs", &Candidate::probs)
-        .def_readwrite("score", &Candidate::score)
-        .def_readwrite("match_len", &Candidate::match_len);
-
-    py::class_<SuffixTree>(m, "SuffixTree")
-        .def(py::init<int>())
+    nb::class_<SuffixTree>(m, "SuffixTree")
+        .def(nb::init<int>())
         .def("num_seqs", &SuffixTree::num_seqs)
         .def("append", &SuffixTree::append)
         .def("extend", &SuffixTree::extend)
