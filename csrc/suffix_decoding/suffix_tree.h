@@ -34,9 +34,15 @@ struct Node {
 
     // Parent node.
     Node* parent = nullptr;
+    
+    Node* next_sibling = nullptr;
+    Node* prev_sibling = nullptr;
 
     // Children nodes, the key should always be the first token of the child.
     Int32Map<std::unique_ptr<Node>> children;
+
+    Node* head_child = nullptr;
+    Node* tail_child = nullptr;
 
     // Maps sequence ID -> index of the end of the suffix in that sequence.
     Int32Map<int> endpoints;

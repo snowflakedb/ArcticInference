@@ -14,6 +14,7 @@
 // limitations under the License.
 
 #include <cassert>
+#include <chrono>
 #include <iostream>
 #include <queue>
 #include <stdexcept>
@@ -80,6 +81,15 @@ void SuffixTree::append(int seq_id, int token) {
                 new_child->length = 1;
                 node->children.emplace(token, new_child);
                 node->endpoints.erase(seq_id);
+                // Maintain doubly-linked list of children.
+                new_child->prev_sibling = node->tail_child;
+                node->tail_child = new_child;
+                if (node->head_child == nullptr) {
+                    node->head_child = new_child;
+                } else {
+                    new_child->prev_sibling->next_sibling = new_child;
+                }
+                // Update the active node to the new child.
                 _active_nodes[seq_id][i] = new_child;
             }
         }
@@ -102,6 +112,21 @@ void SuffixTree::append(int seq_id, int token) {
                 child->ref_seq = seq_id;
                 child->ref_idx = static_cast<int>(_seqs[seq_id].size()) - child->length;
                 child->parent = parent;
+                // Maintain doubly-linked list of children.
+                if (parent->head_child == node) {
+                    parent->head_child = child;
+                }
+                if (parent->tail_child == node) {
+                    parent->tail_child = child;
+                }
+                if (node->prev_sibling != nullptr) {
+                    node->prev_sibling->next_sibling = child;
+                }
+                if (node->next_sibling != nullptr) {
+                    node->next_sibling->prev_sibling = child;
+                }
+                child->prev_sibling = node->prev_sibling;
+                child->next_sibling = node->next_sibling;
                 // Give ownership of child pointer to parent and should also free the current node.
                 assert(parent->children.contains(child->token));
                 assert(parent->children[child->token].get() == node);
@@ -137,6 +162,27 @@ void SuffixTree::append(int seq_id, int token) {
                 child->endpoints[seq_id] = static_cast<int>(_seqs[seq_id].size());
                 child->ref_seq = seq_id;
                 child->ref_idx = static_cast<int>(_seqs[seq_id].size()) - 1;
+                // Maintain doubly-linked list of children.
+                while (child->prev_sibling != nullptr && 
+                       child->prev_sibling->count < child->count) {
+                    Node* prev = child->prev_sibling;
+                    Node* next = child->next_sibling;
+                    if (next == nullptr) {
+                        node->tail_child = prev;
+                    } else {
+                        next->prev_sibling = prev;
+                    }
+                    child->prev_sibling = prev->prev_sibling;
+                    child->next_sibling = prev;
+                    prev->prev_sibling = child;
+                    prev->next_sibling = next;
+                    if (child->prev_sibling == nullptr) {
+                        node->head_child = child;
+                    } else {
+                        child->prev_sibling->next_sibling = child;
+                    }
+                }
+                // Replace active node with child node.
                 _active_nodes[seq_id][i] = child;
             } else {
                 // The child node has length > 1. If we extend the current suffix into it, then it
@@ -158,6 +204,43 @@ void SuffixTree::append(int seq_id, int token) {
                 child->parent = new_node;
                 child->length -= 1;
                 child->ref_idx += 1;
+                // Maintain doubly-linked list of children.
+                new_node->head_child = new_node->tail_child = child;
+                new_node->prev_sibling = child->prev_sibling;
+                new_node->next_sibling = child->next_sibling;
+                if (child->prev_sibling == nullptr) {
+                    node->head_child = new_node;
+                } else {
+                    child->prev_sibling->next_sibling = new_node;
+                    child->prev_sibling = nullptr;
+                }
+                if (child->next_sibling == nullptr) {
+                    node->tail_child = new_node;
+                } else {
+                    child->next_sibling->prev_sibling = new_node;
+                    child->next_sibling = nullptr;
+                }
+                // Handle increment count.
+                while (new_node->prev_sibling != nullptr && 
+                       new_node->prev_sibling->count < new_node->count) {
+                    Node* prev = new_node->prev_sibling;
+                    Node* next = new_node->next_sibling;
+                    if (next == nullptr) {
+                        node->tail_child = prev;
+                    } else {
+                        next->prev_sibling = prev;
+                    }
+                    new_node->prev_sibling = prev->prev_sibling;
+                    new_node->next_sibling = prev;
+                    prev->prev_sibling = new_node;
+                    prev->next_sibling = next;
+                    if (new_node->prev_sibling == nullptr) {
+                        node->head_child = new_node;
+                    } else {
+                        new_node->prev_sibling->next_sibling = new_node;
+                    }
+                }
+                // Update active node.
                 _active_nodes[seq_id][i] = new_node;
             }
         }
@@ -253,12 +336,14 @@ Candidate SuffixTree::speculate(const std::vector<int>& pattern,
                                 float max_spec_offset,
                                 float min_token_prob,
                                 bool use_tree_spec) {
+    auto start = std::chrono::high_resolution_clock::now();
     Candidate result;
-    int start_idx = std::max(static_cast<int>(pattern.size()) - _max_depth, 0);
-    for ( ; start_idx < pattern.size(); start_idx++) {
+    //int start_idx = std::max(static_cast<int>(pattern.size()) - _max_depth, 0);
+    int cnt = 0;
+    for (int start_idx = static_cast<int>(pattern.size()) - 1; start_idx >= 0; start_idx--) {
         auto[node, idx] = _match_pattern(pattern, start_idx);
         if (node == nullptr) {
-            continue;
+            break;
         }
         int match_len = static_cast<int>(pattern.size()) - start_idx;
         int max_tokens = std::min(max_spec_tokens,
@@ -275,7 +360,14 @@ Candidate SuffixTree::speculate(const std::vector<int>& pattern,
             result = std::move(candidate);
             result.match_len = match_len;
         }
+        cnt++;
+        if (cnt == -1) {
+            break;
+        }
     }
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> duration = end - start;
+    std::cout << "Time taken: " << duration.count() << " seconds" << std::endl;
     return result;
 }
 
@@ -425,34 +517,30 @@ Candidate SuffixTree::_speculate_path(Node* node, int idx,
                                       int max_spec_tokens,
                                       float min_token_prob) {
     Candidate ret;
+    ret.token_ids.reserve(max_spec_tokens);
+    ret.parents.reserve(max_spec_tokens);
+    ret.probs.reserve(max_spec_tokens);
     float prob = 1.0f;
     while (ret.token_ids.size() < max_spec_tokens && prob >= min_token_prob) {
         if (idx < node->length) {
             // Use previous token index as parent; if none, mark as -1.
             ret.parents.push_back(static_cast<int>(ret.token_ids.size()) - 1);
-            int token = _seqs[node->ref_seq][node->ref_idx + idx];
+            int token = 0;//_seqs[node->ref_seq][node->ref_idx + idx];
             ret.token_ids.push_back(token);
-            ret.probs.push_back(prob);
+            //ret.probs.push_back(prob);
             ret.score += prob;
             idx++;
         } else {
-            Node* child = nullptr;
-            int64_t count = 0;
-            // Choose the child with the maximum count.
-            for (const auto& kv : node->children) {
-                Node* ch = kv.second.get();
-                if (ch->count > count) {
-                    child = ch;
-                    count = ch->count;
-                }
-            }
+            Node* child = node->head_child;
             if (child == nullptr) {
                 break;
             }
+            int64_t count = child->count;
             prob *= static_cast<float>(count) / node->count;
             node = child;
             idx = 0;
         }
+        break;
     }
     return ret;
 }
