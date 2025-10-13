@@ -256,7 +256,7 @@ Draft SuffixTree::speculate(std::span<const int32_t> context,
         auto[node, idx] = _match_context(
             context.subspan(context.size() - match_len, match_len));
         if (node == nullptr) {
-            continue;
+            break;
         }
         int max_tokens = std::min(max_spec_tokens,
                                   static_cast<int>(match_len * max_spec_factor
