@@ -77,7 +77,6 @@ class ParallelConfigPatch(ArcticPatch[ParallelConfig]):
 
 class SpeculativeConfigPatch(ArcticPatch[SpeculativeConfig]):
 
-    _orig_from_dict = SpeculativeConfig.__dict__["from_dict"].__wrapped__
     _orig_post_init = SpeculativeConfig.__post_init__
 
     def __new__(cls, *args, **kwargs):
@@ -109,14 +108,6 @@ class SpeculativeConfigPatch(ArcticPatch[SpeculativeConfig]):
             self._verify_args()
         else:
             self._orig_post_init()
-
-    @classmethod
-    def from_dict(cls, dict_value: dict) -> SpeculativeConfig:
-        """Parse the CLI value for the speculative config."""
-        if cls is SpeculativeConfig:
-            return SpeculativeConfigPatch._orig_from_dict(
-                ArcticSpeculativeConfig, dict_value)
-        return SpeculativeConfigPatch._orig_from_dict(cls, dict_value)
 
 
 class VllmConfigPatch(ArcticPatch[VllmConfig]):
