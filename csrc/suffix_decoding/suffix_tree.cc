@@ -14,7 +14,6 @@
 // limitations under the License.
 
 #include <cassert>
-#include <chrono>
 #include <iostream>
 #include <queue>
 #include <string>
@@ -509,9 +508,9 @@ Draft SuffixTree::_speculate_path(Node* node, int idx,
         if (idx < node->length) {
             // Use previous token index as parent; if none, mark as -1.
             ret.parents.push_back(static_cast<int>(ret.token_ids.size()) - 1);
-            int token = 0;//_seqs[node->ref_seq][node->ref_idx + idx];
+            int token = _seqs[node->ref_seq][node->ref_idx + idx];
             ret.token_ids.push_back(token);
-            //ret.probs.push_back(prob);
+            ret.probs.push_back(prob);
             ret.score += prob;
             idx++;
         } else {
@@ -524,7 +523,6 @@ Draft SuffixTree::_speculate_path(Node* node, int idx,
             node = child;
             idx = 0;
         }
-        break;
     }
     return ret;
 }

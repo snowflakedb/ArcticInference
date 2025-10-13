@@ -66,11 +66,10 @@ def suffix_decode(
             max_spec_tokens=max_spec_tokens,
             max_spec_factor=max_spec_factor,
             min_token_prob=min_token_prob,
-            use_tree_spec=False,
+            use_tree_spec=use_tree_spec,
         )
         end_time = time.perf_counter()
         spec_time = end_time - start_time
-        print(spec_time)
 
         # Verify speculated tokens
         accepted_tokens = []
@@ -545,7 +544,7 @@ def get_parser():
         "--use-tree-spec",
         type=bool_arg,
         nargs="*",
-        default=[False],
+        default=[True],
         help="Whether to use tree-based speculation (True/False)",
     )
     parser.add_argument(
