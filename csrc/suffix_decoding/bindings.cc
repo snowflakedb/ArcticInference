@@ -77,6 +77,8 @@ Draft speculate_vector(SuffixTree& tree,
 
 
 NB_MODULE(_C, m) {
+    nb::set_leak_warnings(false);
+
     nb::class_<Draft>(m, "Draft")
         .def_rw("token_ids", &Draft::token_ids)
         .def_rw("parents", &Draft::parents)
@@ -88,12 +90,13 @@ NB_MODULE(_C, m) {
         .def(nb::init<int>())
         .def("num_seqs", &SuffixTree::num_seqs)
         .def("remove", &SuffixTree::remove)
-        // Overloads for extend method.
-        .def("extend", &extend_ndarray)
+        // Overloads for extend method. Use different names to avoid overload
+        // resolution overhead at run-time.
         .def("extend", &extend_vector)
+        .def("extend_ndarray", &extend_ndarray)
         // Overloads for speculate method.
-        .def("speculate", &speculate_ndarray)
         .def("speculate", &speculate_vector)
+        .def("speculate_ndarray", &speculate_ndarray)
         // Debugging methods, not meant to be used in critical loop.
         .def("check_integrity", &SuffixTree::check_integrity)
         .def("estimate_memory", &SuffixTree::estimate_memory);

@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Hashable, KeysView, List, Optional, Sequence, Union
+from typing import Hashable, KeysView, List, Optional, Sequence
 
 import numpy as np
 
@@ -253,7 +253,11 @@ class SuffixDecodingCache:
             ValueError: If the request with the given `req_id` is not active.
         """
         if isinstance(context, np.ndarray):
-            self._validate_ndarray(context)
+            # If context is a numpy array, use the zero-copy ndarray overload.
+            self._validate_ndarray(context)  # Make sure the array is valid.
+            spec_func = SuffixTree.speculate_ndarray
+        else:
+            spec_func = SuffixTree.speculate
 
         if req_id not in self._local_trees:
             raise ValueError(f"Request '{req_id}' is not active")
@@ -264,7 +268,8 @@ class SuffixDecodingCache:
         if len(context) > self._max_tree_depth:
             context = context[-self._max_tree_depth :]
 
-        draft1 = self._local_trees[req_id].speculate(
+        draft1 = spec_func(
+            self._local_trees[req_id],
             context,
             max_spec_tokens,
             max_spec_factor,
@@ -272,7 +277,8 @@ class SuffixDecodingCache:
             min_token_prob,
             use_tree_spec)
 
-        draft2 = self._global_tree.speculate(
+        draft2 = spec_func(
+            self._global_tree,
             context,
             max_spec_tokens,
             max_spec_factor,
