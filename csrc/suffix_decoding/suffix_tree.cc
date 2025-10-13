@@ -268,7 +268,7 @@ Draft SuffixTree::speculate(std::span<const int32_t> context,
         } else {
             draft = _speculate_path(node, idx, max_tokens, min_token_prob);
         }
-        if (draft.score > best_draft.score) {
+        if (draft.score >= best_draft.score) {
             best_draft = std::move(draft);
             best_draft.match_len = match_len;
         }
