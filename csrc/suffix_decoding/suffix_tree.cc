@@ -17,9 +17,7 @@
 #include <chrono>
 #include <iostream>
 #include <queue>
-#include <stdexcept>
 #include <string>
-#include <tuple>
 #include <unordered_map>
 #include <vector>
 #include "suffix_tree.h"
@@ -248,7 +246,7 @@ void SuffixTree::append(int seq_id, int token) {
 }
 
 // Extend a new or existing sequence.
-void SuffixTree::extend(int seq_id, const std::vector<int>& tokens) {
+void SuffixTree::extend(int seq_id, std::span<const int32_t> tokens) {
     for (int token : tokens) {
         append(seq_id, token);
     }
@@ -330,45 +328,35 @@ void SuffixTree::remove(int seq_id) {
     _active_nodes.erase(seq_id);
 }
 
-Candidate SuffixTree::speculate(const std::vector<int>& pattern,
-                                int max_spec_tokens,
-                                float max_spec_factor,
-                                float max_spec_offset,
-                                float min_token_prob,
-                                bool use_tree_spec) {
-    auto start = std::chrono::high_resolution_clock::now();
-    Candidate result;
-    //int start_idx = std::max(static_cast<int>(pattern.size()) - _max_depth, 0);
-    int cnt = 0;
-    for (int start_idx = static_cast<int>(pattern.size()) - 1; start_idx >= 0; start_idx--) {
-        auto[node, idx] = _match_pattern(pattern, start_idx);
+Draft SuffixTree::speculate(std::span<const int32_t> context,
+                            int max_spec_tokens,
+                            float max_spec_factor,
+                            float max_spec_offset,
+                            float min_token_prob,
+                            bool use_tree_spec) {
+    Draft best_draft;
+    for (int match_len = 1; match_len < context.size(); match_len++) {
+        auto[node, idx] = _match_context(
+            context.subspan(context.size() - match_len, match_len));
         if (node == nullptr) {
             break;
         }
-        int match_len = static_cast<int>(pattern.size()) - start_idx;
         int max_tokens = std::min(max_spec_tokens,
                                   static_cast<int>(match_len * max_spec_factor
                                                    + max_spec_offset + 1e-6));
         max_tokens = std::max(max_tokens, 0);
-        Candidate candidate;
+        Draft draft;
         if (use_tree_spec) {
-            candidate = _speculate_tree(node, idx, max_tokens, min_token_prob);
+            draft = _speculate_tree(node, idx, max_tokens, min_token_prob);
         } else {
-            candidate = _speculate_path(node, idx, max_tokens, min_token_prob);
+            draft = _speculate_path(node, idx, max_tokens, min_token_prob);
         }
-        if (candidate.score > result.score) {
-            result = std::move(candidate);
-            result.match_len = match_len;
-        }
-        cnt++;
-        if (cnt == -1) {
-            break;
+        if (draft.score >= best_draft.score) {
+            best_draft = std::move(draft);
+            best_draft.match_len = match_len;
         }
     }
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> duration = end - start;
-    std::cout << "Time taken: " << duration.count() << " seconds" << std::endl;
-    return result;
+    return best_draft;
 }
 
 std::string SuffixTree::check_integrity() {
@@ -491,12 +479,11 @@ std::string SuffixTree::_check_node_integrity(Node* node) {
     return "";
 }
 
-std::pair<Node*, int> SuffixTree::_match_pattern(
-        const std::vector<int>& pattern, int start_idx) {
+std::pair<Node*, int> SuffixTree::_match_context(std::span<const int32_t> context) {
     Node* node = _root.get();
     int idx = 0;
-    for (int i = start_idx; i < pattern.size(); i++) {
-        int c = pattern[i];
+    for (int i = 0; i < context.size(); i++) {
+        int c = context[i];
         if (idx >= node->length) {
             if (!node->children.contains(c)) {
                 return {nullptr, -1};
@@ -513,13 +500,10 @@ std::pair<Node*, int> SuffixTree::_match_pattern(
     return {node, idx};
 }
 
-Candidate SuffixTree::_speculate_path(Node* node, int idx,
-                                      int max_spec_tokens,
-                                      float min_token_prob) {
-    Candidate ret;
-    ret.token_ids.reserve(max_spec_tokens);
-    ret.parents.reserve(max_spec_tokens);
-    ret.probs.reserve(max_spec_tokens);
+Draft SuffixTree::_speculate_path(Node* node, int idx,
+                                  int max_spec_tokens,
+                                  float min_token_prob) {
+    Draft ret;
     float prob = 1.0f;
     while (ret.token_ids.size() < max_spec_tokens && prob >= min_token_prob) {
         if (idx < node->length) {
@@ -549,7 +533,7 @@ struct HeapItem {
     float prob;
     Node* node;
     int idx;
-    int parent;   // index in the candidate token list; -1 if none.
+    int parent;   // index in the draft token list; -1 if none.
 
     HeapItem(float p, Node* n, int i, int par)
         : prob(p), node(n), idx(i), parent(par) {}
@@ -563,11 +547,11 @@ struct HeapItemCompare {
     }
 };
 
-// Get a candidate token tree using a priority queue.
-Candidate SuffixTree::_speculate_tree(Node* node, int idx,
-                                      int max_spec_tokens,
-                                      float min_token_prob) {
-    Candidate ret;
+// Get a draft token tree using a priority queue.
+Draft SuffixTree::_speculate_tree(Node* node, int idx,
+                                  int max_spec_tokens,
+                                  float min_token_prob) {
+    Draft ret;
     std::priority_queue<HeapItem, std::vector<HeapItem>, HeapItemCompare> queue;
     queue.emplace(1.0, node, idx, -1);
     while (ret.token_ids.size() < max_spec_tokens && !queue.empty()) {
