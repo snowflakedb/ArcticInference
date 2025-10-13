@@ -58,8 +58,8 @@ struct Node {
     }
 };
 
-struct Candidate {
-    // The token ids of the speculation candidate.
+struct Draft {
+    // The token ids of the speculation draft.
     std::vector<int32_t> token_ids;
 
     // For each token, the index of its parent token (-1 if no parent).
@@ -68,7 +68,7 @@ struct Candidate {
     // For each token, the estimated probability of the token.
     std::vector<float> probs;
 
-    // Floating point score of the candidate (sum of all probs).
+    // Floating point score of the draft (sum of all probs).
     float score = 0.0;
 
     // Length of the prefix match for the speculated tokens.
@@ -94,12 +94,12 @@ public:
     void remove(int seq_id);
 
     // Given a context, speculate the next tokens using the suffix tree.
-    Candidate speculate(std::span<const int32_t> context,
-                        int max_spec_tokens,
-                        float max_spec_factor = 1.0f,
-                        float max_spec_offset = 0.0f,
-                        float min_token_prob = 0.1f,
-                        bool use_tree_spec = false);
+    Draft speculate(std::span<const int32_t> context,
+                    int max_spec_tokens,
+                    float max_spec_factor = 1.0f,
+                    float max_spec_offset = 0.0f,
+                    float min_token_prob = 0.1f,
+                    bool use_tree_spec = false);
 
     // Check the integrity of the suffix tree, return empty string if ok,
     // otherwise return an error message.
@@ -128,11 +128,11 @@ private:
 
     std::pair<Node*, int> _match_context(std::span<const int32_t> context);
 
-    Candidate _speculate_path(Node* node, int idx, int max_spec_tokens,
-                              float min_token_prob);
+    Draft _speculate_path(Node* node, int idx, int max_spec_tokens,
+                          float min_token_prob);
 
-    Candidate _speculate_tree(Node* node, int idx, int max_spec_tokens,
-                              float min_token_prob);
+    Draft _speculate_tree(Node* node, int idx, int max_spec_tokens,
+                          float min_token_prob);
 
     std::string _check_node_integrity(Node* node);
 };

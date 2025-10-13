@@ -20,7 +20,7 @@ from typing import Hashable, KeysView, List, Optional, Sequence, Union
 
 import numpy as np
 
-from arctic_inference.suffix_decoding._C import SuffixTree, Candidate
+from arctic_inference.suffix_decoding._C import SuffixTree, Draft
 
 
 @dataclass
@@ -46,13 +46,13 @@ class SuffixDecodingDraft:
     match_len: int = 0
 
     @staticmethod
-    def from_candidate(candidate: Candidate) -> SuffixDecodingDraft:
+    def from_native(draft: Draft) -> SuffixDecodingDraft:
         return SuffixDecodingDraft(
-            token_ids=candidate.token_ids,
-            parents=candidate.parents,
-            probs=candidate.probs,
-            score=candidate.score,
-            match_len=candidate.match_len,
+            token_ids=draft.token_ids,
+            parents=draft.parents,
+            probs=draft.probs,
+            score=draft.score,
+            match_len=draft.match_len,
         )
 
 
@@ -242,7 +242,7 @@ class SuffixDecodingCache:
             max_spec_factor (float): Factor that limits speculation based on
                 matched context length.
             min_token_prob (float): Minimum estimated probability threshold for
-                candidate tokens.
+                draft tokens.
             use_tree_spec (bool): If True, uses tree-based speculation.
         
         Returns:
@@ -264,28 +264,25 @@ class SuffixDecodingCache:
         if len(context) > self._max_tree_depth:
             context = context[-self._max_tree_depth :]
 
-        ret = self._local_trees[req_id].speculate(
+        draft1 = self._local_trees[req_id].speculate(
             context,
             max_spec_tokens,
             max_spec_factor,
             max_spec_offset,
             min_token_prob,
             use_tree_spec)
-        draft = SuffixDecodingDraft.from_candidate(ret)
-        result = draft
 
-        ret = self._global_tree.speculate(
+        draft2 = self._global_tree.speculate(
             context,
             max_spec_tokens,
             max_spec_factor,
             max_spec_offset,
             min_token_prob,
             use_tree_spec)
-        draft = SuffixDecodingDraft.from_candidate(ret)
-        if draft.score > result.score:
-            result = draft
 
-        return result
+        draft = draft1 if draft1.score >= draft2.score else draft2
+
+        return SuffixDecodingDraft.from_native(draft)
 
     def _generate_seq_id(self, req_id: Hashable) -> int:
         # Find the next available seq_id not used by an active request.
@@ -326,9 +323,10 @@ class SuffixDecodingCache:
 
     def _validate_ndarray(self, arr: np.ndarray):
         if arr.ndim != 1:
-            raise ValueError(f"Input array must have ndim=1, got ndim={arr.ndim}")
+            raise ValueError(f"ndarray input must have ndim=1, "
+                             f"got ndim={arr.ndim}")
         if arr.dtype != np.int32:
-            raise ValueError("Input array must have dtype=int32, got "
-                             f"dtype={arr.dtype}")
+            raise ValueError(f"ndarray input must have dtype=int32, "
+                             f"got dtype={arr.dtype.name}")
         if not arr.flags["CONTIGUOUS"]:
-            raise ValueError("Input array must be contiguous")
+            raise ValueError(f"ndarray input must be contiguous")

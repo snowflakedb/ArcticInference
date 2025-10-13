@@ -59,7 +59,6 @@ def suffix_decode(
         else:
             sequence = prompt
 
-        #pattern = np.array(text, dtype=np.int32)
         start_time = time.perf_counter()
         result = suffix_cache.speculate(
             request_id,

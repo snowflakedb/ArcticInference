@@ -247,13 +247,13 @@ void SuffixTree::remove(int seq_id) {
     _active_nodes.erase(seq_id);
 }
 
-Candidate SuffixTree::speculate(std::span<const int32_t> context,
-                                int max_spec_tokens,
-                                float max_spec_factor,
-                                float max_spec_offset,
-                                float min_token_prob,
-                                bool use_tree_spec) {
-    Candidate result;
+Draft SuffixTree::speculate(std::span<const int32_t> context,
+                            int max_spec_tokens,
+                            float max_spec_factor,
+                            float max_spec_offset,
+                            float min_token_prob,
+                            bool use_tree_spec) {
+    Draft best_draft;
     for (int match_len = 1; match_len < context.size(); match_len++) {
         auto[node, idx] = _match_context(
             context.subspan(context.size() - match_len, match_len));
@@ -264,18 +264,18 @@ Candidate SuffixTree::speculate(std::span<const int32_t> context,
                                   static_cast<int>(match_len * max_spec_factor
                                                    + max_spec_offset + 1e-6));
         max_tokens = std::max(max_tokens, 0);
-        Candidate candidate;
+        Draft draft;
         if (use_tree_spec) {
-            //candidate = _speculate_tree(node, idx, max_tokens, min_token_prob);
+            draft = _speculate_tree(node, idx, max_tokens, min_token_prob);
         } else {
-            candidate = _speculate_path(node, idx, max_tokens, min_token_prob);
+            draft = _speculate_path(node, idx, max_tokens, min_token_prob);
         }
-        if (candidate.score > result.score) {
-            result = std::move(candidate);
-            result.match_len = match_len;
+        if (draft.score > best_draft.score) {
+            best_draft = std::move(draft);
+            best_draft.match_len = match_len;
         }
     }
-    return result;
+    return best_draft;
 }
 
 std::string SuffixTree::check_integrity() {
@@ -419,10 +419,10 @@ std::pair<Node*, int> SuffixTree::_match_context(std::span<const int32_t> contex
     return {node, idx};
 }
 
-Candidate SuffixTree::_speculate_path(Node* node, int idx,
-                                      int max_spec_tokens,
-                                      float min_token_prob) {
-    Candidate ret;
+Draft SuffixTree::_speculate_path(Node* node, int idx,
+                                  int max_spec_tokens,
+                                  float min_token_prob) {
+    Draft ret;
     float prob = 1.0f;
     while (ret.token_ids.size() < max_spec_tokens && prob >= min_token_prob) {
         if (idx < node->length) {
@@ -459,7 +459,7 @@ struct HeapItem {
     float prob;
     Node* node;
     int idx;
-    int parent;   // index in the candidate token list; -1 if none.
+    int parent;   // index in the draft token list; -1 if none.
 
     HeapItem(float p, Node* n, int i, int par)
         : prob(p), node(n), idx(i), parent(par) {}
@@ -473,11 +473,11 @@ struct HeapItemCompare {
     }
 };
 
-// Get a candidate token tree using a priority queue.
-Candidate SuffixTree::_speculate_tree(Node* node, int idx,
-                                      int max_spec_tokens,
-                                      float min_token_prob) {
-    Candidate ret;
+// Get a draft token tree using a priority queue.
+Draft SuffixTree::_speculate_tree(Node* node, int idx,
+                                  int max_spec_tokens,
+                                  float min_token_prob) {
+    Draft ret;
     std::priority_queue<HeapItem, std::vector<HeapItem>, HeapItemCompare> queue;
     queue.emplace(1.0, node, idx, -1);
     while (ret.token_ids.size() < max_spec_tokens && !queue.empty()) {

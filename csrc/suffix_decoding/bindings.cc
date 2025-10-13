@@ -43,13 +43,13 @@ void extend_vector(SuffixTree& tree,
 }
 
 
-Candidate speculate_ndarray(SuffixTree& tree,
-                            const Int32Array1D& context,
-                            int max_spec_tokens,
-                            float max_spec_factor,
-                            float max_spec_offset,
-                            float min_token_prob,
-                            bool use_tree_spec) {
+Draft speculate_ndarray(SuffixTree& tree,
+                        const Int32Array1D& context,
+                        int max_spec_tokens,
+                        float max_spec_factor,
+                        float max_spec_offset,
+                        float min_token_prob,
+                        bool use_tree_spec) {
     return tree.speculate(
         std::span<const int32_t>(context.data(), context.size()),
         max_spec_tokens,
@@ -60,13 +60,13 @@ Candidate speculate_ndarray(SuffixTree& tree,
 }
 
 
-Candidate speculate_vector(SuffixTree& tree,
-                           const std::vector<int32_t>& context,
-                           int max_spec_tokens,
-                           float max_spec_factor,
-                           float max_spec_offset,
-                           float min_token_prob,
-                           bool use_tree_spec) {
+Draft speculate_vector(SuffixTree& tree,
+                       const std::vector<int32_t>& context,
+                       int max_spec_tokens,
+                       float max_spec_factor,
+                       float max_spec_offset,
+                       float min_token_prob,
+                       bool use_tree_spec) {
     return tree.speculate(
         std::span<const int32_t>(context),
         max_spec_tokens,
@@ -78,12 +78,12 @@ Candidate speculate_vector(SuffixTree& tree,
 
 
 NB_MODULE(_C, m) {
-    nb::class_<Candidate>(m, "Candidate")
-        .def_rw("token_ids", &Candidate::token_ids)
-        .def_rw("parents", &Candidate::parents)
-        .def_rw("probs", &Candidate::probs)
-        .def_rw("score", &Candidate::score)
-        .def_rw("match_len", &Candidate::match_len);
+    nb::class_<Draft>(m, "Draft")
+        .def_rw("token_ids", &Draft::token_ids)
+        .def_rw("parents", &Draft::parents)
+        .def_rw("probs", &Draft::probs)
+        .def_rw("score", &Draft::score)
+        .def_rw("match_len", &Draft::match_len);
 
     nb::class_<SuffixTree>(m, "SuffixTree")
         .def(nb::init<int>())
