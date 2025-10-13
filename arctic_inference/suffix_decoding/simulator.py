@@ -22,6 +22,7 @@ import time
 from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from transformers import AutoTokenizer
@@ -34,8 +35,8 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 def suffix_decode(
     suffix_cache: SuffixDecodingCache,
     request_id: int,
-    prompt: List[int],
-    ground_truth_response: List[int],
+    prompt: np.ndarray,
+    ground_truth_response: np.ndarray,
     max_spec_tokens: int,
     max_spec_factor: float,
     min_token_prob: float,
@@ -47,17 +48,21 @@ def suffix_decode(
 
     suffix_cache.start_request(request_id, prompt if use_cached_prompt else [])
 
-    assert isinstance(prompt, list) and isinstance(ground_truth_response, list)
+    assert isinstance(prompt, np.ndarray)
+    assert isinstance(ground_truth_response, np.ndarray)
 
     results = []
     response = []
     while len(response) < len(ground_truth_response):
-        text = prompt + response
+        if response:
+            sequence = np.concatenate([prompt, response], dtype=np.int32)
+        else:
+            sequence = prompt
 
         start_time = time.perf_counter()
         result = suffix_cache.speculate(
             request_id,
-            text,
+            sequence,
             max_spec_tokens=max_spec_tokens,
             max_spec_factor=max_spec_factor,
             min_token_prob=min_token_prob,
@@ -105,7 +110,7 @@ def suffix_decode(
             "update_ms": update_time * 1000,
         })
 
-    assert response == ground_truth_response
+    assert np.array_equal(response, ground_truth_response)
 
     suffix_cache.stop_request(request_id)
 
@@ -323,8 +328,10 @@ def tokenize_data(dataset: pd.DataFrame, tokenizer_name: str) -> pd.DataFrame:
     responses = []
     for _, row in tqdm(dataset.iterrows(), total=len(dataset),
                        desc="Tokenizing dataset"):
-        prompts.append(tokenizer.encode(row["prompt"]))
-        responses.append(tokenizer.encode(row["response"]))
+        prompt = tokenizer.encode(row["prompt"], return_tensors="np")
+        prompts.append(prompt.astype(np.int32).flatten())
+        response = tokenizer.encode(row["response"], return_tensors="np")
+        responses.append(response.astype(np.int32).flatten())
     return pd.DataFrame({
         "prompt": prompts,
         "response": responses,
