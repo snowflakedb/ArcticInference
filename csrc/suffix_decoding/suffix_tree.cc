@@ -16,9 +16,7 @@
 #include <cassert>
 #include <iostream>
 #include <queue>
-#include <stdexcept>
 #include <string>
-#include <tuple>
 #include <unordered_map>
 #include <vector>
 #include "suffix_tree.h"

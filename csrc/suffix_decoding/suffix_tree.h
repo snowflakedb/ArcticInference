@@ -96,10 +96,10 @@ public:
     // Given a context, speculate the next tokens using the suffix tree.
     Draft speculate(std::span<const int32_t> context,
                     int max_spec_tokens,
-                    float max_spec_factor = 1.0f,
-                    float max_spec_offset = 0.0f,
-                    float min_token_prob = 0.1f,
-                    bool use_tree_spec = false);
+                    float max_spec_factor,
+                    float max_spec_offset,
+                    float min_token_prob,
+                    bool use_tree_spec);
 
     // Check the integrity of the suffix tree, return empty string if ok,
     // otherwise return an error message.
