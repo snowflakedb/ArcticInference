@@ -16,9 +16,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Hashable, KeysView, List, Optional, Sequence, Union
+from typing import Hashable, KeysView, List, Optional, Sequence
 
-from arctic_inference.suffix_decoding._C import SuffixTree, Candidate
+import numpy as np
+
+from arctic_inference.suffix_decoding._C import SuffixTree, Draft
 
 
 @dataclass
@@ -34,7 +36,7 @@ class SuffixDecodingDraft:
         probs (List[float]): List of estimated probabilities for each token.
         score (float): The overall score of the suffix match computed as the
             sum of the estimated probabilities of each speculated token.
-        match_len (int): The length of the pattern match that yielded this
+        match_len (int): The length of the context match that yielded this
             speculation result.
     """
     token_ids: List[int] = field(default_factory=list)
@@ -44,13 +46,13 @@ class SuffixDecodingDraft:
     match_len: int = 0
 
     @staticmethod
-    def from_candidate(candidate: Candidate) -> SuffixDecodingDraft:
+    def from_native(draft: Draft) -> SuffixDecodingDraft:
         return SuffixDecodingDraft(
-            token_ids=candidate.token_ids,
-            parents=candidate.parents,
-            probs=candidate.probs,
-            score=candidate.score,
-            match_len=candidate.match_len,
+            token_ids=draft.token_ids,
+            parents=draft.parents,
+            probs=draft.probs,
+            score=draft.score,
+            match_len=draft.match_len,
         )
 
 
@@ -166,7 +168,7 @@ class SuffixDecodingCache:
     def add_active_response(
         self,
         req_id: Hashable,
-        token_ids: Union[int, Sequence[int]],
+        token_ids: np.ndarray | Sequence[int],
     ):
         """
         Update the cached response for a given request by appending token(s) to
@@ -182,20 +184,20 @@ class SuffixDecodingCache:
         Raises:
             ValueError: If the request with the given `req_id` is not active.
         """
+        if isinstance(token_ids, np.ndarray):
+            self._validate_ndarray(token_ids)
+
         if req_id not in self._local_trees:
             raise ValueError(f"Request '{req_id}' is not active")
-        if isinstance(token_ids, Sequence):
-            self._local_trees[req_id].extend(0, token_ids)
-        else:
-            self._local_trees[req_id].append(0, token_ids)
+
+        # Update the local tree for the active request.
+        self._local_trees[req_id].extend(0, token_ids)
+
         # Also update the response if the request is in the global cache (it
         # may be evicted from the global cache before the request is stopped).
         if req_id in self._req_to_seq_id:
             seq_id = self._req_to_seq_id[req_id]
-            if isinstance(token_ids, Sequence):
-                self._global_tree.extend(seq_id, token_ids)
-            else:
-                self._global_tree.append(seq_id, token_ids)
+            self._global_tree.extend(seq_id, token_ids)
 
     def evict_cached_response(self, req_id: Hashable):
         """
@@ -218,7 +220,7 @@ class SuffixDecodingCache:
     def speculate(
         self,
         req_id: Hashable,
-        pattern: Sequence[int],
+        context: np.ndarray | Sequence[int],
         max_spec_tokens: Optional[int] = None,
         max_spec_factor: float = 1.0,
         max_spec_offset: float = 0.0,
@@ -227,20 +229,20 @@ class SuffixDecodingCache:
     ) -> SuffixDecodingDraft:
         """
         Speculates and returns the most likely continuation of a given token
-        pattern using the request's prompt and the global cache of previous
+        context using the request's prompt and the global cache of previous
         responses. This method can only be called for active requests (i.e.
         after calling `start_request` and before calling `stop_request`).
 
         Args:
             req_id (Hashable): The unique identifier for the request.
-            pattern (Sequence[int]): The sequence of token IDs to match and
+            context (Sequence[int]): The sequence of token IDs to match and
                 continue from.
             max_spec_tokens (int): Maximum number of tokens to speculate. If 0,
                 uses the cache's max_depth.
             max_spec_factor (float): Factor that limits speculation based on
-                matched pattern length.
+                matched context length.
             min_token_prob (float): Minimum estimated probability threshold for
-                candidate tokens.
+                draft tokens.
             use_tree_spec (bool): If True, uses tree-based speculation.
         
         Returns:
@@ -250,35 +252,43 @@ class SuffixDecodingCache:
         Raises:
             ValueError: If the request with the given `req_id` is not active.
         """
+        if isinstance(context, np.ndarray):
+            # If context is a numpy array, use the zero-copy ndarray overload.
+            self._validate_ndarray(context)  # Make sure the array is valid.
+            spec_func = SuffixTree.speculate_ndarray
+        else:
+            spec_func = SuffixTree.speculate
+
         if req_id not in self._local_trees:
             raise ValueError(f"Request '{req_id}' is not active")
 
         if max_spec_tokens is None:
             max_spec_tokens = self.max_depth
 
-        if len(pattern) > self._max_tree_depth:
-            pattern = pattern[-self._max_tree_depth :]
+        if len(context) > self._max_tree_depth:
+            context = context[-self._max_tree_depth :]
 
-        candidate = self._local_trees[req_id].speculate(
-            pattern,
+        draft1 = spec_func(
+            self._local_trees[req_id],
+            context,
             max_spec_tokens,
             max_spec_factor,
             max_spec_offset,
             min_token_prob,
             use_tree_spec)
-        result = SuffixDecodingDraft.from_candidate(candidate)
 
-        candidate = self._global_tree.speculate(
-            pattern,
+        draft2 = spec_func(
+            self._global_tree,
+            context,
             max_spec_tokens,
             max_spec_factor,
             max_spec_offset,
             min_token_prob,
             use_tree_spec)
-        if candidate.score > result.score:
-            result = SuffixDecodingDraft.from_candidate(candidate)
 
-        return result
+        draft = draft1 if draft1.score >= draft2.score else draft2
+
+        return SuffixDecodingDraft.from_native(draft)
 
     def _generate_seq_id(self, req_id: Hashable) -> int:
         # Find the next available seq_id not used by an active request.
@@ -316,3 +326,13 @@ class SuffixDecodingCache:
                 if seq_id != new_seq_id:
                     self.evict_cached_response(req_id)
                     break
+
+    def _validate_ndarray(self, arr: np.ndarray):
+        if arr.ndim != 1:
+            raise ValueError(f"ndarray input must have ndim=1, "
+                             f"got ndim={arr.ndim}")
+        if arr.dtype != np.int32:
+            raise ValueError(f"ndarray input must have dtype=int32, "
+                             f"got dtype={arr.dtype.name}")
+        if not arr.flags["CONTIGUOUS"]:
+            raise ValueError(f"ndarray input must be contiguous")

@@ -18,6 +18,7 @@
 #include <cassert>
 #include <deque>
 #include <memory>
+#include <span>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -57,17 +58,17 @@ struct Node {
     }
 };
 
-struct Candidate {
-    // The token ids of the speculation candidate.
-    std::vector<int> token_ids;
+struct Draft {
+    // The token ids of the speculation draft.
+    std::vector<int32_t> token_ids;
 
     // For each token, the index of its parent token (-1 if no parent).
-    std::vector<int> parents;
+    std::vector<int32_t> parents;
 
     // For each token, the estimated probability of the token.
     std::vector<float> probs;
 
-    // Floating point score of the candidate (sum of all probs).
+    // Floating point score of the draft (sum of all probs).
     float score = 0.0;
 
     // Length of the prefix match for the speculated tokens.
@@ -87,18 +88,18 @@ public:
     void append(int seq_id, int token);
 
     // Append multiple new elements to the sequence with id seq_id.
-    void extend(int seq_id, const std::vector<int>& tokens);
+    void extend(int seq_id, std::span<const int32_t> tokens);
 
     // Remove the sequence with id seq_id.
     void remove(int seq_id);
 
-    // Given a pattern, speculate the next tokens using the suffix tree.
-    Candidate speculate(const std::vector<int>& pattern,
-                        int max_spec_tokens,
-                        float max_spec_factor = 1.0f,
-                        float max_spec_offset = 0.0f,
-                        float min_token_prob = 0.1f,
-                        bool use_tree_spec = false);
+    // Given a context, speculate the next tokens using the suffix tree.
+    Draft speculate(std::span<const int32_t> context,
+                    int max_spec_tokens,
+                    float max_spec_factor,
+                    float max_spec_offset,
+                    float min_token_prob,
+                    bool use_tree_spec);
 
     // Check the integrity of the suffix tree, return empty string if ok,
     // otherwise return an error message.
@@ -125,14 +126,13 @@ private:
     // most _max_depth iterations before being removed.
     std::unordered_map<int, std::deque<Node*>> _active_nodes;
 
-    std::pair<Node*, int> _match_pattern(const std::vector<int>& pattern,
-                                         int start_idx = 0);
+    std::pair<Node*, int> _match_context(std::span<const int32_t> context);
 
-    Candidate _speculate_path(Node* node, int idx, int max_spec_tokens,
-                              float min_token_prob);
+    Draft _speculate_path(Node* node, int idx, int max_spec_tokens,
+                          float min_token_prob);
 
-    Candidate _speculate_tree(Node* node, int idx, int max_spec_tokens,
-                              float min_token_prob);
+    Draft _speculate_tree(Node* node, int idx, int max_spec_tokens,
+                          float min_token_prob);
 
     std::string _check_node_integrity(Node* node);
 };

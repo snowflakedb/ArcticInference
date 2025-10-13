@@ -4,10 +4,9 @@ requires = [
     "wheel",
     "ninja",
     "cmake>=3.12",
-    "pybind11",
+    "nanobind==2.9.2",
     # uv pip install vllm==0.9.1 --dry-run 2>&1 | grep protobuf | sed 's/^ + //'
     "protobuf==5.29.5",
-    "pybind11_global",
     "grpcio-tools",
     "torch == 2.7.0",
 ]
