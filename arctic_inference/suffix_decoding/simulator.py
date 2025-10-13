@@ -110,7 +110,7 @@ def suffix_decode(
             "update_ms": update_time * 1000,
         })
 
-    assert response == ground_truth_response.tolist()
+    assert np.array_equal(response, ground_truth_response)
 
     suffix_cache.stop_request(request_id)
 
