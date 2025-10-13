@@ -18,6 +18,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Hashable, KeysView, List, Optional, Sequence, Union
 
+import numpy as np
+
 from arctic_inference.suffix_decoding._C import SuffixTree, Candidate
 
 
@@ -166,7 +168,7 @@ class SuffixDecodingCache:
     def add_active_response(
         self,
         req_id: Hashable,
-        token_ids: Union[int, Sequence[int]],
+        token_ids: np.ndarray | Sequence[int],
     ):
         """
         Update the cached response for a given request by appending token(s) to
@@ -182,20 +184,20 @@ class SuffixDecodingCache:
         Raises:
             ValueError: If the request with the given `req_id` is not active.
         """
+        if isinstance(token_ids, np.ndarray):
+            self._validate_ndarray(token_ids)
+
         if req_id not in self._local_trees:
             raise ValueError(f"Request '{req_id}' is not active")
-        if True:  # isinstance(token_ids, Sequence):
-            self._local_trees[req_id].extend(0, token_ids)
-        else:
-            self._local_trees[req_id].append(0, token_ids)
+
+        # Update the local tree for the active request.
+        self._local_trees[req_id].extend(0, token_ids)
+
         # Also update the response if the request is in the global cache (it
         # may be evicted from the global cache before the request is stopped).
         if req_id in self._req_to_seq_id:
             seq_id = self._req_to_seq_id[req_id]
-            if True:  # isinstance(token_ids, Sequence):
-                self._global_tree.extend(seq_id, token_ids)
-            else:
-                self._global_tree.append(seq_id, token_ids)
+            self._global_tree.extend(seq_id, token_ids)
 
     def evict_cached_response(self, req_id: Hashable):
         """
@@ -218,7 +220,7 @@ class SuffixDecodingCache:
     def speculate(
         self,
         req_id: Hashable,
-        context: Sequence[int],
+        context: np.ndarray | Sequence[int],
         max_spec_tokens: Optional[int] = None,
         max_spec_factor: float = 1.0,
         max_spec_offset: float = 0.0,
@@ -250,6 +252,9 @@ class SuffixDecodingCache:
         Raises:
             ValueError: If the request with the given `req_id` is not active.
         """
+        if isinstance(context, np.ndarray):
+            self._validate_ndarray(context)
+
         if req_id not in self._local_trees:
             raise ValueError(f"Request '{req_id}' is not active")
 
@@ -318,3 +323,12 @@ class SuffixDecodingCache:
                 if seq_id != new_seq_id:
                     self.evict_cached_response(req_id)
                     break
+
+    def _validate_ndarray(self, arr: np.ndarray):
+        if arr.ndim != 1:
+            raise ValueError(f"Input array must have ndim=1, got ndim={arr.ndim}")
+        if arr.dtype != np.int32:
+            raise ValueError("Input array must have dtype=int32, got "
+                             f"dtype={arr.dtype}")
+        if not arr.flags["CONTIGUOUS"]:
+            raise ValueError("Input array must be contiguous")
