@@ -41,7 +41,9 @@ from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
 from vllm.forward_context import BatchDescriptor
 
 
+from arctic_inference.envs import ARCTIC_INFERENCE_SKIP_ULYSSES_MOE_PATCH
 from arctic_inference.patching import ArcticPatch
+
 
 
 def apply_shift_parallel_patches():
@@ -50,7 +52,8 @@ def apply_shift_parallel_patches():
     UlyssesWorkerProc.apply_patch()
     UlyssesMultiprocExecutor.apply_patch()
     UlyssesAttention.apply_patch()
-    UlyssesFusedMoE.apply_patch()
+    if not ARCTIC_INFERENCE_SKIP_ULYSSES_MOE_PATCH:
+        UlyssesFusedMoE.apply_patch()
     UlyssesCudagraphDispatcher.apply_patch()
 
 
