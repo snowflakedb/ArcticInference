@@ -22,6 +22,7 @@ import time
 from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from transformers import AutoTokenizer
@@ -47,13 +48,14 @@ def suffix_decode(
 
     suffix_cache.start_request(request_id, prompt if use_cached_prompt else [])
 
-    assert isinstance(prompt, list) and isinstance(ground_truth_response, list)
+    #assert isinstance(prompt, list) and isinstance(ground_truth_response, list)
 
     results = []
     response = []
     while len(response) < len(ground_truth_response):
-        text = prompt + response
+        text = np.concatenate([prompt, response])
 
+        #pattern = np.array(text, dtype=np.int32)
         start_time = time.perf_counter()
         result = suffix_cache.speculate(
             request_id,
@@ -90,7 +92,7 @@ def suffix_decode(
 
         # Update suffix cache
         start_time = time.perf_counter()
-        suffix_cache.add_active_response(request_id, new_tokens)
+        suffix_cache.add_active_response(request_id, np.array(new_tokens, dtype=np.int32))
         end_time = time.perf_counter()
         update_time = end_time - start_time
 
@@ -105,7 +107,7 @@ def suffix_decode(
             "update_ms": update_time * 1000,
         })
 
-    assert response == ground_truth_response
+    assert response == ground_truth_response.tolist()
 
     suffix_cache.stop_request(request_id)
 
@@ -323,8 +325,8 @@ def tokenize_data(dataset: pd.DataFrame, tokenizer_name: str) -> pd.DataFrame:
     responses = []
     for _, row in tqdm(dataset.iterrows(), total=len(dataset),
                        desc="Tokenizing dataset"):
-        prompts.append(tokenizer.encode(row["prompt"]))
-        responses.append(tokenizer.encode(row["response"]))
+        prompts.append(tokenizer.encode(row["prompt"], return_tensors="np").astype(np.int32).flatten())
+        responses.append(tokenizer.encode(row["response"], return_tensors="np").astype(np.int32).flatten())
     return pd.DataFrame({
         "prompt": prompts,
         "response": responses,

@@ -34,7 +34,7 @@ class SuffixDecodingDraft:
         probs (List[float]): List of estimated probabilities for each token.
         score (float): The overall score of the suffix match computed as the
             sum of the estimated probabilities of each speculated token.
-        match_len (int): The length of the pattern match that yielded this
+        match_len (int): The length of the context match that yielded this
             speculation result.
     """
     token_ids: List[int] = field(default_factory=list)
@@ -184,7 +184,7 @@ class SuffixDecodingCache:
         """
         if req_id not in self._local_trees:
             raise ValueError(f"Request '{req_id}' is not active")
-        if isinstance(token_ids, Sequence):
+        if True:  # isinstance(token_ids, Sequence):
             self._local_trees[req_id].extend(0, token_ids)
         else:
             self._local_trees[req_id].append(0, token_ids)
@@ -192,7 +192,7 @@ class SuffixDecodingCache:
         # may be evicted from the global cache before the request is stopped).
         if req_id in self._req_to_seq_id:
             seq_id = self._req_to_seq_id[req_id]
-            if isinstance(token_ids, Sequence):
+            if True:  # isinstance(token_ids, Sequence):
                 self._global_tree.extend(seq_id, token_ids)
             else:
                 self._global_tree.append(seq_id, token_ids)
@@ -218,7 +218,7 @@ class SuffixDecodingCache:
     def speculate(
         self,
         req_id: Hashable,
-        pattern: Sequence[int],
+        context: Sequence[int],
         max_spec_tokens: Optional[int] = None,
         max_spec_factor: float = 1.0,
         max_spec_offset: float = 0.0,
@@ -227,18 +227,18 @@ class SuffixDecodingCache:
     ) -> SuffixDecodingDraft:
         """
         Speculates and returns the most likely continuation of a given token
-        pattern using the request's prompt and the global cache of previous
+        context using the request's prompt and the global cache of previous
         responses. This method can only be called for active requests (i.e.
         after calling `start_request` and before calling `stop_request`).
 
         Args:
             req_id (Hashable): The unique identifier for the request.
-            pattern (Sequence[int]): The sequence of token IDs to match and
+            context (Sequence[int]): The sequence of token IDs to match and
                 continue from.
             max_spec_tokens (int): Maximum number of tokens to speculate. If 0,
                 uses the cache's max_depth.
             max_spec_factor (float): Factor that limits speculation based on
-                matched pattern length.
+                matched context length.
             min_token_prob (float): Minimum estimated probability threshold for
                 candidate tokens.
             use_tree_spec (bool): If True, uses tree-based speculation.
@@ -256,27 +256,29 @@ class SuffixDecodingCache:
         if max_spec_tokens is None:
             max_spec_tokens = self.max_depth
 
-        if len(pattern) > self._max_tree_depth:
-            pattern = pattern[-self._max_tree_depth :]
+        if len(context) > self._max_tree_depth:
+            context = context[-self._max_tree_depth :]
 
-        candidate = self._local_trees[req_id].speculate(
-            pattern,
+        ret = self._local_trees[req_id].speculate(
+            context,
             max_spec_tokens,
             max_spec_factor,
             max_spec_offset,
             min_token_prob,
             use_tree_spec)
-        result = SuffixDecodingDraft.from_candidate(candidate)
+        draft = SuffixDecodingDraft.from_candidate(ret)
+        result = draft
 
-        candidate = self._global_tree.speculate(
-            pattern,
+        ret = self._global_tree.speculate(
+            context,
             max_spec_tokens,
             max_spec_factor,
             max_spec_offset,
             min_token_prob,
             use_tree_spec)
-        if candidate.score > result.score:
-            result = SuffixDecodingDraft.from_candidate(candidate)
+        draft = SuffixDecodingDraft.from_candidate(ret)
+        if draft.score > result.score:
+            result = draft
 
         return result
 

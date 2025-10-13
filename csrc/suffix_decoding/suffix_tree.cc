@@ -165,7 +165,7 @@ void SuffixTree::append(int seq_id, int token) {
 }
 
 // Extend a new or existing sequence.
-void SuffixTree::extend(int seq_id, const std::vector<int>& tokens) {
+void SuffixTree::extend(int seq_id, std::span<const int32_t> tokens) {
     for (int token : tokens) {
         append(seq_id, token);
     }
@@ -247,27 +247,26 @@ void SuffixTree::remove(int seq_id) {
     _active_nodes.erase(seq_id);
 }
 
-Candidate SuffixTree::speculate(const std::vector<int>& pattern,
+Candidate SuffixTree::speculate(std::span<const int32_t> context,
                                 int max_spec_tokens,
                                 float max_spec_factor,
                                 float max_spec_offset,
                                 float min_token_prob,
                                 bool use_tree_spec) {
     Candidate result;
-    int start_idx = std::max(static_cast<int>(pattern.size()) - _max_depth, 0);
-    for ( ; start_idx < pattern.size(); start_idx++) {
-        auto[node, idx] = _match_pattern(pattern, start_idx);
+    for (int match_len = 1; match_len < context.size(); match_len++) {
+        auto[node, idx] = _match_context(
+            context.subspan(context.size() - match_len, match_len));
         if (node == nullptr) {
             continue;
         }
-        int match_len = static_cast<int>(pattern.size()) - start_idx;
         int max_tokens = std::min(max_spec_tokens,
                                   static_cast<int>(match_len * max_spec_factor
                                                    + max_spec_offset + 1e-6));
         max_tokens = std::max(max_tokens, 0);
         Candidate candidate;
         if (use_tree_spec) {
-            candidate = _speculate_tree(node, idx, max_tokens, min_token_prob);
+            //candidate = _speculate_tree(node, idx, max_tokens, min_token_prob);
         } else {
             candidate = _speculate_path(node, idx, max_tokens, min_token_prob);
         }
@@ -399,12 +398,11 @@ std::string SuffixTree::_check_node_integrity(Node* node) {
     return "";
 }
 
-std::pair<Node*, int> SuffixTree::_match_pattern(
-        const std::vector<int>& pattern, int start_idx) {
+std::pair<Node*, int> SuffixTree::_match_context(std::span<const int32_t> context) {
     Node* node = _root.get();
     int idx = 0;
-    for (int i = start_idx; i < pattern.size(); i++) {
-        int c = pattern[i];
+    for (int i = 0; i < context.size(); i++) {
+        int c = context[i];
         if (idx >= node->length) {
             if (!node->children.contains(c)) {
                 return {nullptr, -1};
