@@ -17,9 +17,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Dict, Hashable, KeysView, List, Optional, Sequence, Tuple
-import threading
-import queue
-import time
 
 import numpy as np
 
@@ -58,115 +55,11 @@ class SuffixDecodingDraft:
             match_len=draft.match_len,
         )
 
-
-class AsyncBatchProcessor:
-    """High-performance batch processor for suffix cache updates."""
-
-    def __init__(self, global_tree: SuffixTree, max_batch_size: int = 1000,
-                 max_latency_ms: float = 2.0):
-        self._global_tree = global_tree
-        self._max_batch_size = max_batch_size
-        self._max_latency_s = max_latency_ms / 1000.0
-
-        self._update_queue: "queue.Queue[tuple[int, list[int]]]" = queue.Queue(maxsize=10000)
-        self._stop_event = threading.Event()
-        self._batch_lock = threading.Lock()
-
-        self._worker_thread = threading.Thread(
-            target=self._batch_worker_loop,
-            name="suffix-cache-batch-worker",
-            daemon=True,
-        )
-        self._worker_thread.start()
-
-    def submit_update(self, seq_id: int, token_ids: list[int]) -> bool:
-        try:
-            self._update_queue.put((int(seq_id), [int(t) for t in token_ids]),
-                                   timeout=0.001)
-            return True
-        except queue.Full:
-            self._global_tree.extend(int(seq_id), [int(t) for t in token_ids])
-            return False
-
-    def _batch_worker_loop(self) -> None:
-        batch: dict[int, list[int]] = {}
-        total_tokens = 0
-        last_process_time = time.time()
-
-        while not self._stop_event.is_set():
-            try:
-                items: list[tuple[int, list[int]]] = []
-                timeout = max(0.001,
-                              self._max_latency_s - (time.time() -
-                                                     last_process_time))
-                try:
-                    first_item = self._update_queue.get(timeout=timeout)
-                    items.append(first_item)
-                except queue.Empty:
-                    first_item = None
-
-                if first_item is not None:
-                    while len(items) < self._max_batch_size:
-                        try:
-                            item = self._update_queue.get_nowait()
-                            items.append(item)
-                        except queue.Empty:
-                            break
-
-                if items:
-                    for seq_id, token_ids in items:
-                        if seq_id not in batch:
-                            batch[seq_id] = token_ids
-                        else:
-                            batch[seq_id].extend(token_ids)
-                        total_tokens += len(token_ids)
-                        self._update_queue.task_done()
-
-                current_time = time.time()
-                should_process = (
-                    total_tokens >= self._max_batch_size or
-                    (self._max_latency_s > 0 and (current_time -
-                                                  last_process_time)
-                     >= self._max_latency_s) or len(batch) >= 100)
-
-                if should_process and batch:
-                    self._process_batch(batch)
-                    batch.clear()
-                    total_tokens = 0
-                    last_process_time = current_time
-            except Exception:
-                # Continue processing even if one batch fails
-                continue
-
-        # Final flush on shutdown
-        if batch:
-            self._process_batch(batch)
-
-    def _process_batch(self, batch: dict[int, list[int]]) -> None:
-        if not batch:
-            return
-        # Convert to native format and apply in a single call
-        batch_updates: list[tuple[int, list[int]]] = []
-        for seq_id, tokens in batch.items():
-            if tokens:
-                batch_updates.append((int(seq_id), [int(t) for t in tokens]))
-        if batch_updates:
-            self._global_tree.extend_batch(batch_updates)
-
-    def close(self) -> None:
-        self._stop_event.set()
-        if self._worker_thread.is_alive():
-            self._worker_thread.join(timeout=5.0)
-
-
 class SuffixDecodingCache:
     
     def __init__(self,
                  max_tree_depth: int = 64,
-                 max_cached_requests: int = -1,
-                 enable_async_updates: bool = False,
-                 async_max_batch_tokens: int = 4096,
-                 async_max_latency_ms: int = 1):
+                 max_cached_requests: int = -1):
         """
         Initialize the SuffixDecodingCache.
 
@@ -184,6 +77,7 @@ class SuffixDecodingCache:
 
         # Global suffix tree caches previous responses in a single tree.
         self._global_tree = SuffixTree(max_tree_depth)
+        self._pending_updates: dict[int, list[int]] = {}
 
         # Local suffix trees cache prompts for each active request separately.
         self._local_trees = {}
@@ -195,17 +89,6 @@ class SuffixDecodingCache:
 
         # Unused sequence ID to assign to a new request ID.
         self._next_seq_id = 0
-
-        # Async update configuration and state.
-        self._async_enabled = enable_async_updates
-        self._global_lock = threading.RLock()
-        self._batch_processor: Optional[AsyncBatchProcessor] = None
-        if self._async_enabled:
-            self._batch_processor = AsyncBatchProcessor(
-                self._global_tree,
-                max_batch_size=int(async_max_batch_tokens),
-                max_latency_ms=float(async_max_latency_ms),
-            )
 
     @property
     def max_tree_depth(self) -> int:
@@ -310,16 +193,24 @@ class SuffixDecodingCache:
         # Update the local tree for the active request.
         self._local_trees[req_id].extend(0, token_ids)
 
-        # Also update the response if the request is in the global cache (it
-        # may be evicted from the global cache before the request is stopped).
         if req_id in self._req_to_seq_id:
             seq_id = self._req_to_seq_id[req_id]
-            if self._async_enabled and self._batch_processor is not None:
-                ok = self._batch_processor.submit_update(seq_id, token_ids)
-                if not ok:
-                    self._global_tree.extend(seq_id, token_ids)
+            buf = self._pending_updates.get(seq_id)
+            if buf is None:
+                self._pending_updates[seq_id] = [int(t) for t in token_ids]
             else:
-                self._global_tree.extend(seq_id, token_ids)
+                buf.extend(int(t) for t in token_ids)
+                
+    def flush(self):
+        """Apply all staged updates with a single nanobind call."""
+        if not self._pending_updates:
+             return
+        batch: list[tuple[int, list[int]]] = [
+            (int(seq), toks) for seq, toks in self._pending_updates.items() if toks
+        ]
+        if batch:
+            self._global_tree.extend_batch(batch)
+        self._pending_updates.clear()
 
     def evict_cached_response(self, req_id: Hashable):
         """

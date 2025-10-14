@@ -158,10 +158,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             spec_cfg = self.speculative_config
             self._suffix_cache = SuffixDecodingCache(
                 max_tree_depth=spec_cfg.suffix_cache_max_depth,
-                max_cached_requests=spec_cfg.suffix_cache_max_requests,
-                enable_async_updates=spec_cfg.suffix_async_updates,
-                async_max_batch_tokens=spec_cfg.suffix_async_max_batch_tokens,
-                async_max_latency_ms=spec_cfg.suffix_async_max_latency_ms)
+                max_cached_requests=spec_cfg.suffix_cache_max_requests)
 
     def profile_run(self) -> None:
         self._orig_profile_run()
@@ -504,6 +501,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         if self._suffix_cache is not None:
             self._update_suffix_cache(valid_sampled_token_ids)
+            # Apply all staged global-cache updates once per scheduler tick.
+            self._suffix_cache.flush()
 
         if not self.speculative_config:
             # Speculative decoding is not enabled.

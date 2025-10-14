@@ -92,7 +92,7 @@ public:
 
     // Append multiple updates across sequences in one call.
     // Each pair contains (seq_id, tokens).
-    void extend_batch(const std::vector<std::pair<int, std::vector<int32_t>>>& updates);
+    void extend_batch(const std::vector<std::pair<int, std::vector<int32_t>>>& batches);
 
     // Remove the sequence with id seq_id.
     void remove(int seq_id);
