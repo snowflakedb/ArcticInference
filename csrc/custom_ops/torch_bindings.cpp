@@ -17,6 +17,18 @@ TORCH_LIBRARY(arctic_inference, ops) {
       "                             int head_size) -> ()");
   ops.impl("reshape_and_cache_flash_bulk", torch::kCUDA,
            &reshape_and_cache_flash_bulk);
+
+  ops.def(
+      "reshape_and_cache_flash(Tensor key,"
+      "                        Tensor value,"
+      "                        Tensor(c!) key_cache,"
+      "                        Tensor(d!) value_cache,"
+      "                        Tensor slot_mapping,"
+      "                        str kv_cache_dtype,"
+      "                        Tensor(e) k_scale,"
+      "                        Tensor(f) v_scale) -> ()");
+  ops.impl("reshape_and_cache_flash", torch::kCUDA,
+           &reshape_and_cache_flash);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {

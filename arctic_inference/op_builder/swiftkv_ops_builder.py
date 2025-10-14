@@ -16,7 +16,7 @@ class SwiftKVOpsBuilder(CUDAOpBuilder):
     def sources(self):
         sources = [
             'csrc/custom_ops/torch_bindings.cpp',
-            'csrc/custom_ops/kernels.cu',
+            'csrc/custom_ops/reshape_and_cache_flash_bulk.cu',
         ]
         prefix = self.get_prefix()
         sources = [os.path.join(prefix, src) for src in sources]
