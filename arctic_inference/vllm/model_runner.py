@@ -158,7 +158,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             spec_cfg = self.speculative_config
             self._suffix_cache = SuffixDecodingCache(
                 max_tree_depth=spec_cfg.suffix_cache_max_depth,
-                max_cached_requests=spec_cfg.suffix_cache_max_requests)
+                max_cached_requests=spec_cfg.suffix_cache_max_requests,
+                enable_async_updates=spec_cfg.suffix_async_updates,
+                async_max_batch_tokens=spec_cfg.suffix_async_max_batch_tokens,
+                async_max_latency_ms=spec_cfg.suffix_async_max_latency_ms)
 
     def profile_run(self) -> None:
         self._orig_profile_run()

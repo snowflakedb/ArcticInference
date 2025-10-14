@@ -62,6 +62,10 @@ class ArcticSpeculativeConfig(SpeculativeConfig):
     suffix_max_spec_factor: float = 1.0
     suffix_max_spec_offset: float = 0.0
     suffix_min_token_prob: float = 0.1
+    # Async suffix cache update options
+    suffix_async_updates: bool = True
+    suffix_async_max_batch_tokens: int = 4096
+    suffix_async_max_latency_ms: int = 1
 
 
 class ParallelConfigPatch(ArcticPatch[ParallelConfig]):

@@ -17,6 +17,7 @@
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
+#include <nanobind/stl/pair.h>
 
 #include "suffix_tree.h"
 
@@ -24,6 +25,12 @@ namespace nb = nanobind;
 
 using Int32Array1D = nb::ndarray<int32_t, nb::numpy, nb::shape<-1>,
                                  nb::device::cpu, nb::any_contig>;
+using BatchPair = std::pair<int, std::vector<int32_t>>;
+
+void extend_batch(SuffixTree& tree,
+                  const std::vector<BatchPair>& updates) {
+    tree.extend_batch(updates);
+}
 
 
 void extend_ndarray(SuffixTree& tree,
@@ -94,6 +101,7 @@ NB_MODULE(_C, m) {
         // resolution overhead at run-time.
         .def("extend", &extend_vector)
         .def("extend_ndarray", &extend_ndarray)
+        .def("extend_batch", &extend_batch)
         // Overloads for speculate method.
         .def("speculate", &speculate_vector)
         .def("speculate_ndarray", &speculate_ndarray)
