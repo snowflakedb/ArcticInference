@@ -85,7 +85,6 @@ class AsyncBatchProcessor:
                                    timeout=0.001)
             return True
         except queue.Full:
-            # Queue is full, process synchronously to avoid blocking
             self._global_tree.extend(int(seq_id), [int(t) for t in token_ids])
             return False
 
@@ -198,14 +197,14 @@ class SuffixDecodingCache:
         self._next_seq_id = 0
 
         # Async update configuration and state.
-        self._async_enabled = False
+        self._async_enabled = enable_async_updates
         self._global_lock = threading.RLock()
         self._batch_processor: Optional[AsyncBatchProcessor] = None
         if self._async_enabled:
             self._batch_processor = AsyncBatchProcessor(
                 self._global_tree,
-                max_batch_size=int(0),
-                max_latency_ms=float(0),
+                max_batch_size=int(async_max_batch_tokens),
+                max_latency_ms=float(async_max_latency_ms),
             )
 
     @property
@@ -311,23 +310,16 @@ class SuffixDecodingCache:
         # Update the local tree for the active request.
         self._local_trees[req_id].extend(0, token_ids)
 
-        # Update global tree
+        # Also update the response if the request is in the global cache (it
+        # may be evicted from the global cache before the request is stopped).
         if req_id in self._req_to_seq_id:
             seq_id = self._req_to_seq_id[req_id]
-            # Convert token_ids to list[int]
-            if isinstance(token_ids, np.ndarray):
-                tokens_list: list[int] = token_ids.tolist()
-            elif isinstance(token_ids, (list, tuple)):
-                tokens_list = [int(t) for t in token_ids]
+            if self._async_enabled and self._batch_processor is not None:
+                ok = self._batch_processor.submit_update(seq_id, token_ids)
+                if not ok:
+                    self._global_tree.extend(seq_id, token_ids)
             else:
-                tokens_list = [int(t) for t in token_ids]
-            if tokens_list:
-                if self._async_enabled and self._batch_processor is not None:
-                    ok = self._batch_processor.submit_update(seq_id, tokens_list)
-                    if not ok:
-                        self._global_tree.extend(int(seq_id), tokens_list)
-                else:
-                    self._global_tree.extend(int(seq_id), tokens_list)
+                self._global_tree.extend(seq_id, token_ids)
 
     def evict_cached_response(self, req_id: Hashable):
         """
@@ -466,8 +458,3 @@ class SuffixDecodingCache:
                              f"got dtype={arr.dtype.name}")
         if not arr.flags["CONTIGUOUS"]:
             raise ValueError(f"ndarray input must be contiguous")
-
-    def close(self) -> None:
-        """Shut down the async batch processor and flush any pending updates."""
-        if self._batch_processor is not None:
-            self._batch_processor.close()
