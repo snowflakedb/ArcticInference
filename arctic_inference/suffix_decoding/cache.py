@@ -68,8 +68,7 @@ class AsyncBatchProcessor:
         self._max_batch_size = max_batch_size
         self._max_latency_s = max_latency_ms / 1000.0
 
-        self._update_queue: "queue.Queue[tuple[int, list[int]]]" = queue.Queue(
-            maxsize=10000)
+        self._update_queue: "queue.Queue[tuple[int, list[int]]]" = queue.Queue(maxsize=10000)
         self._stop_event = threading.Event()
         self._batch_lock = threading.Lock()
 
@@ -87,8 +86,7 @@ class AsyncBatchProcessor:
             return True
         except queue.Full:
             # Queue is full, process synchronously to avoid blocking
-            with self._batch_lock:
-                self._global_tree.extend(int(seq_id), [int(t) for t in token_ids])
+            self._global_tree.extend(int(seq_id), [int(t) for t in token_ids])
             return False
 
     def _batch_worker_loop(self) -> None:
@@ -154,8 +152,7 @@ class AsyncBatchProcessor:
             if tokens:
                 batch_updates.append((int(seq_id), [int(t) for t in tokens]))
         if batch_updates:
-            with self._batch_lock:
-                self._global_tree.extend_batch(batch_updates)
+            self._global_tree.extend_batch(batch_updates)
 
     def close(self) -> None:
         self._stop_event.set()
@@ -201,14 +198,14 @@ class SuffixDecodingCache:
         self._next_seq_id = 0
 
         # Async update configuration and state.
-        self._async_enabled = True
+        self._async_enabled = False
         self._global_lock = threading.RLock()
         self._batch_processor: Optional[AsyncBatchProcessor] = None
         if self._async_enabled:
             self._batch_processor = AsyncBatchProcessor(
                 self._global_tree,
-                max_batch_size=int(32768),
-                max_latency_ms=float(4),
+                max_batch_size=int(0),
+                max_latency_ms=float(0),
             )
 
     @property
@@ -328,11 +325,9 @@ class SuffixDecodingCache:
                 if self._async_enabled and self._batch_processor is not None:
                     ok = self._batch_processor.submit_update(seq_id, tokens_list)
                     if not ok:
-                        with self._global_lock:
-                            self._global_tree.extend(int(seq_id), tokens_list)
-                else:
-                    with self._global_lock:
                         self._global_tree.extend(int(seq_id), tokens_list)
+                else:
+                    self._global_tree.extend(int(seq_id), tokens_list)
 
     def evict_cached_response(self, req_id: Hashable):
         """
@@ -350,8 +345,7 @@ class SuffixDecodingCache:
             raise ValueError(f"Request '{req_id}' is not cached")
         seq_id = self._req_to_seq_id.pop(req_id)
         self._seq_to_req_id.pop(seq_id)
-        with self._global_lock:
-            self._global_tree.remove(seq_id)
+        self._global_tree.remove(seq_id)
 
     def speculate(
         self,
@@ -413,16 +407,14 @@ class SuffixDecodingCache:
             min_token_prob,
             use_tree_spec)
 
-        # Guard global tree speculation with a lock.
-        with self._global_lock:
-            draft2 = spec_func(
-                self._global_tree,
-                context,
-                max_spec_tokens,
-                max_spec_factor,
-                max_spec_offset,
-                min_token_prob,
-                use_tree_spec)
+        draft2 = spec_func(
+            self._global_tree,
+            context,
+            max_spec_tokens,
+            max_spec_factor,
+            max_spec_offset,
+            min_token_prob,
+            use_tree_spec)
 
         draft = draft1 if draft1.score >= draft2.score else draft2
 
@@ -444,8 +436,7 @@ class SuffixDecodingCache:
             # We evict the old cached request to free up the seq_id.
             del self._req_to_seq_id[self._seq_to_req_id[seq_id]]
             del self._seq_to_req_id[seq_id]
-            with self._global_lock:
-                self._global_tree.remove(seq_id)
+            self._global_tree.remove(seq_id)
         # Allocate the seq_id to the new req_id.
         self._req_to_seq_id[req_id] = seq_id
         self._seq_to_req_id[seq_id] = req_id
