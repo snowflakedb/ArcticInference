@@ -540,6 +540,14 @@ class UlyssesFusedMoEParallelConfig(ArcticPatch[FusedMoEParallelConfig]):
         _sp_size = parallel_state._SP.world_size
         _sp_rank = parallel_state._SP.rank_in_group
 
+        return FusedMoEParallelConfig(tp_size=_sp_size,
+                                      tp_rank=_sp_rank,
+                                      dp_size=1,
+                                      dp_rank=0,
+                                      ep_size=1,
+                                      ep_rank=0,
+                                      use_ep=False)
+
         from .model_runner import is_shift_parallel_mode
         # ep logic
         use_ep = True if (vllm_parallel_config.enable_expert_parallel and
