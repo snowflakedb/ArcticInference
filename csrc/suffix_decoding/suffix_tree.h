@@ -25,6 +25,8 @@
 
 #include "int32_map.h"
 
+struct Group;
+
 struct Node {
     // Token referenced by this node. Node can refer to a sequence of tokens,
     // this is just the ID of the first token.
@@ -38,6 +40,7 @@ struct Node {
     
     Node* next_sibling = nullptr;
     Node* prev_sibling = nullptr;
+    std::shared_ptr<Group> group = nullptr;
 
     // Children nodes, the key should always be the first token of the child.
     Int32Map<std::unique_ptr<Node>> children;
@@ -62,6 +65,12 @@ struct Node {
         total += endpoints.memory_usage();
         return total;
     }
+};
+
+struct Group {
+    Group* next = nullptr;
+    Group* prev = nullptr;
+    Node* head = nullptr;
 };
 
 struct Draft {
