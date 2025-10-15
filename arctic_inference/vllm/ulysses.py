@@ -58,8 +58,8 @@ def apply_shift_parallel_patches():
     #     UlyssesFusedMoE.apply_patch()
     #     UlyssesFusedMoEParallelConfig.apply_patch()
     UlyssesCudagraphDispatcher.apply_patch()
-    UlyssesFusedMoEParallelConfig.apply_patch()
-    UlyssesFp8MoEMethod_dense.apply_patch()
+    # UlyssesFusedMoEParallelConfig.apply_patch()
+    # UlyssesFp8MoEMethod_dense.apply_patch()
 
 
 
