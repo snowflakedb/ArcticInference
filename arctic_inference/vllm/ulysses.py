@@ -17,7 +17,7 @@ import threading
 import weakref
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional, Any
+from typing import Optional, Callable
 
 import torch
 import vllm.distributed.parallel_state as parallel_state
