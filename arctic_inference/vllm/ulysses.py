@@ -615,7 +615,7 @@ class UlyssesFp8MoEMethod_dense(ArcticPatch[Fp8MoEMethod]):
             )
 
         # dispatch
-        if self.use_ep:
+        if self.use_ep or True:
             # convert to uint8
             merge_buff = torch.cat([x.view(torch.uint8), topk_weights.view(torch.uint8), topk_ids.view(torch.uint8)], dim=1)
             # all-gather
@@ -659,7 +659,7 @@ class UlyssesFp8MoEMethod_dense(ArcticPatch[Fp8MoEMethod]):
                     self.allow_cutlass_block_scaled_grouped_gemm))
 
         # combine
-        if self.use_ep:
+        if self.use_ep or True:
             output = parallel_state._SP.reduce_scatter(out_expert, dim=0)
         else:
             return out_expert
