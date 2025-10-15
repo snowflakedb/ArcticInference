@@ -53,6 +53,7 @@ def apply_shift_parallel_patches():
     UlyssesMultiprocExecutor.apply_patch()
     UlyssesAttention.apply_patch()
     if not ARCTIC_INFERENCE_SKIP_ULYSSES_MOE_PATCH:
+        print(f"Applying Ulysses FusedMoE patch")
         UlyssesFusedMoE.apply_patch()
     UlyssesCudagraphDispatcher.apply_patch()
 
