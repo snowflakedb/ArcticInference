@@ -23,32 +23,26 @@
 namespace vllm {
 
 // A vector type to store Q, K, V elements.
-template <typename T, int VEC_SIZE>
-struct Vec {};
+template <typename T, int VEC_SIZE> struct Vec {};
 
 // A vector type to store FP32 accumulators.
-template <typename T>
-struct FloatVec {};
+template <typename T> struct FloatVec {};
 
 // Template vector operations.
 template <typename Acc, typename A, typename B>
 inline __device__ Acc mul(A a, B b);
 
-template <typename T>
-inline __device__ float sum(T v);
+template <typename T> inline __device__ float sum(T v);
 
-template <typename T>
-inline __device__ float dot(T a, T b) {
+template <typename T> inline __device__ float dot(T a, T b) {
   return sum(mul<T, T, T>(a, b));
 }
 
-template <typename A, typename T>
-inline __device__ float dot(T a, T b) {
+template <typename A, typename T> inline __device__ float dot(T a, T b) {
   return sum(mul<A, T, T>(a, b));
 }
 
-template <typename T>
-inline __device__ void zero(T& dst) {
+template <typename T> inline __device__ void zero(T &dst) {
   constexpr int WORDS = sizeof(T) / 4;
   union {
     T raw;
@@ -62,5 +56,4 @@ inline __device__ void zero(T& dst) {
   dst = tmp.raw;
 }
 
-}  // namespace vllm
-
+} // namespace vllm
