@@ -92,7 +92,7 @@ class SuffixDecodingCache:
 
     @property
     def max_tree_depth(self) -> int:
-        return self.max_depth
+        return self._max_tree_depth
 
     @property
     def max_cached_requests(self) -> int:
