@@ -283,22 +283,18 @@ def parity_check_fp4_vs_fp16(
 def show_example_row(
     results: dict,
     tensor_name: str = "key",
-    token_idx: int = 0,
-    head_idx: int = 0,
-    num_vals: int = 16,
+    num_vals: int = 64,
 ):
     original_tensor = results[f"{tensor_name}_fp16"]
     dequant_tensor = results[f"{tensor_name}_from_fp4"]
 
-    original_slice = original_tensor[token_idx,
-                                     head_idx, :num_vals].to(torch.float32)
-    dequant_slice = dequant_tensor[token_idx,
-                                   head_idx, :num_vals].to(torch.float32)
+    original_slice = original_tensor[:num_vals].to(torch.float32)
+    dequant_slice = dequant_tensor[:num_vals].to(torch.float32)
     diff = (original_slice - dequant_slice).abs()
 
     print("\n" + "-" * 50)
     print(
-        f"Example Comparison: '{tensor_name.upper()}' (Token {token_idx}, Head {head_idx}, First {num_vals} values)"
+        f"Example Comparison: '{tensor_name.upper()}' (First {num_vals} values)"
     )
     print("-" * 50)
 
@@ -312,20 +308,20 @@ def show_example_row(
 
 if __name__ == "__main__":
     print("NHD Cache Layout Results:")
-    results_nhd = parity_check_fp4_vs_fp16(num_tokens=64,
-                                           num_heads=16,
-                                           head_size=128,
-                                           block_size=16,
+    results_nhd = parity_check_fp4_vs_fp16(num_tokens=1,
+                                           num_heads=2,
+                                           head_size=16,
+                                           block_size=2,
                                            cache_layout="NHD",
                                            device="cuda")
     show_example_row(results_nhd, tensor_name="key")
     show_example_row(results_nhd, tensor_name="value")
 
     print("\n\nHND Cache Layout Results:")
-    results_hnd = parity_check_fp4_vs_fp16(num_tokens=64,
-                                           num_heads=16,
-                                           head_size=128,
-                                           block_size=16,
+    results_hnd = parity_check_fp4_vs_fp16(num_tokens=1,
+                                           num_heads=2,
+                                           head_size=16,
+                                           block_size=2,
                                            cache_layout="HND",
                                            device="cuda")
     show_example_row(results_hnd, tensor_name="key")

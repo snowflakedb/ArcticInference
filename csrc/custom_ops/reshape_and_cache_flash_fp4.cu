@@ -161,7 +161,8 @@ __global__ void reshape_and_cache_flash_kernel_fp4(
     const int64_t value_stride, const int num_heads, const int head_size,
     const int block_size, const float *k_scale, const float *v_scale,
     uint8_t *__restrict__ key_scale_cache,
-    uint8_t *__restrict__ value_scale_cache) {
+    uint8_t *__restrict__ value_scale_cache,
+    const bool is_nhd) {
   const int64_t token_idx = blockIdx.x;
   const int64_t slot_idx = slot_mapping[token_idx];
   if (slot_idx < 0) {
@@ -184,9 +185,9 @@ __global__ void reshape_and_cache_flash_kernel_fp4(
   uint32_t *__restrict__ value_dst_fp4 =
       reinterpret_cast<uint32_t *>(value_dst);
 
-  const int64_t scale_block_stride = block_stride / 16;
-  const int64_t scale_page_stride = page_stride / 16;
-  const int64_t scale_head_stride = head_stride / 16;
+  const int64_t scale_block_stride = block_stride / 8;
+  const int64_t scale_page_stride = page_stride / 8;
+  const int64_t scale_head_stride = head_stride / 8;
 
   uint8_t *__restrict__ key_scale_dst = key_scale_cache +
                                         block_idx * scale_block_stride +
@@ -197,14 +198,13 @@ __global__ void reshape_and_cache_flash_kernel_fp4(
 
   constexpr int CHUNK_SIZE = 16; 
   constexpr int THREADS_PER_CHUNK = 2;
-  const bool is_contiguous_heads = (head_stride == head_size);
 
   const int lane = threadIdx.x % 32;
   const int warp_id = threadIdx.x / 32;
   const int warps_in_block = blockDim.x / 32;
   const int chunks_per_warp = 32 / THREADS_PER_CHUNK;
 
-  if (is_contiguous_heads) {
+  if (is_nhd) {
     // NHD layout
     const int num_chunks = n_elems / CHUNK_SIZE;
     for (int chunk_base_idx = warp_id * chunks_per_warp;
@@ -258,28 +258,43 @@ __global__ void reshape_and_cache_flash_kernel_fp4(
 void reshape_and_cache_flash_fp4(
     torch::Tensor &key,   // [num_tokens, num_heads, head_size]
     torch::Tensor &value, // [num_tokens, num_heads, head_size]
-    torch::Tensor
-        &key_cache, 
-    torch::Tensor &value_cache, torch::Tensor &slot_mapping,
-    const std::string &kv_cache_dtype, torch::Tensor &k_scale,
-    torch::Tensor &v_scale, torch::Tensor &key_scale_cache,
+    torch::Tensor &key_cache, 
+    torch::Tensor &value_cache, 
+    torch::Tensor &slot_mapping,
+    const std::string &kv_cache_dtype, 
+    torch::Tensor &k_scale,
+    torch::Tensor &v_scale, 
+    torch::Tensor &key_scale_cache,
     torch::Tensor &value_scale_cache) {
+  const int64_t num_tokens = slot_mapping.size(0);
+  const int64_t num_heads  = key.size(1);
+  const int64_t head_size  = key.size(2);
 
-  int num_tokens = slot_mapping.size(0);
-  int num_heads = key.size(1);
-  int head_size = key.size(2);
-  int block_size = key_cache.size(1);
+  TORCH_CHECK(key_cache.dim() == 4 && value_cache.dim() == 4,
+              "KV cache must be rank-4");
+
+  const bool is_nhd = (key_cache.size(2) == num_heads);
+
+  const int64_t block_stride = key_cache.stride(0);
+  const int64_t page_stride  = is_nhd ? key_cache.stride(1) : key_cache.stride(2);
+  const int64_t head_stride  = is_nhd ? key_cache.stride(2) : key_cache.stride(1);
+  const int      block_size  = is_nhd ? key_cache.size(1)   : key_cache.size(2);
+
+  TORCH_CHECK(value_cache.stride(0) == block_stride, "block_stride mismatch");
+  TORCH_CHECK((is_nhd ? value_cache.stride(1) : value_cache.stride(2)) == page_stride,
+              "page_stride mismatch");
+  TORCH_CHECK((is_nhd ? value_cache.stride(2) : value_cache.stride(1)) == head_stride,
+              "head_stride mismatch");
+  TORCH_CHECK((is_nhd ? value_cache.size(1) : value_cache.size(2)) == block_size,
+              "block_size mismatch between key_cache and value_cache");
 
   int64_t key_stride = key.stride(0);
   int64_t value_stride = value.stride(0);
-  int64_t block_stride = key_cache.stride(0);
-  int64_t page_stride = key_cache.stride(1);
-  int64_t head_stride = key_cache.stride(2);
   TORCH_CHECK(key_cache.stride(0) == value_cache.stride(0));
 
   dim3 grid(num_tokens);
-  // Using a block size that is a multiple of 32 is good for warp-based logic
-  dim3 block(std::min(num_heads * head_size, 512));
+  dim3 block(
+      std::min(static_cast<int>(num_heads) * static_cast<int>(head_size), 512));
   const at::cuda::OptionalCUDAGuard device_guard(device_of(key));
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
@@ -295,7 +310,8 @@ void reshape_and_cache_flash_fp4(
             head_stride, key_stride, value_stride, num_heads, head_size,
             block_size, k_scale.data_ptr<float>(), v_scale.data_ptr<float>(),
             key_scale_cache.data_ptr<uint8_t>(),
-            value_scale_cache.data_ptr<uint8_t>());
+            value_scale_cache.data_ptr<uint8_t>(),
+            is_nhd);
     break;
   }
   case torch::kBFloat16: {
@@ -309,7 +325,8 @@ void reshape_and_cache_flash_fp4(
             head_stride, key_stride, value_stride, num_heads, head_size,
             block_size, k_scale.data_ptr<float>(), v_scale.data_ptr<float>(),
             key_scale_cache.data_ptr<uint8_t>(),
-            value_scale_cache.data_ptr<uint8_t>());
+            value_scale_cache.data_ptr<uint8_t>(),
+            is_nhd);
     break;
   }
   default: {
