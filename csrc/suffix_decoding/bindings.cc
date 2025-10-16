@@ -25,10 +25,31 @@ namespace nb = nanobind;
 
 using Int32Array1D = nb::ndarray<int32_t, nb::numpy, nb::shape<-1>,
                                  nb::device::cpu, nb::any_contig>;
-using BatchVec = std::vector<std::pair<int, std::vector<int32_t>>>;
+using BatchVecSingle = std::vector<std::pair<int, std::vector<int32_t>>>;
+using BatchVecMulti = std::vector<std::tuple<SuffixTree*, int, std::vector<int32_t>>>;
 
-void extend_batch_vector(SuffixTree& tree, const BatchVec& batches) {
-    tree.extend_batch(batches);
+
+// batch single-tree
+void batch_extend_single(SuffixTree& tree, const BatchVecSingle& batches) {
+    for (const auto& item : batches) {
+        const int seq_id = item.first;
+        const auto& vec = item.second;
+        if (!vec.empty()) {
+            tree.extend(seq_id, std::span<const int32_t>(vec.data(), vec.size()));
+        }
+    }
+}
+
+// batch across multiple trees
+void batch_extend(const BatchVecMulti& batch) {
+    for (const auto& tup : batch) {
+        SuffixTree* tree = std::get<0>(tup);
+        int seq_id = std::get<1>(tup);
+        const auto& vec = std::get<2>(tup);
+        if (tree != nullptr && !vec.empty()) {
+            tree->extend(seq_id, std::span<const int32_t>(vec.data(), vec.size()));
+        }
+    }
 }
 
 
@@ -100,7 +121,8 @@ NB_MODULE(_C, m) {
         // resolution overhead at run-time.
         .def("extend", &extend_vector)
         .def("extend_ndarray", &extend_ndarray)
-        .def("extend_batch", &extend_batch_vector)
+        .def("batch_extend_single", &batch_extend_single)
+        .def("batch_extend", &batch_extend)
         // Overloads for speculate method.
         .def("speculate", &speculate_vector)
         .def("speculate_ndarray", &speculate_ndarray)

@@ -169,16 +169,6 @@ void SuffixTree::extend(int seq_id, std::span<const int32_t> tokens) {
     }
 }
 
-// Extend multiple sequences in a single call.
-void SuffixTree::extend_batch(const std::vector<std::pair<int, std::vector<int32_t>>>& batches) {
-    for (const auto& item : batches) {
-        const int seq_id = item.first;
-        const auto& vec = item.second;
-        if (!vec.empty()) {
-            extend(seq_id, std::span<const int32_t>(vec.data(), vec.size()));
-        }
-    }
-}
 
 // Remove an existing sequence.
 void SuffixTree::remove(int seq_id) {

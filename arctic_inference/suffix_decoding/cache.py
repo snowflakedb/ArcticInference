@@ -20,7 +20,7 @@ from typing import Dict, Hashable, KeysView, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from arctic_inference.suffix_decoding._C import SuffixTree, Draft
+from arctic_inference.suffix_decoding._C import SuffixTree, Draft, batch_extend
 
 
 @dataclass
@@ -193,6 +193,8 @@ class SuffixDecodingCache:
         # Update the local tree for the active request.
         self._local_trees[req_id].extend(0, token_ids)
 
+        # Also update the response if the request is in the global cache (it
+        # may be evicted from the global cache before the request is stopped).
         if req_id in self._req_to_seq_id:
             seq_id = self._req_to_seq_id[req_id]
             buf = self._pending_updates.get(seq_id)
@@ -202,14 +204,16 @@ class SuffixDecodingCache:
                 buf.extend(int(t) for t in token_ids)
                 
     def flush(self):
-        """Apply all staged updates with a single nanobind call."""
+        """Apply all staged updates with a single native call."""
         if not self._pending_updates:
-             return
-        batch: list[tuple[int, list[int]]] = [
-            (int(seq), toks) for seq, toks in self._pending_updates.items() if toks
+            return
+        # target the single global tree.
+        batch: list[tuple[SuffixTree, int, list[int]]] = [
+            (self._global_tree, int(seq), toks)
+            for seq, toks in self._pending_updates.items() if toks
         ]
         if batch:
-            self._global_tree.extend_batch(batch)
+            batch_extend(batch)
         self._pending_updates.clear()
 
     def evict_cached_response(self, req_id: Hashable):
@@ -276,7 +280,7 @@ class SuffixDecodingCache:
             raise ValueError(f"Request '{req_id}' is not active")
 
         if max_spec_tokens is None:
-            max_spec_tokens = self.max_depth
+            max_spec_tokens = self._max_tree_depth
 
         if len(context) > self._max_tree_depth:
             context = context[-self._max_tree_depth :]

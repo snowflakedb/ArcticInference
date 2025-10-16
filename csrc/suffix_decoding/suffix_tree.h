@@ -90,10 +90,6 @@ public:
     // Append multiple new elements to the sequence with id seq_id.
     void extend(int seq_id, std::span<const int32_t> tokens);
 
-    // Append multiple updates across sequences in one call.
-    // Each pair contains (seq_id, tokens).
-    void extend_batch(const std::vector<std::pair<int, std::vector<int32_t>>>& batches);
-
     // Remove the sequence with id seq_id.
     void remove(int seq_id);
 
