@@ -169,7 +169,6 @@ void SuffixTree::extend(int seq_id, std::span<const int32_t> tokens) {
     }
 }
 
-
 // Remove an existing sequence.
 void SuffixTree::remove(int seq_id) {
     const std::vector<int>& seq = _seqs[seq_id];

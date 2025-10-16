@@ -121,12 +121,13 @@ NB_MODULE(_C, m) {
         // resolution overhead at run-time.
         .def("extend", &extend_vector)
         .def("extend_ndarray", &extend_ndarray)
-        .def("batch_extend_single", &batch_extend_single)
-        .def("batch_extend", &batch_extend)
         // Overloads for speculate method.
         .def("speculate", &speculate_vector)
         .def("speculate_ndarray", &speculate_ndarray)
         // Debugging methods, not meant to be used in critical loop.
         .def("check_integrity", &SuffixTree::check_integrity)
         .def("estimate_memory", &SuffixTree::estimate_memory);
+
+    m.def("batch_extend", &batch_extend);
+    m.def("batch_extend_single", &batch_extend_single);
 }
