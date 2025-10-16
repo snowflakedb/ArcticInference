@@ -280,7 +280,7 @@ class SuffixDecodingCache:
             raise ValueError(f"Request '{req_id}' is not active")
 
         if max_spec_tokens is None:
-            max_spec_tokens = self._max_tree_depth
+            max_spec_tokens = self.max_depth
 
         if len(context) > self._max_tree_depth:
             context = context[-self._max_tree_depth :]
