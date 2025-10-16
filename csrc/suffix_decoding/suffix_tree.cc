@@ -252,7 +252,6 @@ void SuffixTree::append(int seq_id, int token) {
     // Iterate over all active nodes for this sequence.
     for (size_t i = 0; i < _active_nodes[seq_id].size(); ++i) {
         Node* node = _active_nodes[seq_id][i];
-        Node* parent = node->parent;
         Node* child = nullptr;
         if (node->children.contains(token)) {
             child = node->children[token].get();
@@ -264,7 +263,6 @@ void SuffixTree::append(int seq_id, int token) {
         if (child == nullptr) {
             // No existing child node for the new token.
             if (node->count == 1 && node != _root.get()) {
-                // std::cout << "Case A" << std::endl;
                 // The active node has count = 1, which means the only suffix that ends here is the
                 // one that's being extended right now. Then this node should be a leaf node, and
                 // we can simply extend the length of this node.
@@ -273,7 +271,6 @@ void SuffixTree::append(int seq_id, int token) {
                 node->length += 1;
                 node->endpoints[seq_id] += 1;
             } else {
-                // std::cout << "Case B" << std::endl;
                 // Either this is the root node, or the current suffix is not the only one that
                 // ends here. Either case, we need to extend the current suffix into a new child.
                 Node* new_child = new Node();
@@ -313,7 +310,6 @@ void SuffixTree::append(int seq_id, int token) {
             assert(node->children.size() == 1);  // The active node should have only one child.
             assert(node->endpoints.size() == 1);  // Only the current suffix should end here.
             if (child->length == 1) {
-                // std::cout << "Case C" << std::endl;
                 // The child only has length 1. If we append the new token to the current suffix,
                 // then it will perfectly overlap with the child. In this case, we should just fuse
                 // the current suffix into the child and eliminate the current node.
@@ -338,7 +334,6 @@ void SuffixTree::append(int seq_id, int token) {
                 // Replace active node with child node.
                 _active_nodes[seq_id][i] = child;
             } else {
-                // std::cout << "Case D" << std::endl;
                 // The child has length > 1. If we append the new token to the current suffix, then
                 // it still does not reach the child node. In this case, we keep both nodes but
                 // extend the length of the current node by 1 into the child node.
@@ -359,10 +354,8 @@ void SuffixTree::append(int seq_id, int token) {
         } else {
             // There is a child for the new token, and should move the active node into that child.
             if (child->length == 1) {
-                // std::cout << "Case E" << std::endl;
                 // The child node has length 1, just update the active node pointer to it.
                 node->endpoints.erase(seq_id);
-                // child->count += 1;
                 child->endpoints[seq_id] = static_cast<int>(_seqs[seq_id].size());
                 child->ref_seq = seq_id;
                 child->ref_idx = static_cast<int>(_seqs[seq_id].size()) - 1;
@@ -371,7 +364,6 @@ void SuffixTree::append(int seq_id, int token) {
                 // Replace active node with child node.
                 _active_nodes[seq_id][i] = child;
             } else {
-                // std::cout << "Case F" << std::endl;
                 // The child node has length > 1. If we extend the current suffix into it, then it
                 // must be split into a segment of length 1 and another segment with the remainder.
                 Node* new_node = new Node();
@@ -393,8 +385,6 @@ void SuffixTree::append(int seq_id, int token) {
                 child->parent = new_node;
                 child->length -= 1;
                 child->ref_idx += 1;
-                
-                // std::cout << "CHECK " << _check_node_integrity(node) << std::endl;
                 // Create a new group for the child node.
                 new_node->head_child = new_node->tail_child = child;
                 Group* group = new Group();
@@ -406,28 +396,6 @@ void SuffixTree::append(int seq_id, int token) {
                 _active_nodes[seq_id][i] = new_node;
             }
         }
-        std::string check;
-        // if (parent) {
-        //     check = _check_node_integrity(parent);
-        //     if (!check.empty()) {
-        //         std::cout << check << std::endl;
-        //         throw std::runtime_error("Suffix tree integrity check failed for parent");
-        //     }
-        // }
-        // if (node) {
-        //     check = _check_node_integrity(node);
-        //     if (!check.empty()) {
-        //         std::cout << check << std::endl;
-        //         throw std::runtime_error("Suffix tree integrity check failed for node");
-        //     }
-        // }
-        // if (child) {
-        //     check = _check_node_integrity(child);
-        //     if (!check.empty()) {
-        //         std::cout << check << std::endl;
-        //         throw std::runtime_error("Suffix tree integrity check failed for child");
-        //     }
-        // }
     }
 }
 
