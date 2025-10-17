@@ -16,7 +16,8 @@ find_package(pybind11 REQUIRED)
 find_package(Torch REQUIRED)
 
 pybind11_add_module(custom_ops
-  kernels.cu
+  reshape_and_cache_flash_fp4.cu
+  reshape_and_cache_flash_bulk.cu
   torch_bindings.cpp
 )
 

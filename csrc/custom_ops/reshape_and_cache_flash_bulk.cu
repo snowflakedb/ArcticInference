@@ -2,30 +2,21 @@
 #include "dispatch_utils.h"
 #include "quant_utils.cuh"
 
-#include <torch/cuda.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <torch/cuda.h>
 
 #include <vector>
 
 namespace vllm {
 
-template <typename scalar_t, 
-          typename cache_t, 
-          Fp8KVCacheDataType kv_dt>
+template <typename scalar_t, typename cache_t, Fp8KVCacheDataType kv_dt>
 __global__ void reshape_and_cache_flash_bulk_kernel(
-    const scalar_t* __restrict__ keys,
-    const scalar_t* __restrict__ values,
-    int64_t* key_cache_ptrs,
-    int64_t* value_cache_ptrs,
-    const int64_t* __restrict__ slot_mapping,
-    const int block_stride, 
-    const int key_stride, 
-    const int value_stride,
-    const int num_heads, 
-    const int head_size, 
-    const int block_size,
-    int64_t* k_scale_ptrs, 
-    int64_t* v_scale_ptrs) {
+    const scalar_t *__restrict__ keys, const scalar_t *__restrict__ values,
+    int64_t *key_cache_ptrs, int64_t *value_cache_ptrs,
+    const int64_t *__restrict__ slot_mapping, const int block_stride,
+    const int key_stride, const int value_stride, const int num_heads,
+    const int head_size, const int block_size, int64_t *k_scale_ptrs,
+    int64_t *v_scale_ptrs) {
   const int64_t layer_idx = blockIdx.x;
   const int64_t token_idx = blockIdx.y;
   const int64_t slot_idx = slot_mapping[token_idx];
@@ -37,14 +28,14 @@ __global__ void reshape_and_cache_flash_bulk_kernel(
   const int64_t block_offset = slot_idx % block_size;
   const int n = num_heads * head_size;
 
-  cache_t* __restrict__ key_cache =
-      reinterpret_cast<cache_t*>(key_cache_ptrs[layer_idx]);
-  cache_t* __restrict__ value_cache =
-      reinterpret_cast<cache_t*>(value_cache_ptrs[layer_idx]);
-  const float* __restrict__ k_scale =
-      reinterpret_cast<const float*>(k_scale_ptrs[layer_idx]);
-  const float* __restrict__ v_scale =
-      reinterpret_cast<const float*>(v_scale_ptrs[layer_idx]);
+  cache_t *__restrict__ key_cache =
+      reinterpret_cast<cache_t *>(key_cache_ptrs[layer_idx]);
+  cache_t *__restrict__ value_cache =
+      reinterpret_cast<cache_t *>(value_cache_ptrs[layer_idx]);
+  const float *__restrict__ k_scale =
+      reinterpret_cast<const float *>(k_scale_ptrs[layer_idx]);
+  const float *__restrict__ v_scale =
+      reinterpret_cast<const float *>(v_scale_ptrs[layer_idx]);
 
   for (int i = threadIdx.x; i < n; i += blockDim.x) {
     const int64_t src_key_idx = token_idx * key_stride + layer_idx * n + i;
@@ -70,29 +61,26 @@ __global__ void reshape_and_cache_flash_bulk_kernel(
 
 } // namespace vllm
 
-#define CALL_RESHAPE_AND_CACHE_FLASH_BULK(KV_T, CACHE_T, KV_DTYPE)       \
-  vllm::reshape_and_cache_flash_bulk_kernel<KV_T, CACHE_T, KV_DTYPE>     \
-      <<<grid, block, 0, stream>>>(                                      \
-          reinterpret_cast<KV_T*>(keys.data_ptr()),                      \
-          reinterpret_cast<KV_T*>(values.data_ptr()),                    \
-          key_cache_ptrs_tensor.data_ptr<int64_t>(),                     \
-          value_cache_ptrs_tensor.data_ptr<int64_t>(),                   \
-          slot_mapping.data_ptr<int64_t>(), block_stride, key_stride,    \
-          value_stride, static_cast<int>(num_heads),                     \
-          static_cast<int>(head_size), block_size,                       \
-          k_scale_ptrs_tensor.data_ptr<int64_t>(),                       \
+#define CALL_RESHAPE_AND_CACHE_FLASH_BULK(KV_T, CACHE_T, KV_DTYPE)             \
+  vllm::reshape_and_cache_flash_bulk_kernel<KV_T, CACHE_T, KV_DTYPE>           \
+      <<<grid, block, 0, stream>>>(                                            \
+          reinterpret_cast<KV_T *>(keys.data_ptr()),                           \
+          reinterpret_cast<KV_T *>(values.data_ptr()),                         \
+          key_cache_ptrs_tensor.data_ptr<int64_t>(),                           \
+          value_cache_ptrs_tensor.data_ptr<int64_t>(),                         \
+          slot_mapping.data_ptr<int64_t>(), block_stride, key_stride,          \
+          value_stride, static_cast<int>(num_heads),                           \
+          static_cast<int>(head_size), block_size,                             \
+          k_scale_ptrs_tensor.data_ptr<int64_t>(),                             \
           v_scale_ptrs_tensor.data_ptr<int64_t>());
 
 void reshape_and_cache_flash_bulk(
-    torch::Tensor& keys, 
-    torch::Tensor& values,
-    std::vector<torch::Tensor> const& key_caches,
-    std::vector<torch::Tensor> const& value_caches,
-    torch::Tensor& slot_mapping, 
-    const std::string& kv_cache_dtype, 
-    std::vector<torch::Tensor> const& k_scales, 
-    std::vector<torch::Tensor> const& v_scales,
-    int64_t num_heads,
+    torch::Tensor &keys, torch::Tensor &values,
+    std::vector<torch::Tensor> const &key_caches,
+    std::vector<torch::Tensor> const &value_caches, torch::Tensor &slot_mapping,
+    const std::string &kv_cache_dtype,
+    std::vector<torch::Tensor> const &k_scales,
+    std::vector<torch::Tensor> const &v_scales, int64_t num_heads,
     int64_t head_size) {
   int num_layers = key_caches.size();
 
@@ -146,7 +134,8 @@ void reshape_and_cache_flash_bulk(
           .to(device_of_key);
 
   dim3 grid(num_layers, num_tokens);
-  dim3 block(std::min(static_cast<int>(num_heads) * static_cast<int>(head_size), 512));
+  dim3 block(
+      std::min(static_cast<int>(num_heads) * static_cast<int>(head_size), 512));
 
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
