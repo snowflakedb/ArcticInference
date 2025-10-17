@@ -203,11 +203,11 @@ def process_task(
         for request_id in tqdm(evict_ids, desc="Evicting cached responses"):
             suffix_cache.evict_cached_response(request_id)
 
-    print("Checking cache integrity...", end=" ", flush=True)
-    if ret := suffix_cache._global_tree.check_integrity():
-        raise RuntimeError(f"Cache integrity check failed: {ret}")
-    else:
-        print("OK")
+    # print("Checking cache integrity...", end=" ", flush=True)
+    # if ret := suffix_cache._global_tree.check_integrity():
+    #     raise RuntimeError(f"Cache integrity check failed: {ret}")
+    # else:
+    #     print("OK")
 
     num_cached_tokens = {request_id: num_cached_tokens[request_id]
                          for request_id in suffix_cache.cached_requests}

@@ -439,10 +439,6 @@ void SuffixTree::append(int seq_id, int token) {
                 node->endpoints.erase(seq_id);
                 child->endpoints[seq_id] = seq_len;
 
-                // TODO: do we need to do this? 
-                // child->ref_seq = seq_id;
-                // child->ref_idx = static_cast<int>(_seqs[seq_id].size()) - 1;
-
                 // Increment the child count and update siblings list.
                 _increment_count(child);
 
