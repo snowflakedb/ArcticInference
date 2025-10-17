@@ -28,35 +28,55 @@
 struct Group;
 
 struct Node {
+    // Number of suffixes from the root that end at or pass through this node.
+    int64_t count = 0;
+
     // Token referenced by this node. Node can refer to a sequence of tokens,
     // this is just the ID of the first token.
     int token = 0;
 
-    // Number of suffixes from the root that end at or pass through this node.
-    int64_t count = 0;
+    // Number of tokens in this node.
+    int length = 0;
 
-    // Parent node.
+    // Reference sequence ID and starting index for the tokens in this node.
+    // Implements the path compression optimization to achieve O(N) memory.
+    int ref_seq = 0;
+    int ref_idx = -1;
+
+    // This map tracks all the suffixes that end at this node. Maps seq_id to
+    // the end index of that suffix (may be truncated due to tree depth). Used
+    // to find a new ref_seq and ref_idx if the reference sequence is deleted.
+    Int32Map<int> endpoints;
+
+    // Pointer to parent node.
     Node* parent = nullptr;
-    
-    Node* next_sibling = nullptr;
-    Node* prev_sibling = nullptr;
-    std::shared_ptr<Group> group = nullptr;
 
     // Children nodes, the key should always be the first token of the child.
     Int32Map<std::unique_ptr<Node>> children;
 
+    // All the children of each node are kept in order of decreasing count in
+    // a doubly linked list for efficient speculation. head_child points to the
+    // first child (highest count) and tail_child points to the last child.
     Node* head_child = nullptr;
     Node* tail_child = nullptr;
 
-    // Maps sequence ID -> index of the end of the suffix in that sequence.
-    Int32Map<int> endpoints;
+    // Pointers to the next and previous siblings in the doubly linked list.
+    Node* next_sibling = nullptr;
+    Node* prev_sibling = nullptr;
 
-    // Reference sequence ID and starting index for the tokens in this node.
-    int ref_seq = 0;
-    int ref_idx = -1;
+    // To enable efficient reordering of the siblings list when counts change,
+    // nodes with the same count are grouped together. Each node holds a shared
+    // pointer to its group, and the groups also form a doubly linked list.
+    std::shared_ptr<Group> group = nullptr;
 
-    // Number of tokens in this node.
-    int length = 0;
+    Node() = default;
+
+    Node(int64_t count, int token, int length, int ref_seq, int ref_idx)
+        : count(count),
+          token(token),
+          length(length),
+          ref_seq(ref_seq),
+          ref_idx(ref_idx) {}
 
     // Memory usage of this node.
     size_t memory_usage() const {
@@ -68,9 +88,16 @@ struct Node {
 };
 
 struct Group {
+    // Pointer to the head node of this group. All nodes before the head node
+    // have a strictly higher count, and all nodes after the head node have a
+    // lower or equal count.
+    Node* head = nullptr;
+
+    // Pointers to the next and previous groups in the doubly linked list.
     Group* next = nullptr;
     Group* prev = nullptr;
-    Node* head = nullptr;
+
+    Group(Node* head) : head(head) {}
 };
 
 struct Draft {

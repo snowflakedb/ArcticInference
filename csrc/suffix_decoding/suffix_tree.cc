@@ -22,7 +22,8 @@
 #include "suffix_tree.h"
 
 #define CHECK_OR_RETURN(cond) \
-    if (!(cond)) return "Integrity check failed (line " + std::to_string(__LINE__) + "): " + #cond;
+    if (!(cond)) return "Integrity check failed at line " + \
+                        std::to_string(__LINE__) + ": " + #cond;
 
 SuffixTree::SuffixTree(int max_depth)
     : _max_depth(max_depth), _root(new Node()) {
@@ -97,8 +98,7 @@ void _insert_into_siblings_before(Node* node, Node* other) {
         Group* group = node->group.get();
         if (!group) {
             // The node does not come with a group, create a new one.
-            group = new Group();
-            group->head = node;
+            group = new Group(node);
             node->group.reset(group);  // std::shared_ptr assignment
         }
         assert(group->head == node && !group->next && !group->prev);
@@ -144,8 +144,7 @@ void _insert_into_siblings_after(Node* node, Node* other) {
         Group* group = node->group.get();
         if (!group) {
             // The node does not come with a group, create a new one.
-            group = new Group();
-            group->head = node;
+            group = new Group(node);
             node->group.reset(group);  // std::shared_ptr assignment
         }
         assert(group->head == node && !group->next && !group->prev);
@@ -203,14 +202,12 @@ void _increment_count(Node* node) {
             // join the previous group, so just update its count.
             assert(node->group.use_count() == 1);
             node->count += 1;
-            // std::cout << "Increment 1" << std::endl;
         } else {
             // The node will split off from its current group to a new group.
             assert(node->next_sibling->count == node->count);
             Group* orig_group = node->group.get();
             orig_group->head = node->next_sibling;
-            Group* new_group = new Group();
-            new_group->head = node;
+            Group* new_group = new Group(node);
             new_group->next = orig_group;
             if (orig_group->prev) {
                 new_group->prev = orig_group->prev;
@@ -219,16 +216,77 @@ void _increment_count(Node* node) {
             orig_group->prev = new_group;
             node->group.reset(new_group);  // std::shared_ptr assignment
             node->count += 1;
-            // std::cout << "Increment 2" << std::endl;
         }
     } else {
         // The node needs to be moved.
         assert(node->prev_sibling->count >= node->count);
-        Node* other = node->prev_sibling->group->head;
+        Node* other_node = node->prev_sibling->group->head;
         _remove_from_siblings(node);
         node->count += 1;
-        _insert_into_siblings_before(node, other);
-        // std::cout << "Increment 3" << std::endl;
+        _insert_into_siblings_before(node, other_node);
+    }
+}
+
+void _decrement_count(Node* node) {
+    // Decrement the count of a node by 1, and update its position in the
+    // sibling and group linked lists if necessary.
+    assert(node->count > 0);
+    if (!node->parent) {
+        // Root node has no siblings, update its count and return.
+        node->count -= 1;
+        return;
+    }
+    if (!node->next_sibling || node->next_sibling->count < node->count - 1) {
+        // The node does not need to move, and will not join the next group
+        // after its count is decremented.
+        if (!node->prev_sibling || node->prev_sibling->count > node->count) {
+            // The node should be the only member of its group and will not
+            // join the next group, so just update its count.
+            assert(node->group.use_count() == 1);
+            node->count -= 1;
+        } else {
+            // The node will split off from its current group to a new group.
+            assert(node->prev_sibling->count == node->count);
+            Group* orig_group = node->group.get();
+            Group* new_group = new Group(node);
+            new_group->prev = orig_group;
+            if (orig_group->next) {
+                new_group->next = orig_group->next;
+                new_group->next->prev = new_group;
+            }
+            orig_group->next = new_group;
+            node->group.reset(new_group);  // std::shared_ptr assignment
+            node->count -= 1;
+        }
+    } else if (node->next_sibling->count == node->count - 1) {
+        // The node does not need to move, and will join the same group as its
+        // next sibling.
+        assert(node->next_sibling->group->head == node->next_sibling);
+        node->next_sibling->group->head = node;
+        if (node->group->head == node) {
+            // The node is the head of its group, so the group will be removed.
+            assert(node->group.use_count() == 1);
+            Group* group = node->group.get();
+            if (group->prev) {
+                group->prev->next = group->next;
+            }
+            group->next->prev = group->prev;
+        }
+        node->group = node->next_sibling->group;  // std::shared_ptr assignment
+        node->count -= 1;
+    } else {
+        // The node needs to be moved to the next group.
+        assert(node->next_sibling->count == node->count);
+        Group* other_group = node->group->next;
+        _remove_from_siblings(node);
+        node->count -= 1;
+        if (!other_group) {
+            // No next group, insert at the end of the siblings list.
+            _insert_into_siblings_after(node, node->parent->tail_child);
+        } else {
+            // Insert as the head of the next group.
+            _insert_into_siblings_before(node, other_group->head);
+        }
     }
 }
 
@@ -240,7 +298,7 @@ void SuffixTree::append(int seq_id, int token) {
 
     // Insert a new active node at the root.
     _active_nodes[seq_id].push_back(_root.get());
-    _root->endpoints[seq_id] = static_cast<int>(_seqs[seq_id].size());
+    _root->endpoints[seq_id] = static_cast<int32_t>(_seqs[seq_id].size());
     _root->count += 1;
 
     // Ensure the number of active nodes doesn't exceed max_depth.
@@ -248,6 +306,7 @@ void SuffixTree::append(int seq_id, int token) {
         _active_nodes[seq_id].pop_front();
     }
     _seqs[seq_id].push_back(token);
+    int32_t seq_len = static_cast<int32_t>(_seqs[seq_id].size());
     
     // Iterate over all active nodes for this sequence.
     for (size_t i = 0; i < _active_nodes[seq_id].size(); ++i) {
@@ -261,138 +320,179 @@ void SuffixTree::append(int seq_id, int token) {
         assert(node->endpoints[seq_id] == _seqs[seq_id].size() - 1);
 
         if (child == nullptr) {
-            // No existing child node for the new token.
+            // Case 1: No existing child node for the new token.
             if (node->count == 1 && node != _root.get()) {
-                // The active node has count = 1, which means the only suffix that ends here is the
-                // one that's being extended right now. Then this node should be a leaf node, and
-                // we can simply extend the length of this node.
+                // Case 1a: The active node has count = 1, which means the only
+                // suffix that ends here is the one that's being extended right
+                // now. Then this node should be a leaf node, and we can simply
+                // extend the length of this node.
                 assert(node->children.empty());
                 assert(node->ref_seq == seq_id);
                 node->length += 1;
                 node->endpoints[seq_id] += 1;
             } else {
-                // Either this is the root node, or the current suffix is not the only one that
-                // ends here. Either case, we need to extend the current suffix into a new child.
-                Node* new_child = new Node();
-                new_child->token = token;
+                // Case 1b: Either this is the root node, or the current suffix
+                // is not the only one that passes through this node. Need to
+                // extend the current suffix into a new child.
+
+                // Create the new child node.
+                Node* new_child = new Node(
+                    1, // count
+                    token,
+                    1, // length
+                    seq_id,
+                    seq_len - 1);
                 new_child->parent = node;
-                new_child->count = 1;
-                new_child->endpoints[seq_id] = static_cast<int>(_seqs[seq_id].size());
-                new_child->ref_seq = seq_id;
-                new_child->ref_idx = static_cast<int>(_seqs[seq_id].size()) - 1;
-                new_child->length = 1;
+                new_child->endpoints[seq_id] = seq_len;
+
+                // Add new child to active node.
                 node->children.emplace(token, new_child);
+
+                // Move the endpoint for the sequence from the active node to
+                // the new child node.
                 node->endpoints.erase(seq_id);
-                // Maintain doubly-linked list of children and groups.
-                if (node->tail_child == nullptr) {
+
+                // Link the new child node into the siblings list.
+                if (node->children.size() == 1) {
                     // This should be the first child being added.
-                    assert(node->head_child == nullptr && node->children.size() == 1);
+                    assert(!node->head_child && !node->tail_child);
                     node->head_child = node->tail_child = new_child;
-                    // Create a new group for this child.
-                    Group* group = new Group();
-                    group->head = new_child;
-                    new_child->group.reset(group);  // std::shared_ptr assignment
-                } else if (node->tail_child->count == 1) {
-                    // Prefer to join as the head of the last group if possible.
-                    _insert_into_siblings_before(new_child, node->tail_child->group->head);
+                    new_child->group.reset(new Group(new_child));
                 } else {
-                    // Otherwise, just insert as the tail child.
-                    assert(node->tail_child->count > 1);
+                    assert(node->tail_child);
                     _insert_into_siblings_after(new_child, node->tail_child);
                 }
-                // Update the active node to the new child.
+
+                // Update the active node to the new child node.
                 _active_nodes[seq_id][i] = new_child;
             }
         } else if (node->count == child->count + 1 && node != _root.get()) {
-            // The active node has a child for the new token, and the child's count is exactly one
-            // fewer than the active node's count. Since the suffix for the active node ends here,
-            // that means all other suffixes that pass through this node must go to that child.
-            assert(node->children.size() == 1);  // The active node should have only one child.
-            assert(node->endpoints.size() == 1);  // Only the current suffix should end here.
+            // Case 2: The active node has a child for the new token, and that
+            // child's count is exactly one fewer than the active node's count.
+            // Since the suffix for the active node ends here, then all other
+            // suffixes that pass through this node must go to that child.
+            assert(node->children.size() == 1);  // Should have only one child.
+            assert(node->endpoints.size() == 1);  // The current seq ends here.
             if (child->length == 1) {
-                // The child only has length 1. If we append the new token to the current suffix,
-                // then it will perfectly overlap with the child. In this case, we should just fuse
-                // the current suffix into the child and eliminate the current node.
-                Node* parent = node->parent;
+                // Case 2a: The child has length 1. If we append the new token
+                // to the current suffix, then it will perfectly overlap with
+                // that child. Fuse the current active node with that child.
+
                 // Update child to take the place of the current node.
+                child->count += 1;  // Active node extends into the child node.
                 child->token = node->token;
-                child->count += 1;  // Current suffix extends into the child.
                 child->length = node->length + 1;
-                child->endpoints[seq_id] = static_cast<int>(_seqs[seq_id].size());
                 child->ref_seq = seq_id;
-                child->ref_idx = static_cast<int>(_seqs[seq_id].size()) - child->length;
-                child->parent = parent;
-                // Child now has the same count as the node, so it can simply take the node's place
-                // in the siblings and groups linked lists.
+                child->ref_idx = seq_len - child->length;
+                child->endpoints[seq_id] = seq_len;
+                child->parent = node->parent;
+
+                // Replace the current node with the child in the sibling list.
+                // Must be done before changing any of the node's pointers.
                 _replace_in_siblings(node, child);
-                // Give ownership of child pointer to parent and should also free the current node.
-                assert(parent->children.contains(child->token));
-                assert(parent->children[child->token].get() == node);
+
+                // Remove the current node from the suffix tree.
+                Node* parent = node->parent;
+                assert(parent->children.contains(node->token));
+                assert(parent->children[node->token].get() == node);
+                // Do it in two steps to avoid undefined evaluation order.
                 Node* tmp = node->children[token].release();
                 parent->children[child->token].reset(tmp);
-                node = nullptr;
+
                 // Replace active node with child node.
                 _active_nodes[seq_id][i] = child;
             } else {
-                // The child has length > 1. If we append the new token to the current suffix, then
-                // it still does not reach the child node. In this case, we keep both nodes but
-                // extend the length of the current node by 1 into the child node.
+                // Case 2b: The child has length > 1. If we append the new
+                // token to the current suffix, then it still does not reach
+                // the child node. In this case, we keep both nodes but extend
+                // the length of the current node by 1 into the child node.
+
+                // Extend the length of the current node by 1.
                 node->length += 1;
-                node->endpoints[seq_id] += 1;
-                node->ref_seq = seq_id;
-                node->ref_idx = static_cast<int>(_seqs[seq_id].size()) - node->length;
+                node->endpoints[seq_id] += 1;  // Advance endpoint for the seq.
+                node->ref_seq = seq_id;  // Need to update the ref sequence.
+                node->ref_idx = seq_len - node->length;
+
+                // Child should shrink by 1 at the beginning.
                 child->length -= 1;
                 child->ref_idx += 1;
-                // The child node's first token should be updated to its second token.
+
+                // The child's first token must be updated to its second token.
                 child->token = _seqs[child->ref_seq][child->ref_idx];
                 if (child->token != token) {
+                    // Need to update the key in the parent's children map.
                     Node* tmp = node->children[token].release();
                     node->children.emplace(child->token, tmp);
                     node->children.erase(token);
                 }
+
+                // Active node stays the same.
             }
         } else {
-            // There is a child for the new token, and should move the active node into that child.
+            // Case 3: There exists a child node for the new token, and the
+            // active node should move into that child.
             if (child->length == 1) {
-                // The child node has length 1, just update the active node pointer to it.
+                // Case 3a: The child node has length 1, just update the active
+                // node pointer to it.
+
+                // Move the endpoint for the sequence to the child.
                 node->endpoints.erase(seq_id);
-                child->endpoints[seq_id] = static_cast<int>(_seqs[seq_id].size());
-                child->ref_seq = seq_id;
-                child->ref_idx = static_cast<int>(_seqs[seq_id].size()) - 1;
-                // Increment the child count and update linked lists.
+                child->endpoints[seq_id] = seq_len;
+
+                // TODO: do we need to do this? 
+                // child->ref_seq = seq_id;
+                // child->ref_idx = static_cast<int>(_seqs[seq_id].size()) - 1;
+
+                // Increment the child count and update siblings list.
                 _increment_count(child);
+
                 // Replace active node with child node.
                 _active_nodes[seq_id][i] = child;
             } else {
-                // The child node has length > 1. If we extend the current suffix into it, then it
-                // must be split into a segment of length 1 and another segment with the remainder.
-                Node* new_node = new Node();
-                new_node->token = token;
-                new_node->count = child->count;
+                // Case 3b: The child node has length > 1. If the suffix is
+                // extended into it, then it must split into a segment of
+                // length 1 and another segment with the remainder.
+
+                // Create the new intermediate node.
+                Node* new_node = new Node(
+                    child->count,
+                    token,
+                    1,  // length
+                    seq_id,
+                    seq_len - 1);
                 new_node->parent = node;
-                new_node->length = 1;
-                new_node->endpoints[seq_id] = static_cast<int>(_seqs[seq_id].size());
-                new_node->ref_seq = seq_id;
-                new_node->ref_idx = static_cast<int>(_seqs[seq_id].size()) - new_node->length;
-                // Replace the child with the new node in the linked lists.
+
+                // Replace the child with the new node in the siblings list.
+                // Must be done before changing any of the child's pointers.
                 _replace_in_siblings(child, new_node);
-                // The child node's first token should be updated to its second token.
-                child->token = _seqs[child->ref_seq][child->ref_idx + 1];
-                Node* tmp = node->children[token].release();
-                new_node->children.emplace(child->token, tmp);
+
+                // Replace child with new node in the children map.
+                node->children[token].release();  // Should be child.
                 node->children[token].reset(new_node);
-                node->endpoints.erase(seq_id);
-                child->parent = new_node;
+
+                // Child should shrink by 1 at the beginning.
                 child->length -= 1;
                 child->ref_idx += 1;
+
+                // Child's first token must be updated to its second token.
+                child->token = _seqs[child->ref_seq][child->ref_idx];
+
+                // Insert the child into the new node's children map.
+                new_node->children.emplace(child->token, child);
+                child->parent = new_node;
+
+                // Move the endpoint for the sequence to the new node.
+                node->endpoints.erase(seq_id);
+                new_node->endpoints[seq_id] = seq_len;
+
                 // Create a new group for the child node.
                 new_node->head_child = new_node->tail_child = child;
-                Group* group = new Group();
-                group->head = child;
-                child->group.reset(group);  // std::shared_ptr assignment
-                // Increment the new node count and update linked lists.
+                child->group.reset(new Group(child));
+
+                // Increment the new node count and update siblings lists.
                 _increment_count(new_node);
-                // Update active node.
+
+                // Update active node to the new intermediate node.
                 _active_nodes[seq_id][i] = new_node;
             }
         }
@@ -423,9 +523,12 @@ void SuffixTree::remove(int seq_id) {
                 break;
             }
             Node* child = node->children[token].get();
-            assert(child->count > 0);
-            child->count--;
-            if (child->count == 0) {
+            if (child->count > 1) {
+                _decrement_count(child);
+            } else {
+                assert(child->count == 1);
+                // Remove the child along with its entire subtree.
+                _remove_from_siblings(child);
                 node->children.erase(token);
                 break;
             }
@@ -441,11 +544,12 @@ void SuffixTree::remove(int seq_id) {
             const auto& it = *node->children.begin();
             std::unique_ptr<Node>& child_uptr = node->children[it.first];
             if (node->count == child_uptr->count) {
-                // Merge node into child.
+                // Merge node into child and eliminate node.
                 child_uptr->token = node->token;
                 child_uptr->length += node->length;
                 child_uptr->ref_idx -= node->length;
                 child_uptr->parent = node->parent;
+                _replace_in_siblings(node, child_uptr.get());
                 path.back() = node = child_uptr.release();
                 node->parent->children[node->token].reset(node);
             }
@@ -593,15 +697,17 @@ std::string SuffixTree::_check_node_integrity(Node* node) {
         CHECK_OR_RETURN(node->length > 0);
         // Node count should be positive.
         CHECK_OR_RETURN(node->count > 0);
-        // Each child count should be strictly less than the node count. Otherwise, the node and
-        // the child should have been merged into a single node.
+        // Each child count should be strictly less than the node count.
+        // Otherwise, the node and the child should have been merged into a
+        // single node.
         for (const auto& [token, child] : node->children) {
             CHECK_OR_RETURN(child->count < node->count);
         }
         // Internal nodes must have a valid reference sequence and index.
         CHECK_OR_RETURN(_seqs.count(node->ref_seq));
         CHECK_OR_RETURN(node->ref_idx >= 0);
-        CHECK_OR_RETURN(node->ref_idx + node->length <= _seqs[node->ref_seq].size());
+        CHECK_OR_RETURN(
+            node->ref_idx + node->length <= _seqs[node->ref_seq].size());
         // Check the first token of the node is correct.
         CHECK_OR_RETURN(node->token == _seqs[node->ref_seq][node->ref_idx]);
         // Check the node is in its parent's children map.
@@ -616,7 +722,8 @@ std::string SuffixTree::_check_node_integrity(Node* node) {
             // Check all tokens from the start of the suffix to the endpoint.
             Node* n = node;
             int idx = end_idx;
-            // Walk up the tree and check all tokens agree with the suffix ending at this endpoint.
+            // Walk up the tree and check all tokens agree with the suffix
+            // ending at this endpoint.
             do {
                 // Check the index in the sequence is not underflowed.
                 CHECK_OR_RETURN(n->length <= idx);
@@ -657,7 +764,8 @@ std::string SuffixTree::_check_node_integrity(Node* node) {
                 CHECK_OR_RETURN(prev_child->next_sibling == child);
                 // Check the group pointers are correct.
                 if (child->count == prev_child->count) {
-                    // If the next sibling has the same count, they should be in the same group.
+                    // If the next sibling has the same count, they should be
+                    // in the same group.
                     CHECK_OR_RETURN(child->group == prev_child->group);
                 } else {
                     // Otherwise, they should be in different groups.
@@ -665,8 +773,10 @@ std::string SuffixTree::_check_node_integrity(Node* node) {
                     // The child should be the head of its group.
                     CHECK_OR_RETURN(child->group->head == child);
                     // Check group pointers are correct.
-                    CHECK_OR_RETURN(child->group->prev == prev_child->group.get());
-                    CHECK_OR_RETURN(prev_child->group->next == child->group.get());
+                    CHECK_OR_RETURN(
+                        child->group->prev == prev_child->group.get());
+                    CHECK_OR_RETURN(
+                        prev_child->group->next == child->group.get());
 
                 }
             } else {
@@ -790,6 +900,13 @@ size_t SuffixTree::estimate_memory() const {
         Node* node = stack.back();
         stack.pop_back();
         total += node->memory_usage();
+        if (node->head_child) {
+            Group* group = node->head_child->group.get();
+            while (group) {
+                total += sizeof(*group);
+                group = group->next;
+            }
+        }
         for (const auto& [token, child] : node->children) {
             stack.push_back(child.get());
         }
@@ -797,8 +914,8 @@ size_t SuffixTree::estimate_memory() const {
     for (const auto& [seq_id, seq] : _seqs) {
         total += sizeof(decltype(seq)::value_type) * seq.capacity();
     }
-    for (const auto& [seq_id, active_nodes] : _active_nodes) {
-        total += sizeof(decltype(active_nodes)::value_type) * active_nodes.size();
+    for (const auto& [seq_id, nodes] : _active_nodes) {
+        total += sizeof(decltype(nodes)::value_type) * nodes.size();
     }
     return total;
 }
