@@ -501,6 +501,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         if self._suffix_cache is not None:
             self._update_suffix_cache(valid_sampled_token_ids)
+            # Apply all staged global-cache updates once per scheduler tick.
+            self._suffix_cache.flush()
 
         if not self.speculative_config:
             # Speculative decoding is not enabled.

@@ -16,11 +16,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Hashable, KeysView, List, Optional, Sequence
+from typing import Dict, Hashable, KeysView, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from arctic_inference.suffix_decoding._C import SuffixTree, Draft
+from arctic_inference.suffix_decoding._C import SuffixTree, Draft, batch_extend
 
 
 @dataclass
@@ -55,7 +55,6 @@ class SuffixDecodingDraft:
             match_len=draft.match_len,
         )
 
-
 class SuffixDecodingCache:
     
     def __init__(self,
@@ -78,14 +77,15 @@ class SuffixDecodingCache:
 
         # Global suffix tree caches previous responses in a single tree.
         self._global_tree = SuffixTree(max_tree_depth)
+        self._pending_updates: dict[int, list[int]] = {}
 
         # Local suffix trees cache prompts for each active request separately.
         self._local_trees = {}
 
         # Maps between Python request ID and int32_t sequence ID. Tracks all
         # request IDs that are in the global tree.
-        self._req_to_seq_id = {}
-        self._seq_to_req_id = {}
+        self._req_to_seq_id: Dict[Hashable, int] = {}
+        self._seq_to_req_id: Dict[int, Hashable] = {}
 
         # Unused sequence ID to assign to a new request ID.
         self._next_seq_id = 0
@@ -197,7 +197,24 @@ class SuffixDecodingCache:
         # may be evicted from the global cache before the request is stopped).
         if req_id in self._req_to_seq_id:
             seq_id = self._req_to_seq_id[req_id]
-            self._global_tree.extend(seq_id, token_ids)
+            buf = self._pending_updates.get(seq_id)
+            if buf is None:
+                self._pending_updates[seq_id] = [int(t) for t in token_ids]
+            else:
+                buf.extend(int(t) for t in token_ids)
+                
+    def flush(self):
+        """Apply all staged updates with a single native call."""
+        if not self._pending_updates:
+            return
+        # target the single global tree.
+        batch: list[tuple[SuffixTree, int, list[int]]] = [
+            (self._global_tree, int(seq), toks)
+            for seq, toks in self._pending_updates.items() if toks
+        ]
+        if batch:
+            batch_extend(batch)
+        self._pending_updates.clear()
 
     def evict_cached_response(self, req_id: Hashable):
         """
