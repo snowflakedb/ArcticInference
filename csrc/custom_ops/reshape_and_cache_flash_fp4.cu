@@ -99,13 +99,11 @@ inline __device__ float reciprocal_approximate_ftz(float a) {
   return b;
 }
 
-// Quantizes a 16-element vector (processed by a pair of threads) to FP4.
 template <typename scalar_t>
-__device__ __forceinline__ void quantize_16_to_fp4(
-    const scalar_t *__restrict__ src_base, // Points to start of 16-elem chunk
-    uint32_t *__restrict__ dst_base,       // Points to start of 8-byte dst
-    uint8_t *__restrict__ scale_dst,       // Points to the single scale byte
-    const int tid_in_block) {
+__device__ __forceinline__ void
+quantize_16_to_fp4(const scalar_t *__restrict__ src_base,
+                   uint32_t *__restrict__ dst_base,
+                   uint8_t *__restrict__ scale_dst, const int tid_in_block) {
 
   const int lane_in_pair = tid_in_block % 2;
 
@@ -154,15 +152,14 @@ __global__ void reshape_and_cache_flash_kernel_fp4(
     const scalar_t *__restrict__ key,   // [num_tokens, num_heads, head_size]
     const scalar_t *__restrict__ value, // [num_tokens, num_heads, head_size]
     cache_t *__restrict__ key_cache,    // NHD or HND
-    cache_t *__restrict__ value_cache, 
+    cache_t *__restrict__ value_cache,
     const int64_t *__restrict__ slot_mapping, // [num_tokens]
     const int64_t block_stride, const int64_t page_stride,
     const int64_t head_stride, const int64_t key_stride,
     const int64_t value_stride, const int num_heads, const int head_size,
     const int block_size, const float *k_scale, const float *v_scale,
     uint8_t *__restrict__ key_scale_cache,
-    uint8_t *__restrict__ value_scale_cache,
-    const bool is_nhd) {
+    uint8_t *__restrict__ value_scale_cache, const bool is_nhd) {
   const int64_t token_idx = blockIdx.x;
   const int64_t slot_idx = slot_mapping[token_idx];
   if (slot_idx < 0) {
@@ -196,7 +193,7 @@ __global__ void reshape_and_cache_flash_kernel_fp4(
                                           block_idx * scale_block_stride +
                                           block_offset * scale_page_stride;
 
-  constexpr int CHUNK_SIZE = 16; 
+  constexpr int CHUNK_SIZE = 16;
   constexpr int THREADS_PER_CHUNK = 2;
 
   const int lane = threadIdx.x % 32;
@@ -226,14 +223,17 @@ __global__ void reshape_and_cache_flash_kernel_fp4(
     for (int head = warp_id; head < num_heads; head += warps_in_block) {
       const scalar_t *__restrict__ k_src_h = key_src + head * head_size;
       const scalar_t *__restrict__ v_src_h = value_src + head * head_size;
+
+      cache_t *__restrict__ k_dst_head_u8 =
+          key_dst + static_cast<int64_t>(head) * head_stride;
+      cache_t *__restrict__ v_dst_head_u8 =
+          value_dst + static_cast<int64_t>(head) * head_stride;
+
       uint32_t *__restrict__ k_dst_h =
-          key_dst_fp4 +
-          static_cast<int64_t>(head) *
-              (head_stride / (sizeof(uint32_t) / sizeof(cache_t)));
+          reinterpret_cast<uint32_t *>(k_dst_head_u8);
       uint32_t *__restrict__ v_dst_h =
-          value_dst_fp4 +
-          static_cast<int64_t>(head) *
-              (head_stride / (sizeof(uint32_t) / sizeof(cache_t)));
+          reinterpret_cast<uint32_t *>(v_dst_head_u8);
+
       uint8_t *__restrict__ k_scale_dst_h =
           key_scale_dst + static_cast<int64_t>(head) * scale_head_stride;
       uint8_t *__restrict__ v_scale_dst_h =
@@ -258,17 +258,13 @@ __global__ void reshape_and_cache_flash_kernel_fp4(
 void reshape_and_cache_flash_fp4(
     torch::Tensor &key,   // [num_tokens, num_heads, head_size]
     torch::Tensor &value, // [num_tokens, num_heads, head_size]
-    torch::Tensor &key_cache, 
-    torch::Tensor &value_cache, 
-    torch::Tensor &slot_mapping,
-    const std::string &kv_cache_dtype, 
-    torch::Tensor &k_scale,
-    torch::Tensor &v_scale, 
-    torch::Tensor &key_scale_cache,
-    torch::Tensor &value_scale_cache) {
+    torch::Tensor &key_cache, torch::Tensor &value_cache,
+    torch::Tensor &slot_mapping, const std::string &kv_cache_dtype,
+    torch::Tensor &k_scale, torch::Tensor &v_scale,
+    torch::Tensor &key_scale_cache, torch::Tensor &value_scale_cache) {
   const int64_t num_tokens = slot_mapping.size(0);
-  const int64_t num_heads  = key.size(1);
-  const int64_t head_size  = key.size(2);
+  const int64_t num_heads = key.size(1);
+  const int64_t head_size = key.size(2);
 
   TORCH_CHECK(key_cache.dim() == 4 && value_cache.dim() == 4,
               "KV cache must be rank-4");
@@ -276,16 +272,21 @@ void reshape_and_cache_flash_fp4(
   const bool is_nhd = (key_cache.size(2) == num_heads);
 
   const int64_t block_stride = key_cache.stride(0);
-  const int64_t page_stride  = is_nhd ? key_cache.stride(1) : key_cache.stride(2);
-  const int64_t head_stride  = is_nhd ? key_cache.stride(2) : key_cache.stride(1);
-  const int      block_size  = is_nhd ? key_cache.size(1)   : key_cache.size(2);
+  const int64_t page_stride =
+      is_nhd ? key_cache.stride(1) : key_cache.stride(2);
+  const int64_t head_stride =
+      is_nhd ? key_cache.stride(2) : key_cache.stride(1);
+  const int block_size = is_nhd ? key_cache.size(1) : key_cache.size(2);
 
   TORCH_CHECK(value_cache.stride(0) == block_stride, "block_stride mismatch");
-  TORCH_CHECK((is_nhd ? value_cache.stride(1) : value_cache.stride(2)) == page_stride,
+  TORCH_CHECK((is_nhd ? value_cache.stride(1) : value_cache.stride(2)) ==
+                  page_stride,
               "page_stride mismatch");
-  TORCH_CHECK((is_nhd ? value_cache.stride(2) : value_cache.stride(1)) == head_stride,
+  TORCH_CHECK((is_nhd ? value_cache.stride(2) : value_cache.stride(1)) ==
+                  head_stride,
               "head_stride mismatch");
-  TORCH_CHECK((is_nhd ? value_cache.size(1) : value_cache.size(2)) == block_size,
+  TORCH_CHECK((is_nhd ? value_cache.size(1) : value_cache.size(2)) ==
+                  block_size,
               "block_size mismatch between key_cache and value_cache");
 
   int64_t key_stride = key.stride(0);
@@ -293,8 +294,10 @@ void reshape_and_cache_flash_fp4(
   TORCH_CHECK(key_cache.stride(0) == value_cache.stride(0));
 
   dim3 grid(num_tokens);
-  dim3 block(
-      std::min(static_cast<int>(num_heads) * static_cast<int>(head_size), 512));
+  int threads = std::min<int>(num_heads * head_size, 512);
+  threads = std::max(32, ((threads + 31) / 32) * 32);
+  dim3 block(threads);
+
   const at::cuda::OptionalCUDAGuard device_guard(device_of(key));
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
@@ -310,8 +313,7 @@ void reshape_and_cache_flash_fp4(
             head_stride, key_stride, value_stride, num_heads, head_size,
             block_size, k_scale.data_ptr<float>(), v_scale.data_ptr<float>(),
             key_scale_cache.data_ptr<uint8_t>(),
-            value_scale_cache.data_ptr<uint8_t>(),
-            is_nhd);
+            value_scale_cache.data_ptr<uint8_t>(), is_nhd);
     break;
   }
   case torch::kBFloat16: {
@@ -325,8 +327,7 @@ void reshape_and_cache_flash_fp4(
             head_stride, key_stride, value_stride, num_heads, head_size,
             block_size, k_scale.data_ptr<float>(), v_scale.data_ptr<float>(),
             key_scale_cache.data_ptr<uint8_t>(),
-            value_scale_cache.data_ptr<uint8_t>(),
-            is_nhd);
+            value_scale_cache.data_ptr<uint8_t>(), is_nhd);
     break;
   }
   default: {
