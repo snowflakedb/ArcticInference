@@ -793,7 +793,8 @@ std::string SuffixTree::_check_node_integrity(Node* node) {
     return "";
 }
 
-std::pair<Node*, int> SuffixTree::_match_context(std::span<const int32_t> context) {
+std::pair<Node*, int> SuffixTree::_match_context(
+        std::span<const int32_t> context) {
     Node* node = _root.get();
     int idx = 0;
     for (int i = 0; i < context.size(); i++) {
@@ -823,7 +824,7 @@ Draft SuffixTree::_speculate_path(Node* node, int idx,
         if (idx < node->length) {
             // Use previous token index as parent; if none, mark as -1.
             ret.parents.push_back(static_cast<int>(ret.token_ids.size()) - 1);
-            int token = _seqs[node->ref_seq][node->ref_idx + idx];
+            int32_t token = _seqs[node->ref_seq][node->ref_idx + idx];
             ret.token_ids.push_back(token);
             ret.probs.push_back(prob);
             ret.score += prob;
@@ -852,7 +853,7 @@ struct HeapItem {
         : prob(p), node(n), idx(i), parent(par) {}
 };
 
-struct HeapItemCompare {
+struct HeapItemCmp {
     bool operator()(const HeapItem& a, const HeapItem& b) const {
         // In C++ priority_queue by default returns the largest element.
         // Thus, we compare probabilities so that the highest prob is returned.
@@ -865,26 +866,26 @@ Draft SuffixTree::_speculate_tree(Node* node, int idx,
                                   int max_spec_tokens,
                                   float min_token_prob) {
     Draft ret;
-    std::priority_queue<HeapItem, std::vector<HeapItem>, HeapItemCompare> queue;
+    std::priority_queue<HeapItem, std::vector<HeapItem>, HeapItemCmp> queue;
     queue.emplace(1.0, node, idx, -1);
     while (ret.token_ids.size() < max_spec_tokens && !queue.empty()) {
-        HeapItem item = queue.top();
+        HeapItem it = queue.top();
         queue.pop();
-        if (item.idx < item.node->length) {
-            int token = _seqs[item.node->ref_seq][item.node->ref_idx + item.idx];
+        if (it.idx < it.node->length) {
+            int32_t token = _seqs[it.node->ref_seq][it.node->ref_idx + it.idx];
             ret.token_ids.push_back(token);
-            ret.parents.push_back(item.parent);
-            ret.probs.push_back(item.prob);
-            ret.score += item.prob;
-            queue.emplace(item.prob, item.node, item.idx + 1,
+            ret.parents.push_back(it.parent);
+            ret.probs.push_back(it.prob);
+            ret.score += it.prob;
+            queue.emplace(it.prob, it.node, it.idx + 1,
                           static_cast<int>(ret.token_ids.size()) - 1);
         } else {
-            for (const auto& kv : item.node->children) {
+            for (const auto& kv : it.node->children) {
                 Node* child = kv.second.get();
-                float prob = item.prob * child->count / 
-                    static_cast<float>(item.node->count);
+                float prob = it.prob * child->count /
+                    static_cast<float>(it.node->count);
                 if (prob >= min_token_prob) {
-                    queue.emplace(prob, child, 0, item.parent);
+                    queue.emplace(prob, child, 0, it.parent);
                 }
             }
         }
