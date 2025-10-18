@@ -793,17 +793,18 @@ std::pair<Node*, int> SuffixTree::_match_context(
         std::span<const int32_t> context) {
     Node* node = _root.get();
     int idx = 0;
-    for (int i = 0; i < context.size(); i++) {
-        int c = context[i];
+    const int32_t* ref_data = nullptr;
+    for (int32_t token : context) {
         if (idx >= node->length) {
-            if (!node->children.contains(c)) {
+            if (!node->children.contains(token)) {
                 return {nullptr, -1};
             }
-            node = node->children[c].get();
+            node = node->children[token].get();
+            ref_data = _seqs[node->ref_seq].data() + node->ref_idx;
             idx = 0;
         }
         assert(idx < node->length);
-        if (_seqs[node->ref_seq][node->ref_idx + idx] != c) {
+        if (ref_data[idx] != token) {
             return {nullptr, -1};
         }
         idx++;
@@ -816,12 +817,12 @@ Draft SuffixTree::_speculate_path(Node* node, int idx,
                                   float min_token_prob) {
     Draft ret;
     float prob = 1.0f;
+    const int32_t* ref_data = _seqs[node->ref_seq].data() + node->ref_idx;
     while (ret.token_ids.size() < max_spec_tokens && prob >= min_token_prob) {
         if (idx < node->length) {
             // Use previous token index as parent; if none, mark as -1.
             ret.parents.push_back(static_cast<int>(ret.token_ids.size()) - 1);
-            int32_t token = _seqs[node->ref_seq][node->ref_idx + idx];
-            ret.token_ids.push_back(token);
+            ret.token_ids.push_back(ref_data[idx]);
             ret.probs.push_back(prob);
             ret.score += prob;
             idx++;
@@ -833,6 +834,7 @@ Draft SuffixTree::_speculate_path(Node* node, int idx,
             int64_t count = child->count;
             prob *= static_cast<float>(count) / node->count;
             node = child;
+            ref_data = _seqs[node->ref_seq].data() + node->ref_idx;
             idx = 0;
         }
     }
@@ -876,13 +878,15 @@ Draft SuffixTree::_speculate_tree(Node* node, int idx,
             queue.emplace(it.prob, it.node, it.idx + 1,
                           static_cast<int>(ret.token_ids.size()) - 1);
         } else {
-            for (const auto& kv : it.node->children) {
-                Node* child = kv.second.get();
+            Node* child = it.node->head_child;
+            while (child) {
                 float prob = it.prob * child->count /
                     static_cast<float>(it.node->count);
-                if (prob >= min_token_prob) {
-                    queue.emplace(prob, child, 0, it.parent);
+                if (prob < min_token_prob) {
+                    break;
                 }
+                queue.emplace(prob, child, 0, it.parent);
+                child = child->next_sibling;
             }
         }
     }
