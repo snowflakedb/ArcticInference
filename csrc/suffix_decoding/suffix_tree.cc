@@ -316,8 +316,6 @@ void SuffixTree::append(int seq_id, int token) {
     int32_t seq_len = static_cast<int32_t>(seq.size());
     
     // Iterate over all active nodes for this sequence.
-    // for (size_t i = 0; i < active_nodes.size(); ++i) {
-    //     Node* node = active_nodes[i];
     for (Node*& active_node : active_nodes) {
         Node* node = active_node;
         Node* child = nullptr;
@@ -325,9 +323,6 @@ void SuffixTree::append(int seq_id, int token) {
         if (it != node->children.end()) {
             child = it->second.get();
         }
-        // if (node->children.contains(token)) {
-        //     child = node->children[token].get();
-        // }
 
         assert(node->endpoints.contains(seq_id));
         assert(node->endpoints[seq_id] == seq.size() - 1);
@@ -814,6 +809,7 @@ std::pair<Node*, int> SuffixTree::_match_context(
                 return {nullptr, -1};
             }
             node = it->second.get();
+            // Keep a pointer directly to the reference data for efficiency.
             ref_data = _seqs[node->ref_seq].data() + node->ref_idx;
             idx = 0;
         }
