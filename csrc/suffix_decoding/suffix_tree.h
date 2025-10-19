@@ -159,14 +159,14 @@ private:
     // The root node of the suffix tree.
     std::unique_ptr<Node> _root;
 
-    // Mapping from seq id to its sequence (vector of ints).
-    std::unordered_map<int, std::vector<int>> _seqs;
+    // Mapping from seq id to its sequence of tokens (vectors of int32_t).
+    Int32Map<std::vector<int32_t>> _seqs;
 
     // For each sequence, a sliding window of active nodes. Maintains at most
     // _max_depth active nodes for each sequence. Queue is shifted when a new
     // token is added to the sequence. Each active node is in the queue for at
     // most _max_depth iterations before being removed.
-    std::unordered_map<int, std::deque<Node*>> _active_nodes;
+    Int32Map<std::deque<Node*>> _active_nodes;
 
     std::pair<Node*, int> _match_context(std::span<const int32_t> context);
 
