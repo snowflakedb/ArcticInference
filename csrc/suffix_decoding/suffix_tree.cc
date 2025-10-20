@@ -293,31 +293,39 @@ void _decrement_count(Node* node) {
 // Append a new element to a new or existing sequence.
 void SuffixTree::append(int seq_id, int token) {
     // Initialize the sequence if it doesn't exist.
-    _seqs.try_emplace(seq_id);
-    _active_nodes.try_emplace(seq_id);
+    if (!_seqs.contains(seq_id)) {
+        assert(!_active_nodes.contains(seq_id));
+        _seqs.emplace(seq_id);
+        _active_nodes.emplace(seq_id);
+    }
+
+    // Keep references to the seq and active nodes for efficiency.
+    std::vector<int32_t>& seq = _seqs[seq_id];
+    std::deque<Node*>& active_nodes = _active_nodes[seq_id];
 
     // Insert a new active node at the root.
-    _active_nodes[seq_id].push_back(_root.get());
-    _root->endpoints[seq_id] = static_cast<int32_t>(_seqs[seq_id].size());
+    active_nodes.push_back(_root.get());
+    _root->endpoints[seq_id] = static_cast<int32_t>(seq.size());
     _root->count += 1;
 
     // Ensure the number of active nodes doesn't exceed max_depth.
-    if (_active_nodes[seq_id].size() > static_cast<size_t>(_max_depth)) {
-        _active_nodes[seq_id].pop_front();
+    if (active_nodes.size() > static_cast<size_t>(_max_depth)) {
+        active_nodes.pop_front();
     }
-    _seqs[seq_id].push_back(token);
-    int32_t seq_len = static_cast<int32_t>(_seqs[seq_id].size());
+    seq.push_back(token);
+    int32_t seq_len = static_cast<int32_t>(seq.size());
     
     // Iterate over all active nodes for this sequence.
-    for (size_t i = 0; i < _active_nodes[seq_id].size(); ++i) {
-        Node* node = _active_nodes[seq_id][i];
+    for (Node*& active_node : active_nodes) {
+        Node* node = active_node;
         Node* child = nullptr;
-        if (node->children.contains(token)) {
-            child = node->children[token].get();
+        auto it = node->children.find(token);
+        if (it != node->children.end()) {
+            child = it->second.get();
         }
 
         assert(node->endpoints.contains(seq_id));
-        assert(node->endpoints[seq_id] == _seqs[seq_id].size() - 1);
+        assert(node->endpoints[seq_id] == seq.size() - 1);
 
         if (child == nullptr) {
             // Case 1: No existing child node for the new token.
@@ -364,7 +372,7 @@ void SuffixTree::append(int seq_id, int token) {
                 }
 
                 // Update the active node to the new child node.
-                _active_nodes[seq_id][i] = new_child;
+                active_node = new_child;
             }
         } else if (node->count == child->count + 1 && node != _root.get()) {
             // Case 2: The active node has a child for the new token, and that
@@ -400,7 +408,7 @@ void SuffixTree::append(int seq_id, int token) {
                 parent->children[child->token].reset(tmp);
 
                 // Replace active node with child node.
-                _active_nodes[seq_id][i] = child;
+                active_node = child;
             } else {
                 // Case 2b: The child has length > 1. If we append the new
                 // token to the current suffix, then it still does not reach
@@ -443,7 +451,7 @@ void SuffixTree::append(int seq_id, int token) {
                 _increment_count(child);
 
                 // Replace active node with child node.
-                _active_nodes[seq_id][i] = child;
+                active_node = child;
             } else {
                 // Case 3b: The child node has length > 1. If the suffix is
                 // extended into it, then it must split into a segment of
@@ -489,7 +497,7 @@ void SuffixTree::append(int seq_id, int token) {
                 _increment_count(new_node);
 
                 // Update active node to the new intermediate node.
-                _active_nodes[seq_id][i] = new_node;
+                active_node = new_node;
             }
         }
     }
@@ -700,7 +708,7 @@ std::string SuffixTree::_check_node_integrity(Node* node) {
             CHECK_OR_RETURN(child->count < node->count);
         }
         // Internal nodes must have a valid reference sequence and index.
-        CHECK_OR_RETURN(_seqs.count(node->ref_seq));
+        CHECK_OR_RETURN(_seqs.contains(node->ref_seq));
         CHECK_OR_RETURN(node->ref_idx >= 0);
         CHECK_OR_RETURN(
             node->ref_idx + node->length <= _seqs[node->ref_seq].size());
@@ -712,7 +720,7 @@ std::string SuffixTree::_check_node_integrity(Node* node) {
         // Check all endpoint references are correct.
         for (auto [seq_id, end_idx] : node->endpoints) {
             // Endpoint should refer to a sequence id that exists.
-            CHECK_OR_RETURN(_seqs.count(seq_id));
+            CHECK_OR_RETURN(_seqs.contains(seq_id));
             // Endpoint index should be within the sequence length.
             CHECK_OR_RETURN(end_idx > 0 && end_idx <= _seqs[seq_id].size());
             // Check all tokens from the start of the suffix to the endpoint.
@@ -793,17 +801,20 @@ std::pair<Node*, int> SuffixTree::_match_context(
         std::span<const int32_t> context) {
     Node* node = _root.get();
     int idx = 0;
-    for (int i = 0; i < context.size(); i++) {
-        int c = context[i];
+    const int32_t* ref_data = nullptr;
+    for (int32_t token : context) {
         if (idx >= node->length) {
-            if (!node->children.contains(c)) {
+            auto it = node->children.find(token);
+            if (it == node->children.end()) {
                 return {nullptr, -1};
             }
-            node = node->children[c].get();
+            node = it->second.get();
+            // Keep a pointer directly to the reference data for efficiency.
+            ref_data = _seqs[node->ref_seq].data() + node->ref_idx;
             idx = 0;
         }
         assert(idx < node->length);
-        if (_seqs[node->ref_seq][node->ref_idx + idx] != c) {
+        if (ref_data[idx] != token) {
             return {nullptr, -1};
         }
         idx++;
@@ -816,12 +827,12 @@ Draft SuffixTree::_speculate_path(Node* node, int idx,
                                   float min_token_prob) {
     Draft ret;
     float prob = 1.0f;
+    const int32_t* ref_data = _seqs[node->ref_seq].data() + node->ref_idx;
     while (ret.token_ids.size() < max_spec_tokens && prob >= min_token_prob) {
         if (idx < node->length) {
             // Use previous token index as parent; if none, mark as -1.
             ret.parents.push_back(static_cast<int>(ret.token_ids.size()) - 1);
-            int32_t token = _seqs[node->ref_seq][node->ref_idx + idx];
-            ret.token_ids.push_back(token);
+            ret.token_ids.push_back(ref_data[idx]);
             ret.probs.push_back(prob);
             ret.score += prob;
             idx++;
@@ -833,6 +844,8 @@ Draft SuffixTree::_speculate_path(Node* node, int idx,
             int64_t count = child->count;
             prob *= static_cast<float>(count) / node->count;
             node = child;
+            // Keep a pointer directly to the reference data for efficiency.
+            ref_data = _seqs[node->ref_seq].data() + node->ref_idx;
             idx = 0;
         }
     }
@@ -876,13 +889,15 @@ Draft SuffixTree::_speculate_tree(Node* node, int idx,
             queue.emplace(it.prob, it.node, it.idx + 1,
                           static_cast<int>(ret.token_ids.size()) - 1);
         } else {
-            for (const auto& kv : it.node->children) {
-                Node* child = kv.second.get();
+            Node* child = it.node->head_child;
+            while (child) {
                 float prob = it.prob * child->count /
                     static_cast<float>(it.node->count);
-                if (prob >= min_token_prob) {
-                    queue.emplace(prob, child, 0, it.parent);
+                if (prob < min_token_prob) {
+                    break;
                 }
+                queue.emplace(prob, child, 0, it.parent);
+                child = child->next_sibling;
             }
         }
     }
@@ -909,10 +924,10 @@ size_t SuffixTree::estimate_memory() const {
         }
     }
     for (const auto& [seq_id, seq] : _seqs) {
-        total += sizeof(decltype(seq)::value_type) * seq.capacity();
+        total += sizeof(seq) * seq.capacity();
     }
     for (const auto& [seq_id, nodes] : _active_nodes) {
-        total += sizeof(decltype(nodes)::value_type) * nodes.size();
+        total += sizeof(nodes) * nodes.size();
     }
     return total;
 }

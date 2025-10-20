@@ -24,6 +24,9 @@
 #include <type_traits>
 #include <utility>
 
+template <class, bool>
+class Int32MapIterator;
+
 /*
  * A simple hash map with int32_t keys that's designed to be fast and compact:
  *   - Open addressing with triangular probing allows high load factors.
@@ -33,7 +36,6 @@
 template <class T>
 class Int32Map {
 public:
-    using const_iterator_value = std::pair<int32_t, const T&>;
 
     Int32Map() = default;
 
@@ -168,47 +170,21 @@ public:
         return sizeof(*this) + sizeof(Slot) * cap_;
     }
 
-    class const_iterator {
-    public:
-        using value_type = const_iterator_value;
-        using difference_type = std::ptrdiff_t;
-        using iterator_category = std::forward_iterator_tag;
+    /* Iterators */
 
-        const_iterator() : m_(nullptr), i_(0) {}
+    friend class Int32MapIterator<T, false>;
+    friend class Int32MapIterator<T, true>;
 
-        const_iterator(const Int32Map* m, uint32_t i) : m_(m), i_(i) {
-            advance_();
-        }
+    using iterator = Int32MapIterator<T, false>;
+    using const_iterator = Int32MapIterator<T, true>;
 
-        value_type operator*() const {
-            const Slot& s = m_->slots_[i_];
-            return { s.key, *m_->value_ptr_(s) };
-        }
+    iterator begin() {
+        return iterator(this, 0);
+    }
 
-        const_iterator& operator++() {
-            ++i_;
-            advance_();
-            return *this;
-        }
-
-        bool operator==(const const_iterator& o) const {
-            return m_ == o.m_ && i_ == o.i_;
-        }
-
-        bool operator!=(const const_iterator& o) const {
-            return !(*this == o);
-        }
-
-    private:
-        void advance_() {
-            const uint32_t c = m_ ? m_->cap_ : 0u;
-            while (m_ && i_ < c && !m_->is_filled_(m_->slots_[i_].key)) {
-                ++i_;
-            }
-        }
-        const Int32Map* m_;
-        uint32_t i_;
-    };
+    iterator end() {
+        return iterator(this, cap_);
+    }
 
     const_iterator begin() const {
         return const_iterator(this, 0);
@@ -219,11 +195,39 @@ public:
     }
 
     const_iterator cbegin() const {
-        return begin();
+        return const_iterator(this, 0);
     }
 
     const_iterator cend() const {
-        return end();
+        return const_iterator(this, cap_);
+    }
+
+    iterator find(int32_t key) {
+        if (key == KEY_EMPTY || key == KEY_TOMBSTONE) {
+            throw std::invalid_argument("invalid key");
+        }
+        if (!slots_) {
+            return end();
+        }
+        uint32_t idx;
+        if (!probe_insert_or_find_(key, idx)) {
+            return end();
+        }
+        return iterator(this, idx);
+    }
+
+    const_iterator find(int32_t key) const {
+        if (key == KEY_EMPTY || key == KEY_TOMBSTONE) {
+            throw std::invalid_argument("invalid key");
+        }
+        if (!slots_) {
+            return end();
+        }
+        uint32_t idx;
+        if (!probe_insert_or_find_(key, idx)) {
+            return end();
+        }
+        return const_iterator(this, idx);
     }
 
 private:
@@ -385,4 +389,61 @@ private:
         tombstones_ = 0;  // cleaned
         // size_ unchanged
     }
+};
+
+
+template <class T, bool IsConst>
+class Int32MapIterator {
+public:
+    using map_type = std::conditional_t<IsConst, const Int32Map<T>, Int32Map<T>>;
+    using ref_type = std::conditional_t<IsConst, const T&, T&>;
+    using value_type = std::pair<int32_t, ref_type>;
+    using difference_type = std::ptrdiff_t;
+    using iterator_category = std::forward_iterator_tag;
+
+    struct arrow_proxy {
+        value_type value;
+        const value_type* operator->() const {
+            return &value;
+        }
+    };
+
+    Int32MapIterator() : m_(nullptr), i_(0) {}
+    Int32MapIterator(map_type* m, uint32_t i) : m_(m), i_(i) { advance_(); }
+
+    value_type operator*() const {
+        auto& s = m_->slots_[i_];
+        return { s.key, *m_->value_ptr_(s) };
+    }
+
+    arrow_proxy operator->() const {
+        auto& s = m_->slots_[i_];
+        return arrow_proxy{ { s.key, *m_->value_ptr_(s) } };
+    }
+
+    Int32MapIterator& operator++() {
+        ++i_;
+        advance_();
+        return *this;
+    }
+
+    template<bool C>
+    bool operator==(const Int32MapIterator<T, C>& o) const {
+        return m_ == o.m_ && i_ == o.i_;
+    }
+
+    template<bool C>
+    bool operator!=(const Int32MapIterator<T, C>& o) const {
+        return !(*this == o);
+    }
+
+private:
+    void advance_() {
+        uint32_t c = m_ ? m_->cap_ : 0u;
+        while (m_ && i_ < c && !m_->is_filled_(m_->slots_[i_].key)) {
+            ++i_;
+        }
+    }
+    map_type* m_;
+    uint32_t i_;
 };

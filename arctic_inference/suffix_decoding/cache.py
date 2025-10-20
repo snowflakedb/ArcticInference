@@ -117,7 +117,11 @@ class SuffixDecodingCache:
         """
         return self._req_to_seq_id.keys()
 
-    def start_request(self, req_id: Hashable, prompt_token_ids: Sequence[int]):
+    def start_request(
+        self,
+        req_id: Hashable,
+        prompt_token_ids: np.ndarray | Sequence[int],
+    ):
         """
         This method should be called when starting to process a new request. It
         will store the prompt for the request, allowing future speculations for
@@ -129,8 +133,8 @@ class SuffixDecodingCache:
         Args:
             req_id (Hashable): The request identifier. Must be a hashable value
                 that uniquely identifies the request.
-            prompt_token_ids (Sequence[int]): A sequence of token IDs
-                representing the prompt of the request.
+            prompt_token_ids (np.ndarray | Sequence[int]): A sequence of token
+                IDs representing the prompt of the request.
 
         Raises:
             ValueError: If a request with the same `req_id` is already active
@@ -138,8 +142,16 @@ class SuffixDecodingCache:
         """
         if req_id in self._local_trees:
             raise ValueError(f"Request '{req_id}' is already active")
+
+        if isinstance(prompt_token_ids, np.ndarray):
+            # If input is a numpy array, use the zero-copy ndarray overload.
+            self._validate_ndarray(prompt_token_ids)
+            extend_func = SuffixTree.extend_ndarray
+        else:
+            extend_func = SuffixTree.extend
+
         self._local_trees[req_id] = SuffixTree(self._max_tree_depth)
-        self._local_trees[req_id].extend(0, prompt_token_ids)
+        extend_func(self._local_trees[req_id], 0, prompt_token_ids)
         if self._max_cached_requests != 0:
             # Global cache is enabled.
             if req_id in self._req_to_seq_id:
@@ -177,27 +189,30 @@ class SuffixDecodingCache:
 
         Args:
             req_id (Hashable): The unique identifier for the request.
-            token_ids (Union[int, Sequence[int]]): Either a single token ID
-                (int) or a sequence of token IDs to be appended to the response
-                for the given request.
+            token_ids (np.ndarray | Sequence[int]): A sequence of token IDs to
+                be appended to the response for the given request.
 
         Raises:
             ValueError: If the request with the given `req_id` is not active.
         """
-        if isinstance(token_ids, np.ndarray):
-            self._validate_ndarray(token_ids)
-
         if req_id not in self._local_trees:
             raise ValueError(f"Request '{req_id}' is not active")
 
+        if isinstance(token_ids, np.ndarray):
+            # If input is a numpy array, use the zero-copy ndarray overload.
+            self._validate_ndarray(token_ids)
+            extend_func = SuffixTree.extend_ndarray
+        else:
+            extend_func = SuffixTree.extend
+
         # Update the local tree for the active request.
-        self._local_trees[req_id].extend(0, token_ids)
+        extend_func(self._local_trees[req_id], 0, token_ids)
 
         # Also update the response if the request is in the global cache (it
         # may be evicted from the global cache before the request is stopped).
         if req_id in self._req_to_seq_id:
             seq_id = self._req_to_seq_id[req_id]
-            self._global_tree.extend(seq_id, token_ids)
+            extend_func(self._global_tree, seq_id, token_ids)
 
     def evict_cached_response(self, req_id: Hashable):
         """
@@ -235,12 +250,16 @@ class SuffixDecodingCache:
 
         Args:
             req_id (Hashable): The unique identifier for the request.
-            context (Sequence[int]): The sequence of token IDs to match and
-                continue from.
+            context (np.ndarray | Sequence[int]): A sequence of token IDs to
+                match and speculate subsequent tokens from.
             max_spec_tokens (int): Maximum number of tokens to speculate. If 0,
                 uses the cache's max_depth.
             max_spec_factor (float): Factor that limits speculation based on
-                matched context length.
+                matched context length. The number of speculated tokens is
+                limited by `max_spec_factor * match_length + max_spec_offset`.
+            max_spec_offset (float): Offset that limits speculation based on
+                matched context length. The number of speculated tokens is
+                limited by `max_spec_factor * match_length + max_spec_offset`.
             min_token_prob (float): Minimum estimated probability threshold for
                 draft tokens.
             use_tree_spec (bool): If True, uses tree-based speculation.
@@ -252,15 +271,15 @@ class SuffixDecodingCache:
         Raises:
             ValueError: If the request with the given `req_id` is not active.
         """
+        if req_id not in self._local_trees:
+            raise ValueError(f"Request '{req_id}' is not active")
+
         if isinstance(context, np.ndarray):
-            # If context is a numpy array, use the zero-copy ndarray overload.
-            self._validate_ndarray(context)  # Make sure the array is valid.
+            # If input is a numpy array, use the zero-copy ndarray overload.
+            self._validate_ndarray(context)
             spec_func = SuffixTree.speculate_ndarray
         else:
             spec_func = SuffixTree.speculate
-
-        if req_id not in self._local_trees:
-            raise ValueError(f"Request '{req_id}' is not active")
 
         if max_spec_tokens is None:
             max_spec_tokens = self.max_depth
