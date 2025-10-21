@@ -41,9 +41,7 @@ from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
 from vllm.forward_context import BatchDescriptor
 
 
-from arctic_inference.envs import ARCTIC_INFERENCE_SKIP_ULYSSES_MOE_PATCH
 from arctic_inference.patching import ArcticPatch
-
 
 
 def apply_shift_parallel_patches():
@@ -52,8 +50,6 @@ def apply_shift_parallel_patches():
     UlyssesWorkerProc.apply_patch()
     UlyssesMultiprocExecutor.apply_patch()
     UlyssesAttention.apply_patch()
-    if not ARCTIC_INFERENCE_SKIP_ULYSSES_MOE_PATCH:
-        UlyssesFusedMoE.apply_patch()
     UlyssesCudagraphDispatcher.apply_patch()
 
 
@@ -520,11 +516,3 @@ class UlyssesCudagraphDispatcher(ArcticPatch[CudagraphDispatcher]):
                     cudagraph_mode.mixed_mode(),
                     BatchDescriptor(num_tokens=bs * sp_size, uniform_decode=False))
 
-
-class UlyssesFusedMoE(ArcticPatch[FusedMoE]):
-
-    def forward(self, hidden_states: torch.Tensor,
-                router_logits: torch.Tensor):
-        # directly call forward_impl to bypass custom opt
-        # custom opt prevents using the shift model
-        return self.forward_impl(hidden_states, router_logits)
