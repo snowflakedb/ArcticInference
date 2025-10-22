@@ -5,7 +5,7 @@ project(CustomOps CXX CUDA)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(TORCH_CUDA_ARCH_LIST "7.0 7.5 8.0 8.6 8.9 9.0+PTX")
+set(TORCH_CUDA_ARCH_LIST "9.0+PTX 10.0+PTX")
 
 message(STATUS "TORCH_CMAKE_PREFIX_PATH: ${TORCH_CMAKE_PREFIX_PATH}")
 
@@ -16,6 +16,9 @@ find_package(pybind11 REQUIRED)
 find_package(Torch REQUIRED)
 
 pybind11_add_module(custom_ops
+  allreduce_kernels.cu
+  fill_neg_zeros.cu
+  ipc_minimal.cpp
   reshape_and_cache_flash_fp4.cu
   reshape_and_cache_flash_bulk.cu
   torch_bindings.cpp
