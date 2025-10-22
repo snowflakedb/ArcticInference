@@ -3,6 +3,8 @@
 #include <torch/extension.h>
 #include <torch/library.h>
 
+#include "lamport_allreduce_bindings.h"
+
 TORCH_LIBRARY(arctic_inference, ops) {
   ops.def("reshape_and_cache_flash_bulk(Tensor keys,"
           "                             Tensor values,"
@@ -31,4 +33,6 @@ TORCH_LIBRARY(arctic_inference, ops) {
            &reshape_and_cache_flash_fp4);
 }
 
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {}
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+        init_lamport_allreduce_bindings(m);
+}
