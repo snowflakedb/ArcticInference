@@ -46,7 +46,7 @@ from vllm.v1.utils import record_function_or_nullcontext
 from vllm.v1.worker.gpu_model_runner import (
     GPUModelRunner,
     logger,
-    AsyncGPUModelRunnerOutput,  # <<< needed for async scheduling
+    AsyncGPUModelRunnerOutput,
 )
 
 if TYPE_CHECKING:
@@ -571,7 +571,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 seq_len = (req_state.num_computed_tokens +
                            scheduler_output.num_scheduled_tokens[req_id])
                 sampled_ids = [req_state.get_token_id(seq_len)]
-                num_sampled_ids = 1
+                num_sampled_ids = len(sampled_ids)
 
             start_idx = self.input_batch.num_tokens_no_spec[i]
             end_idx = start_idx + num_sampled_ids
