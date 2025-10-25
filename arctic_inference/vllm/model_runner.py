@@ -367,7 +367,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                                   num_scheduled_tokens_np, kv_connector_output)
 
             sample_hidden_states = hidden_states[logits_indices]
-            logits = self.model.compute_logits(sample_hidden_states, None)
+            logits = self.model.compute_logits(sample_hidden_states)
         if broadcast_pp_output:
             model_output_broadcast_data = {
                 "logits": logits.contiguous(),
@@ -401,6 +401,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         if self._suffix_cache is not None:
             self._update_suffix_cache(valid_sampled_token_ids)
 
+        sampling_metadata = self.input_batch.sampling_metadata
+
         if not self.speculative_config:
             spec_token_ids = None
         else:
@@ -423,12 +425,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             req_ids=req_ids_output_copy,
             req_id_to_index=req_id_to_index_output_copy,
             sampled_token_ids=valid_sampled_token_ids,
-            spec_token_ids=spec_token_ids,
             logprobs=logprobs_lists,
             prompt_logprobs_dict=prompt_logprobs_dict,
             pooler_output=[],
-            kv_connector_output=kv_connector_output,
-            num_nans_in_logits=num_nans_in_logits,
         )
 
 
