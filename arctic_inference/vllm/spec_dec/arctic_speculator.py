@@ -22,7 +22,7 @@ import torch.nn as nn
 
 from vllm.config import VllmConfig
 from arctic_inference.vllm.spec_dec.logits_processor_opt import LogitsProcessorOpt
-from vllm.model_executor.layers.sampler import SamplerOutput, get_sampler
+from vllm.v1.outputs import SamplerOutput
 
 from arctic_inference.vllm.spec_dec.fp8 import (Fp8ConfigWithEmbedding,
                                                 OriginalFp8LinearMethod)
@@ -222,7 +222,6 @@ class ArcticMLPSpeculator(nn.Module, SpeculatorTPInit):
             scale=1.0,
             skip_last_gather=True,
         )
-        self.sampler = get_sampler()
 
         self.cuda_graph_max_batch_size = 0
         self.cuda_graph_mode = False
@@ -582,7 +581,6 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
             scale=1.0,
             skip_last_gather=True,
         )
-        self.sampler = get_sampler()
 
         self.cuda_graph_max_batch_size = 0
         self.cuda_graph_mode = False

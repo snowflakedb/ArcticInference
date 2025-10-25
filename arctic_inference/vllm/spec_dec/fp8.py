@@ -66,9 +66,7 @@ class OriginalFp8LinearMethod(LinearMethodBase):
             # Marlin doesn't support block-wise fp8
             self.use_marlin = False
 
-        self.fp8_linear = Fp8LinearOp(
-            act_quant_static=False,
-            cutlass_fp8_supported=cutlass_fp8_supported())
+        self.fp8_linear = Fp8LinearOp(act_quant_static=False)
 
     def create_weights(
         self,
