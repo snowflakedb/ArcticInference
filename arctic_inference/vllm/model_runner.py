@@ -44,9 +44,12 @@ from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.sample.rejection_sampler import MAX_SPEC_LEN, RejectionSampler
 from vllm.v1.spec_decode.metadata import SpecDecodeMetadata
 from vllm.v1.worker.gpu_model_runner import GPUModelRunner, logger
+from vllm.v1.utils import record_function_or_nullcontext
+from vllm.v1.attention.backends.utils import CommonAttentionMetadata
 
 if TYPE_CHECKING:
     from vllm.v1.core.sched.output import SchedulerOutput
+    from vllm.v1.attention.backends.utils import CommonAttentionMetadata
 
 from arctic_inference.suffix_decoding import (SuffixDecodingCache,
                                               SuffixDecodingDraft)
@@ -104,7 +107,6 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         vllm_config: VllmConfig,
         device: torch.device,
     ):
-        # Ulysses sequence parallelism
         if vllm_config.parallel_config.ulysses_sequence_parallel_size > 1:
             self.use_ulysses = True
             pass_config = vllm_config.compilation_config.pass_config
@@ -116,14 +118,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         else:
             self.use_ulysses = False
 
-        # Speculative decoding
-        # TODO: Use "arctic" as an umbrella method that also covers the Arctic
-        # Inverence version of "mlp_speculator".
         if (vllm_config.speculative_config is not None and \
                 vllm_config.speculative_config.method in (
                     "arctic", "suffix", "mlp_speculator")):
-            # Delay the creation of the drafter until
-            # after the child class has been initialized.
             arctic_speculative_config = vllm_config.speculative_config
             vllm_config.speculative_config = None
         else:
@@ -131,10 +128,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         self._orig_init(vllm_config, device)
 
-        # Set up speculative decoding.
         self._suffix_cache = None
         if arctic_speculative_config is not None:
-            # Restore the speculative config.
             self.vllm_config.speculative_config = arctic_speculative_config
             self.speculative_config = arctic_speculative_config
 
@@ -163,7 +158,6 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     def profile_run(self) -> None:
         self._orig_profile_run()
         if self.shift_model is not None:
-            # Run the shift model to trigger compilation.
             orig_model, self.model = self.model, self.shift_model
             try:
                 with set_shift_parallel_mode(True):
@@ -172,13 +166,22 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 self.model = orig_model
 
     def _prepare_inputs(self, *args, **kwargs):
-        attn_metadata, logits_indices, spec_decode_metadata, *rest = (
+        (attn_metadata, logits_indices, spec_decode_metadata,
+         num_scheduled_tokens_np, spec_decode_common_attn_metadata,
+         max_query_len, ubatch_slices, num_tokens_after_padding) = (
             self._orig_prepare_inputs(*args, **kwargs))
-        # SwiftKV requires knowing the logits indices from inside the model
-        # definition in order to early-stop the prefill tokens.
-        for meta in attn_metadata.values():
-            meta.swiftkv_logits_indices = logits_indices
-        return attn_metadata, logits_indices, spec_decode_metadata, *rest
+        
+        if isinstance(attn_metadata, list):
+            for ubatch_attn_metadata in attn_metadata:
+                for meta in ubatch_attn_metadata.values():
+                    meta.swiftkv_logits_indices = logits_indices
+        else:
+            for meta in attn_metadata.values():
+                meta.swiftkv_logits_indices = logits_indices
+
+        return (attn_metadata, logits_indices, spec_decode_metadata,
+                num_scheduled_tokens_np, spec_decode_common_attn_metadata,
+                max_query_len, ubatch_slices, num_tokens_after_padding)
 
     def monkeypatch_forward(self: GPUModelRunner):
         sp_size = parallel_state._SP.world_size
@@ -188,16 +191,14 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         input_key = 'inputs_embeds' if self.supports_mm_inputs else 'input_ids'
 
         def ulysses_forward(*args, **kwargs):
-            # update inputs
             input_tensor = kwargs[input_key]
             positions = kwargs['positions']
-            # Ulysses parameters
+
             N = input_tensor.shape[0]
 
             N_ulysses = N // sp_size
             N_offset = N_ulysses * sp_rank
 
-            # narrow the input
             kwargs[input_key] = input_tensor[N_offset:N_offset + N_ulysses]
             kwargs['positions'] = positions[N_offset:N_offset + N_ulysses]
 
@@ -205,7 +206,6 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 output = model_forward(*args, **kwargs)
 
             if output.size(0) == N_ulysses:
-                # all-gather model_output
                 model_output = torch.empty((N, self.hidden_size),
                                            dtype=output.dtype,
                                            device=output.device)
@@ -213,12 +213,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                                                          output,
                                                          group=device_group)
             else:
-                # SwiftKV models will already have all-gathered the output.
                 assert output.size(0) == N
                 model_output = output
             return model_output
-
-        self.model.forward = ulysses_forward
 
     @torch.inference_mode()
     def execute_model(
@@ -229,23 +226,21 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         self._update_states(scheduler_output)
         if not scheduler_output.total_num_scheduled_tokens:
             if not has_kv_transfer_group():
-                # Return empty ModelRunnerOutput if there's no work to do.
                 return EMPTY_MODEL_RUNNER_OUTPUT
 
             return self.kv_connector_no_forward(scheduler_output,
                                                 self.vllm_config)
 
-        # Prepare the decoder inputs.
         (attn_metadata, logits_indices, spec_decode_metadata,
          num_scheduled_tokens_np, spec_decode_common_attn_metadata,
-         max_query_len) = (self._prepare_inputs(scheduler_output))
+         max_query_len, ubatch_slices, num_tokens_after_padding) = (
+            self._prepare_inputs(scheduler_output))
         
         num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
         use_shift_model = (self.use_ulysses and self.shift_model is not None
                            and num_scheduled_tokens
                            <= self.shift_parallel_threshold)
         if self.use_ulysses and not use_shift_model:
-            # add padding to the batch size to make it a multiple of SP
             sp_size = self.parallel_config.ulysses_sequence_parallel_size
             num_input_tokens = round_up(num_scheduled_tokens, sp_size)
             if (self.compilation_config.cudagraph_mode != CUDAGraphMode.NONE 
@@ -255,14 +250,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                     num_input_tokens // sp_size) * sp_size
         elif (self.compilation_config.cudagraph_mode != CUDAGraphMode.NONE
                 and num_scheduled_tokens <= self.cudagraph_batch_sizes[-1]):
-            # Use CUDA graphs.
-            # Add padding to the batch size.
             num_input_tokens = self.vllm_config.pad_for_cudagraph(
                 num_scheduled_tokens)
         else:
-            # Eager mode.
-            # Pad tokens to multiple of tensor_parallel_size when
-            # enabled collective fusion for SP
             tp_size = self.vllm_config.parallel_config.tensor_parallel_size
             if self.compilation_config.pass_config. \
                 enable_sequence_parallelism and tp_size > 1:
@@ -270,14 +260,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             else:
                 num_input_tokens = num_scheduled_tokens
 
-        # Padding for DP
         num_pad, num_tokens_across_dp = self.get_dp_padding(num_input_tokens)
         num_input_tokens += num_pad
 
-        # _prepare_inputs may reorder the batch, so we must gather multi
-        # modal outputs after that to ensure the correct order
         if self.supports_mm_inputs:
-            # Run the multimodal encoder if any.
             self._execute_mm_encoder(scheduler_output)
             mm_embeds = self._gather_mm_embeddings(scheduler_output)
         else:
@@ -288,16 +274,16 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             # embeddings), we always use embeddings (rather than token ids)
             # as input to the multimodal model, even when the input is text.
             inputs_embeds_scheduled = self.model.get_input_embeddings(
-                input_ids=self.input_ids[:num_scheduled_tokens],
+                input_ids=self.input_ids.gpu[:num_scheduled_tokens],
                 multimodal_embeddings=mm_embeds or None,
             )
 
             # TODO(woosuk): Avoid the copy. Optimize.
-            self.inputs_embeds[:num_scheduled_tokens].copy_(
+            self.inputs_embeds.gpu[:num_scheduled_tokens].copy_(
                 inputs_embeds_scheduled)
 
             input_ids = None
-            inputs_embeds = self.inputs_embeds[:num_input_tokens]
+            inputs_embeds = self.inputs_embeds.gpu[:num_input_tokens]
             model_kwargs = {
                 **self._init_model_kwargs(num_scheduled_tokens),
                 **self._extract_mm_kwargs(scheduler_output),
@@ -307,13 +293,19 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             # While it is possible to use embeddings as input just like the
             # multimodal models, it is not desirable for performance since
             # then the embedding layer is not included in the CUDA graph.
-            input_ids = self.input_ids[:num_input_tokens]
+            input_ids = self.input_ids.gpu[:num_input_tokens]
             inputs_embeds = None
             model_kwargs = self._init_model_kwargs(num_input_tokens)
+
+        if (self.model_config.is_encoder_decoder
+                and scheduler_output.scheduled_encoder_inputs):
+            encoder_inputs = self._extract_encoder_inputs(scheduler_output)
+            model_kwargs.update(encoder_inputs)
+
         if self.uses_mrope:
-            positions = self.mrope_positions[:, :num_input_tokens]
+            positions = self.mrope_positions.gpu[:, :num_input_tokens]
         else:
-            positions = self.positions[:num_input_tokens]
+            positions = self.positions.gpu[:num_input_tokens]
 
         if get_pp_group().is_first_rank:
             intermediate_tensors = None
@@ -328,8 +320,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         cudagraph_runtime_mode, batch_descriptor = \
             self.cudagraph_dispatcher.dispatch(batch_descriptor)
 
-        # Run the model.
-        # Use persistent buffers for CUDA graphs.
+        if ubatch_slices is not None:
+            num_input_tokens = ubatch_slices[0].num_tokens
+
         with set_forward_context(
                 attn_metadata,
                 self.vllm_config,
@@ -337,6 +330,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 num_tokens_across_dp=num_tokens_across_dp,
                 cudagraph_runtime_mode=cudagraph_runtime_mode,
                 batch_descriptor=batch_descriptor,
+                ubatch_slices=ubatch_slices, 
         ), self.maybe_get_kv_connector_output(
                 scheduler_output) as kv_connector_output:
 
@@ -356,15 +350,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             hidden_states = model_output
             aux_hidden_states = None
 
-        # Broadcast PP output for external_launcher (torchrun)
-        # to make sure we are synced across pp ranks
-        # TODO: Support overlapping mirco-batches
-        # https://github.com/vllm-project/vllm/issues/18019
         broadcast_pp_output = \
             self.parallel_config.distributed_executor_backend \
             == "external_launcher" and len(get_pp_group().ranks) > 0
         if not get_pp_group().is_last_rank:
-            # For mid-pipeline stages, return the hidden states.
             assert isinstance(hidden_states, IntermediateTensors)
             if not broadcast_pp_output:
                 hidden_states.kv_connector_output = kv_connector_output
@@ -388,122 +377,31 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             assert model_output_broadcast_data is not None
             logits = model_output_broadcast_data["logits"]
 
-        # Apply structured output bitmasks if present
         if scheduler_output.grammar_bitmask is not None:
-            self.apply_grammar_bitmask(scheduler_output, logits)
+            from vllm.v1.structured_output.utils import apply_grammar_bitmask
+            apply_grammar_bitmask(scheduler_output, self.input_batch,
+                                  logits, self.device)
 
-        # Sample the next token and get logprobs if needed.
-        sampling_metadata = self.input_batch.sampling_metadata
-        if spec_decode_metadata is None:
-            sampler_output = self.sampler(
-                logits=logits,
-                sampling_metadata=sampling_metadata,
-            )
-        else:
-            # When indexing with a tensor (bonus_logits_indices), PyTorch
-            # creates a new tensor with separate storage from the original
-            # logits tensor. This means any in-place operations on bonus_logits
-            # won't affect the original logits tensor.
-            assert logits is not None
-            bonus_logits = logits[spec_decode_metadata.bonus_logits_indices]
-            sampler_output = self.sampler(
-                logits=bonus_logits,
-                sampling_metadata=sampling_metadata,
-            )
-            bonus_token_ids = sampler_output.sampled_token_ids
+        with record_function_or_nullcontext("Sample"):
+            sampler_output = self._sample(logits, spec_decode_metadata)
 
-            # Just like `bonus_logits`, `target_logits` is a new tensor with
-            # separate storage from the original `logits` tensor. Therefore,
-            # it is safe to update `target_logits` in place.
-            target_logits = logits[spec_decode_metadata.target_logits_indices]
-            output_token_ids = self.rejection_sampler(
-                spec_decode_metadata,
-                None,  # draft_probs
-                target_logits,
-                bonus_token_ids,
-                sampling_metadata,
-            )
-            sampler_output.sampled_token_ids = output_token_ids
-
-        num_nans_in_logits = {}
-        if envs.VLLM_COMPUTE_NANS_IN_LOGITS:
-            num_nans_in_logits = self._get_nans_in_logits(logits)
-
-        # TODO(woosuk): The following loop can be slow since it iterates over
-        # the requests one by one. Optimize.
-        discard_sampled_tokens_req_indices = []
-        for i, req_id in enumerate(self.input_batch.req_ids):
-            req_state = self.requests[req_id]
-            seq_len = (req_state.num_computed_tokens +
-                       scheduler_output.num_scheduled_tokens[req_id])
-            if seq_len < req_state.num_tokens:
-                # Ignore the sampled token for partial prefills.
-                # Rewind the generator state as if the token was not sampled.
-                # This relies on cuda-specific torch-internal impl details
-                generator = self.input_batch.generators.get(i)
-                if generator is not None:
-                    generator.set_offset(generator.get_offset() - 4)
-                # Record the index of the request that should not be sampled,
-                # so that we could clear the sampled tokens before returning.
-                discard_sampled_tokens_req_indices.append(i)
-
-        # NOTE: GPU -> CPU Sync happens here.
-        # Move as many CPU operations as possible before this sync point.
-        logprobs_tensors = sampler_output.logprobs_tensors
-        logprobs_lists = logprobs_tensors.tolists() \
-            if logprobs_tensors is not None else None
-
-        # Compute prompt logprobs if needed.
-        prompt_logprobs_dict = self._get_prompt_logprobs_dict(
-            hidden_states[:num_scheduled_tokens],
-            scheduler_output,
-        )
-
-        # Get the valid generated tokens.
-        sampled_token_ids = sampler_output.sampled_token_ids
-        max_gen_len = sampled_token_ids.shape[-1]
-        if max_gen_len == 1:
-            # No spec decode tokens.
-            valid_sampled_token_ids = sampled_token_ids.tolist()
-        else:
-            # Includes spec decode tokens.
-            valid_sampled_token_ids = self.rejection_sampler.parse_output(
-                sampled_token_ids,
-                self.input_batch.vocab_size,
-            )
-        # Mask out the sampled tokens that should not be sampled.
-        for i in discard_sampled_tokens_req_indices:
-            valid_sampled_token_ids[i].clear()
-
-        # Cache the sampled tokens in the model runner, so that the scheduler
-        # doesn't need to send them back.
-        # NOTE(woosuk): As an exception, when using PP, the scheduler sends
-        # the sampled tokens back, because there's no direct communication
-        # between the first-stage worker and the last-stage worker.
-        for req_idx, sampled_ids in enumerate(valid_sampled_token_ids):
-            if not sampled_ids:
-                continue
-
-            start_idx = self.input_batch.num_tokens_no_spec[req_idx]
-            end_idx = start_idx + len(sampled_ids)
-            assert end_idx <= self.max_model_len, (
-                "Sampled token IDs exceed the max model length. "
-                f"Total number of tokens: {end_idx} > max_model_len: "
-                f"{self.max_model_len}")
-
-            self.input_batch.token_ids_cpu[req_idx,
-                                           start_idx:end_idx] = sampled_ids
-            self.input_batch.num_tokens_no_spec[req_idx] = end_idx
-            self.input_batch.num_tokens[req_idx] = end_idx
-            req_id = self.input_batch.req_ids[req_idx]
-            req_state = self.requests[req_id]
-            req_state.output_token_ids.extend(sampled_ids)
+        with record_function_or_nullcontext("Bookkeep"):
+            (
+                num_nans_in_logits,
+                logprobs_lists,
+                valid_sampled_token_ids,
+                prompt_logprobs_dict,
+                req_ids_output_copy,
+                req_id_to_index_output_copy,
+                invalid_req_indices,
+            ) = self._bookkeeping_sync(scheduler_output, sampler_output,
+                                       logits, hidden_states,
+                                       num_scheduled_tokens)
 
         if self._suffix_cache is not None:
             self._update_suffix_cache(valid_sampled_token_ids)
 
         if not self.speculative_config:
-            # Speculative decoding is not enabled.
             spec_token_ids = None
         else:
             assert spec_decode_common_attn_metadata is not None
@@ -522,8 +420,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         self.eplb_step()
 
         return ModelRunnerOutput(
-            req_ids=self.input_batch.req_ids,
-            req_id_to_index=self.input_batch.req_id_to_index,
+            req_ids=req_ids_output_copy,
+            req_id_to_index=req_id_to_index_output_copy,
             sampled_token_ids=valid_sampled_token_ids,
             spec_token_ids=spec_token_ids,
             logprobs=logprobs_lists,
@@ -533,12 +431,12 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             num_nans_in_logits=num_nans_in_logits,
         )
 
-    from vllm.v1.attention.backends.utils import CommonAttentionMetadata
+
     def propose_draft_token_ids(
         self,
         scheduler_output: "SchedulerOutput",
         sampled_token_ids: list[list[int]],
-        original_sampled_token_ids: np.ndarray,
+        original_sampled_token_ids: Union[np.ndarray, torch.Tensor], 
         sampling_metadata: SamplingMetadata,
         hidden_states: torch.Tensor,
         sample_hidden_states: torch.Tensor,
@@ -582,9 +480,16 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         elif (self.speculative_config.method == "arctic"
               or self.speculative_config.method == "mlp_speculator"):
             assert isinstance(self.drafter, ArcticProposer)
+            
+            if isinstance(original_sampled_token_ids, np.ndarray):
+                original_sampled_token_ids_tensor = torch.from_numpy(
+                    original_sampled_token_ids).to(self.device)
+            else:
+                original_sampled_token_ids_tensor = original_sampled_token_ids
+
             previous_hidden_states = self.drafter.prepare_hidden_states(
                 sample_hidden_states=sample_hidden_states,
-                sampled_token_ids=original_sampled_token_ids,
+                sampled_token_ids=original_sampled_token_ids_tensor,
                 spec_decode_metadata=spec_decode_metadata,
             )
             spec_token_ids = self.propose_arctic_draft_token_ids(
@@ -598,7 +503,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 sampling_metadata,
                 hidden_states,
                 sample_hidden_states,
-                aux_hidden_states,
+                aux_hidden_states, 
                 spec_decode_metadata,
                 common_attn_metadata,
             )
@@ -632,38 +537,60 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 seq_len = (req_state.num_computed_tokens +
                            scheduler_output.num_scheduled_tokens[req_id])
                 sampled_ids = [req_state.get_token_id(seq_len)]
+                num_sampled_ids = len(sampled_ids)
 
             # Add sampled_token_ids to token_ids_cpu.
             start_idx = self.input_batch.num_tokens_no_spec[i]
             end_idx = start_idx + num_sampled_ids
-
-            max_spec_tokens = min(
+            
+            current_max_spec_tokens = min(
                 max_spec_tokens,
                 self.max_model_len - end_idx - 1,
             )
-            if max_spec_tokens <= 0:
+            if current_max_spec_tokens <= 0:
+                last_tokens.append(None) 
                 continue
+            
+            if num_sampled_ids > 0:
+                 self.input_batch.token_ids_cpu[i,
+                                                start_idx:end_idx] = sampled_ids
+                 last_tokens.append(self.input_batch.token_ids_cpu[i, end_idx - 1].item())
+            else:
+                 last_tokens.append(None)
+                 continue
 
-            self.input_batch.token_ids_cpu[i,
-                                           start_idx:end_idx] = sampled_ids[-1]
-            last_tokens.append(self.input_batch.token_ids_cpu[i, end_idx - 1])
+        valid_last_tokens = [t for t in last_tokens if t is not None]
+        if not valid_last_tokens:
+            return [[] for _ in sampled_token_ids]
+        
+        if previous_hidden_states is not None:
+            indices = [i for i, t in enumerate(last_tokens) if t is not None]
+            previous_hidden_states = previous_hidden_states[indices]
 
-        if max_spec_tokens <= 0:
+        final_max_spec_tokens = min(
+            max_spec_tokens,
+            self.max_model_len - self.input_batch.num_tokens_no_spec.max() - 1,
+        )
+        if final_max_spec_tokens <= 0:
             return [[] for _ in sampled_token_ids]
 
         drafter_output = self.drafter.propose(
-            last_tokens,
+            valid_last_tokens,
             previous_hidden_states=previous_hidden_states,
-            num_predict_tokens=max_spec_tokens,
+            num_predict_tokens=final_max_spec_tokens,
         )
 
-        draft_token_ids = drafter_output.tolist()
+        draft_token_ids_list = drafter_output.tolist()
+        
+        final_draft_token_ids = []
+        draft_iter = iter(draft_token_ids_list)
+        for t in last_tokens:
+            if t is not None:
+                final_draft_token_ids.append(next(draft_iter))
+            else:
+                final_draft_token_ids.append([])
 
-        for i, sampled_ids in enumerate(sampled_token_ids):
-            if not sampled_ids:
-                draft_token_ids[i] = []
-
-        return draft_token_ids
+        return final_draft_token_ids
 
     def _update_suffix_cache(self, sampled_token_ids: list[list[int]]) -> None:
         seen_req_ids = set()
@@ -677,7 +604,6 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             index = self.input_batch.req_id_to_index[req_id]
             if req_id not in self._suffix_cache.active_requests:
                 if req_id in self._suffix_cache.cached_requests:
-                    # Reset the suffix cache for this request.
                     self._suffix_cache.evict_cached_response(req_id)
                 num_prompt_tokens = self.input_batch.num_prompt_tokens[index]
                 prompt_token_ids = (
@@ -687,7 +613,6 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
             self._suffix_cache.add_active_response(req_id, sampled_ids)
 
-        # Stop requests that are not seen
         for req_id in list(self._suffix_cache.active_requests):
             if req_id not in seen_req_ids:
                 self._suffix_cache.stop_request(req_id)
@@ -760,8 +685,13 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 # TP, but the original model is captured using SP * BATCH_SIZE,
                 # which does not cover all its cuda graph sizes. The shift-mode
                 # model should have all its cuda graphs captured correctly.
-                self.model.model.decode_runner = (
-                    self.shift_model.model.decode_runner)
+                # REBASED: Check if decode_runner still exists
+                if hasattr(self.model, "model") and hasattr(self.model.model, "decode_runner"):
+                    self.model.model.decode_runner = (
+                        self.shift_model.model.decode_runner)
+                else:
+                    logger.warning("Could not apply SwiftKV HACK: "
+                                   "model.model.decode_runner not found.")
         else:
             self.shift_model = None
             self.shift_parallel_threshold = 0
@@ -785,7 +715,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             logger.info(f"base model (SP={sp_size}, TP={tp_size}) shapes {compilation_cases_base}")
 
         # capture SP
-        self._orig_capture_cudagraphs(compilation_cases_base, cudagraph_runtime_mode, uniform_decode)
+        if compilation_cases_base: # Don't run if list is empty
+            self._orig_capture_cudagraphs(compilation_cases_base, cudagraph_runtime_mode, uniform_decode)
 
         if self.shift_model is not None:
             # capture shift model (TP) shapes
@@ -798,8 +729,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             # switch models
             orig_model, self.model = self.model, self.shift_model
             # capture TP
-            with set_shift_parallel_mode(True):
-                self._orig_capture_cudagraphs(compilation_cases_shift, cudagraph_runtime_mode, uniform_decode)
+            if compilation_cases_shift: # Don't run if list is empty
+                with set_shift_parallel_mode(True):
+                    self._orig_capture_cudagraphs(compilation_cases_shift, cudagraph_runtime_mode, uniform_decode)
             # reverse models
             self.model = orig_model
 
@@ -810,6 +742,35 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             # Bind the KV caches to the shift parallel model.
             forward_context = (
                 self.vllm_config.compilation_config.static_forward_context)
+            
+            from vllm.model_executor.layers.attention import Attention
             for mod in self.shift_model.modules():
                 if isinstance(mod, Attention):
-                    mod.kv_cache = forward_context[mod.layer_name].kv_cache
+                    # Need to find the layer_name. This is brittle.
+                    # Assuming layer_name is stored on the module,
+                    # which vLLM's loader does.
+                    if hasattr(mod, 'layer_name'):
+                         if mod.layer_name in forward_context:
+                            mod.kv_cache = forward_context[mod.layer_name].kv_cache
+                         else:
+                            logger.warning(f"Could not find {mod.layer_name} "
+                                           "in forward_context for shift_model.")
+                    else:
+                        logger.warning("Could not bind KV cache for shift_model: "
+                                       "Attention module missing 'layer_name'.")
+
+            try:
+                from vllm.model_executor.layers.mamba.abstract import MambaBase
+                for mod in self.shift_model.modules():
+                    if isinstance(mod, MambaBase):
+                         if hasattr(mod, 'layer_name'):
+                             if mod.layer_name in forward_context:
+                                mod.state = forward_context[mod.layer_name].state
+                             else:
+                                logger.warning(f"Could not find {mod.layer_name} "
+                                               "in forward_context for shift_model.")
+                         else:
+                            logger.warning("Could not bind Mamba state for shift_model: "
+                                           "Mamba module missing 'layer_name'.")
+            except ImportError:
+                pass # Mamba not installed or present
