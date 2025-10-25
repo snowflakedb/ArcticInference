@@ -439,10 +439,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         sampling_metadata = self.input_batch.sampling_metadata
 
         if not self.speculative_config:
-            spec_token_ids = None
+            self._draft_token_ids = None
         else:
             assert spec_decode_common_attn_metadata is not None
-            spec_token_ids = self.propose_draft_token_ids(
+            self._draft_token_ids = self.propose_draft_token_ids(
                 scheduler_output,
                 valid_sampled_token_ids,
                 sampler_output.sampled_token_ids,
