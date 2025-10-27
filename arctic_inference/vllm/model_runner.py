@@ -712,7 +712,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 return output
 
             sample_hidden_states = hidden_states[logits_indices]
-            logits = model.compute_logits(sample_hidden_states)
+            with set_shift_parallel_mode(use_shift_model):
+                logits = model.compute_logits(sample_hidden_states)
 
         if broadcast_pp_output:
             model_output_broadcast_data = {}
