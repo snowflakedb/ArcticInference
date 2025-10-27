@@ -331,8 +331,17 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                                         dtype=np.int32)
         total_num_scheduled_tokens = int(num_scheduled_tokens.sum())
 
-        logits_indices_cpu = np.cumsum(num_scheduled_tokens) - 1
-        logits_indices = torch.from_numpy(logits_indices_cpu).to(self.device)
+        num_scheduled_tokens_for_logits = num_scheduled_tokens[num_scheduled_tokens > 0]
+        if num_scheduled_tokens_for_logits.size == 0:
+            # Handle edge case: all requests have 0 tokens.
+            logits_indices = torch.empty(0, dtype=torch.long, device=self.device)
+            # Use numpy for the final return indexing
+            logit_indices_np = np.array([], dtype=int)
+        else:
+            logits_indices_cpu = np.cumsum(num_scheduled_tokens_for_logits) - 1
+            logits_indices = torch.from_numpy(logits_indices_cpu).to(self.device)
+            # Use numpy for the final return indexing
+            logit_indices_np = np.cumsum(num_scheduled_tokens) - 1
 
         ubatch_slices = None
         num_tokens_after_padding = None
