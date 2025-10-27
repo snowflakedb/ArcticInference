@@ -1046,17 +1046,11 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         sp_size = parallel_state._SP.world_size
         tp_size = parallel_state._TP.world_size
 
-        if cudagraph_runtime_mode == CUDAGraphMode.PIECEWISE:
-            compilation_cases_base = [
-                min(shape * sp_size, self.max_num_tokens)
-                for shape in compilation_cases
-                if (shape * sp_size) > self.shift_parallel_threshold
-            ]
-        else:
-            compilation_cases_base = [
-                shape for shape in compilation_cases
-                if shape > self.shift_parallel_threshold
-            ]
+        compilation_cases_base = [
+            min(shape * sp_size, self.max_num_tokens)
+            for shape in compilation_cases
+            if (shape * sp_size) > self.shift_parallel_threshold
+        ]
 
         if is_global_first_rank():
             logger.info(f"base model (SP={sp_size}, TP={tp_size}) shapes {compilation_cases_base}")
