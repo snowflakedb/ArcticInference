@@ -55,7 +55,8 @@ if TYPE_CHECKING:
 from arctic_inference.patching import ArcticPatch
 from arctic_inference.suffix_decoding import (SuffixDecodingCache,
                                               SuffixDecodingDraft)
-from arctic_inference.vllm.spec_dec.arctic_proposer import ArcticProposer
+from arctic_inference.vllm.spec_dec.arctic_proposer import (ArcticProposer,
+                                                            SuffixProposer)
 
 SP_TP_MODE = None
 
@@ -137,7 +138,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             arctic_speculative_config = None
 
         self._orig_init(vllm_config, device)
-
+        
         self._suffix_cache = None
         if arctic_speculative_config is not None:
             self.vllm_config.speculative_config = arctic_speculative_config
@@ -149,6 +150,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 elif self.speculative_config.method != "suffix":
                     raise ValueError("Unknown speculative decoding method: "
                                      f"{self.speculative_config.method}")
+                else:
+                    self.drafter = SuffixProposer()
                 self.rejection_sampler = RejectionSampler()
 
         if (self.speculative_config is not None and
@@ -163,6 +166,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 max_tree_depth=spec_cfg.suffix_cache_max_depth,
                 max_cached_requests=spec_cfg.suffix_cache_max_requests
             )
+            
 
     def profile_run(self) -> None:
         self._orig_profile_run()

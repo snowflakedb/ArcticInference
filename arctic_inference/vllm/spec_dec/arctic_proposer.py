@@ -164,3 +164,14 @@ class ArcticProposer:
         )
 
         return next_tokens.cpu().numpy()
+
+
+class SuffixProposer:
+    def __init__(self):
+        pass
+
+    def load_model(
+        self,
+        model: None,
+    ):
+        pass
