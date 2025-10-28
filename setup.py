@@ -166,15 +166,17 @@ class CompileGrpc(_build_py):
         _build_py.run(self)
 
 
-ext_modules=[
-    CMakeExtension("arctic_inference.suffix_decoding._C",
-                   "csrc/suffix_decoding"),
-]
+ext_modules=[]
 
 if os.environ.get("ARCTIC_INFERENCE_PRECOMPILED_OPS", "").lower() in ("1", "true", "on"):
     ext_modules.append(
         CMakeExtension("arctic_inference.custom_ops", "csrc/custom_ops"),
     )
+
+ext_modules.append(
+     CMakeExtension("arctic_inference.suffix_decoding._C",
+                   "csrc/suffix_decoding"),
+)
 
 setup(
     ext_modules=ext_modules,

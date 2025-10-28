@@ -71,3 +71,20 @@ def reshape_and_cache_flash_bulk(
     torch.ops.arctic_inference.reshape_and_cache_flash_bulk(
         keys, values, key_caches, value_caches, slot_mapping, kv_cache_dtype,
         k_scales, v_scales, num_heads, head_size)
+
+
+def reshape_and_cache_flash_fp4(
+    keys: torch.Tensor,
+    values: torch.Tensor,
+    key_cache: torch.Tensor,
+    value_cache: torch.Tensor,
+    key_cache_scales: torch.Tensor,
+    value_cache_scales: torch.Tensor,
+    slot_mapping: torch.Tensor,
+    kv_cache_dtype: str,
+    k_scale: torch.Tensor,
+    v_scale: torch.Tensor,
+) -> None:
+    torch.ops.arctic_inference.reshape_and_cache_flash_fp4(
+        keys, values, key_cache, value_cache, slot_mapping, kv_cache_dtype,
+        k_scale, v_scale, key_cache_scales, value_cache_scales)
