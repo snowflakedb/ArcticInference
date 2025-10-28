@@ -222,11 +222,11 @@ class SuffixDecodingCache:
         """Apply all staged updates with a single native call."""
         if not self._pending_updates:
             return
-        # target the single global tree.
-        batch: list[tuple[SuffixTree, int, list[int]]] = [
-            (self._global_tree, int(seq), toks)
-            for seq, toks in self._pending_updates.items() if toks
-        ]
+        # target the single global tree. Pass references through tuples.
+        batch: list[tuple[SuffixTree, int, list[int]]] = []
+        for seq, toks in self._pending_updates.items():
+            if toks:
+                batch.append((self._global_tree, int(seq), toks))
         if batch:
             batch_extend(batch)
         self._pending_updates.clear()

@@ -18,6 +18,7 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/pair.h>
+#include <nanobind/stl/tuple.h>
 
 #include "suffix_tree.h"
 
@@ -26,7 +27,7 @@ namespace nb = nanobind;
 using Int32Array1D = nb::ndarray<int32_t, nb::numpy, nb::shape<-1>,
                                  nb::device::cpu, nb::any_contig>;
 using BatchVecSingle = std::vector<std::pair<int, std::vector<int32_t>>>;
-using BatchVecMulti = std::vector<std::tuple<SuffixTree*, int, std::vector<int32_t>>>;
+using BatchVecMulti = std::vector<std::tuple<SuffixTree&, int, std::vector<int32_t>>>;
 
 
 // batch single-tree
@@ -43,11 +44,11 @@ void batch_extend_single(SuffixTree& tree, const BatchVecSingle& batches) {
 // batch across multiple trees
 void batch_extend(const BatchVecMulti& batch) {
     for (const auto& tup : batch) {
-        SuffixTree* tree = std::get<0>(tup);
+        SuffixTree& tree = std::get<0>(tup);
         int seq_id = std::get<1>(tup);
         const auto& vec = std::get<2>(tup);
-        if (tree != nullptr && !vec.empty()) {
-            tree->extend(seq_id, std::span<const int32_t>(vec.data(), vec.size()));
+        if (!vec.empty()) {
+            tree.extend(seq_id, std::span<const int32_t>(vec.data(), vec.size()));
         }
     }
 }
@@ -101,6 +102,8 @@ Draft speculate_vector(SuffixTree& tree,
         min_token_prob,
         use_tree_spec);
 }
+
+
 
 
 NB_MODULE(_C, m) {
