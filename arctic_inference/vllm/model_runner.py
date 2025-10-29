@@ -569,12 +569,17 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 min_score = 0
             else:
                 min_score = self.speculative_config.num_speculative_tokens
+            
+            suffix_used_count = 0
+            total_suffix_score = 0.0
             for i, result in enumerate(results):
+                total_suffix_score += result.score
                 if result.score >= min_score:
                     # Use suffix decoded tokens, disable other speculation
                     # methods for this request.
                     new_sampled_token_ids[i] = []
                     suffix_spec_token_ids.append(result.token_ids)
+                    suffix_used_count += 1
                 else:
                     suffix_spec_token_ids.append([])
 
@@ -699,41 +704,55 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         sampled_token_ids: list[list[int]],
     ) -> list[SuffixDecodingDraft]:
         config = self.speculative_config
-        results = []
+        
+        # Build batch parameters for requests that can speculate
+        batch_req_ids = []
+        batch_contexts = []
+        batch_max_spec_tokens = []
+        req_to_batch_idx = {}
+        
         for i, sampled_ids in enumerate(sampled_token_ids):
             num_sampled_ids = len(sampled_ids)
             if not num_sampled_ids:
-                # Skip speculative decoding.
-                results.append(SuffixDecodingDraft())
                 continue
 
-            # Skip requests that require sampling parameters that are not
-            # supported with speculative decoding.
             req_id = self.input_batch.req_ids[i]
             if req_id in self.input_batch.spec_decode_unsupported_reqs:
-                results.append(SuffixDecodingDraft())
                 continue
 
             num_tokens = self.input_batch.num_tokens_no_spec[i]
             if num_tokens >= self.max_model_len:
-                # Skip requests that have already reached the max model length.
-                results.append(SuffixDecodingDraft())
                 continue
 
             start = max(0, num_tokens - config.suffix_cache_max_depth)
             pattern = self.input_batch.token_ids_cpu[i, start:num_tokens]
-            pattern = pattern.tolist()
-            result = self._suffix_cache.speculate(
-                req_id,
-                pattern,
-                max_spec_tokens=min(MAX_SPEC_LEN,
-                                    self.max_model_len - num_tokens - 1),
+            
+            batch_req_ids.append(req_id)
+            batch_contexts.append(pattern)
+            batch_max_spec_tokens.append(min(MAX_SPEC_LEN, self.max_model_len - num_tokens - 1))
+            req_to_batch_idx[i] = len(batch_req_ids) - 1
+        
+        # Call batch speculation if there are any valid requests
+        if batch_req_ids:
+            min_max_spec_tokens = min(batch_max_spec_tokens)
+            batch_results = self._suffix_cache.speculate_batch(
+                req_ids=batch_req_ids,
+                contexts=batch_contexts,
+                max_spec_tokens=min_max_spec_tokens,
                 max_spec_factor=config.suffix_max_spec_factor,
                 max_spec_offset=config.suffix_max_spec_offset,
                 min_token_prob=config.suffix_min_token_prob)
-
-            results.append(result)
-
+        else:
+            batch_results = []
+        
+        # Map batch results back to original request order
+        results = []
+        for i in range(len(sampled_token_ids)):
+            if i in req_to_batch_idx:
+                results.append(batch_results[req_to_batch_idx[i]])
+            else:
+                results.append(SuffixDecodingDraft())
+        
         return results
 
     def load_model(self, eep_scale_up: bool = False) -> None:

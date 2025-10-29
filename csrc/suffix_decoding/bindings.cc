@@ -104,6 +104,33 @@ Draft speculate_vector(SuffixTree& tree,
 }
 
 
+// Batch speculation across multiple trees and contexts.
+// Each tuple contains: (tree, context, max_spec_tokens, max_spec_factor, max_spec_offset, min_token_prob, use_tree_spec)
+using SpeculateParams = std::tuple<SuffixTree&, std::vector<int32_t>, int, float, float, float, bool>;
+
+std::vector<Draft> batch_speculate(const std::vector<SpeculateParams>& batch) {
+    std::vector<Draft> results;
+    results.reserve(batch.size());
+    
+    for (const auto& params : batch) {
+        const auto& [tree, context, max_spec_tokens, max_spec_factor,
+                     max_spec_offset, min_token_prob, use_tree_spec] = params;
+        
+        Draft draft = tree.speculate(
+            std::span<const int32_t>(context.data(), context.size()),
+            max_spec_tokens,
+            max_spec_factor,
+            max_spec_offset,
+            min_token_prob,
+            use_tree_spec);
+        
+        results.push_back(std::move(draft));
+    }
+    
+    return results;
+}
+
+
 
 
 NB_MODULE(_C, m) {
@@ -133,4 +160,5 @@ NB_MODULE(_C, m) {
 
     m.def("batch_extend", &batch_extend);
     m.def("batch_extend_single", &batch_extend_single);
+    m.def("batch_speculate", &batch_speculate);
 }

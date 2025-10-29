@@ -20,7 +20,7 @@ from typing import Dict, Hashable, KeysView, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from arctic_inference.suffix_decoding._C import SuffixTree, Draft, batch_extend
+from arctic_inference.suffix_decoding._C import SuffixTree, Draft, batch_extend, batch_speculate
 
 
 @dataclass
@@ -59,7 +59,8 @@ class SuffixDecodingCache:
     
     def __init__(self,
                  max_tree_depth: int = 64,
-                 max_cached_requests: int = -1):
+                 max_cached_requests: int = -1,
+                 flush_threshold: int = 128):
         """
         Initialize the SuffixDecodingCache.
 
@@ -74,6 +75,7 @@ class SuffixDecodingCache:
 
         self._max_tree_depth = max_tree_depth
         self._max_cached_requests = max_cached_requests
+        self._flush_threshold = flush_threshold
 
         # Global suffix tree caches previous responses in a single tree.
         self._global_tree = SuffixTree(max_tree_depth)
@@ -198,26 +200,31 @@ class SuffixDecodingCache:
         if req_id not in self._local_trees:
             raise ValueError(f"Request '{req_id}' is not active")
 
+        # choosing fastest native path without extra conversions.
         if isinstance(token_ids, np.ndarray):
-            # If input is a numpy array, use the zero-copy ndarray overload.
             self._validate_ndarray(token_ids)
-            extend_func = SuffixTree.extend_ndarray
+            SuffixTree.extend_ndarray(self._local_trees[req_id], 0, token_ids)
         else:
-            extend_func = SuffixTree.extend
+            SuffixTree.extend(self._local_trees[req_id], 0, token_ids)
 
-        # Update the local tree for the active request.
-        extend_func(self._local_trees[req_id], 0, token_ids)
-
-        # Also update the response if the request is in the global cache (it
-        # may be evicted from the global cache before the request is stopped).
         if req_id in self._req_to_seq_id:
             seq_id = self._req_to_seq_id[req_id]
             buf = self._pending_updates.get(seq_id)
             if buf is None:
-                self._pending_updates[seq_id] = [int(t) for t in token_ids]
+                if isinstance(token_ids, np.ndarray):
+                    self._pending_updates[seq_id] = [int(t) for t in token_ids]
+                else:
+                    self._pending_updates[seq_id] = [int(t) for t in token_ids]
+                buf = self._pending_updates[seq_id]
             else:
-                buf.extend(int(t) for t in token_ids)
-                
+                if isinstance(token_ids, np.ndarray):
+                    buf.extend(int(t) for t in token_ids)
+                else:
+                    buf.extend(int(t) for t in token_ids)
+            if len(buf) >= self._flush_threshold:
+                self.flush()
+
+
     def flush(self):
         """Apply all staged updates with a single native call."""
         if not self._pending_updates:
@@ -325,6 +332,92 @@ class SuffixDecodingCache:
         draft = draft1 if draft1.score >= draft2.score else draft2
 
         return SuffixDecodingDraft.from_native(draft)
+
+    def speculate_batch(
+        self,
+        req_ids: List[Hashable],
+        contexts: List[np.ndarray | Sequence[int]],
+        max_spec_tokens: Optional[int] = None,
+        max_spec_factor: float = 1.0,
+        max_spec_offset: float = 0.0,
+        min_token_prob: float = 0.1,
+        use_tree_spec: bool = False,
+    ) -> List[SuffixDecodingDraft]:
+        """
+        Batch speculate for multiple requests in a single native call.
+        
+        Args:
+            req_ids: List of request identifiers.
+            contexts: List of token sequences to match and speculate from.
+            max_spec_tokens: Maximum number of tokens to speculate per request.
+            max_spec_factor: Factor that limits speculation based on match length.
+            max_spec_offset: Offset that limits speculation based on match length.
+            min_token_prob: Minimum estimated probability threshold for draft tokens.
+            use_tree_spec: If True, uses tree-based speculation.
+        
+        Returns:
+            List of speculation results, one per request.
+        """
+        
+        if max_spec_tokens is None:
+            max_spec_tokens = self.max_tree_depth
+        
+        # Build batch parameters for local and global trees
+        local_batch = []
+        global_batch = []
+        valid_indices = []  # Track which requests are valid
+        
+        for idx, (req_id, context) in enumerate(zip(req_ids, contexts)):
+            if req_id not in self._local_trees:
+                continue
+            
+            # Truncate context if needed
+            if len(context) > self._max_tree_depth:
+                context = context[-self._max_tree_depth:]
+            
+            # Convert to list if numpy array
+            if isinstance(context, np.ndarray):
+                context_list = context.tolist()
+            else:
+                context_list = list(context)
+            
+            # Add to local batch
+            local_batch.append((
+                self._local_trees[req_id],
+                context_list,
+                max_spec_tokens,
+                max_spec_factor,
+                max_spec_offset,
+                min_token_prob,
+                use_tree_spec,
+            ))
+            
+            # Add to global batch
+            global_batch.append((
+                self._global_tree,
+                context_list,
+                max_spec_tokens,
+                max_spec_factor,
+                max_spec_offset,
+                min_token_prob,
+                use_tree_spec,
+            ))
+            
+            valid_indices.append(idx)
+        
+        if not local_batch:
+            return [SuffixDecodingDraft() for _ in req_ids]
+        
+        # Call native batch_speculate
+        local_drafts = batch_speculate(local_batch)
+        global_drafts = batch_speculate(global_batch)
+        
+        # Select best draft for each request and map back to original order
+        results = [SuffixDecodingDraft() for _ in req_ids]
+        for i, (local_draft, global_draft) in enumerate(zip(local_drafts, global_drafts)):
+            draft = local_draft if local_draft.score >= global_draft.score else global_draft
+            results[valid_indices[i]] = SuffixDecodingDraft.from_native(draft)
+        return results
 
     def _generate_seq_id(self, req_id: Hashable) -> int:
         # Find the next available seq_id not used by an active request.
