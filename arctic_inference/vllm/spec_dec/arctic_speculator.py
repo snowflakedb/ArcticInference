@@ -33,6 +33,9 @@ from arctic_inference.vllm.spec_dec.vocab_parallel_embedding import (
 )
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
+from arctic_inference.py_custom_ops import (try_load_torch_library,
+                                            speculator_ln)
+
 SQRT2 = 2**0.5
 
 
@@ -85,7 +88,9 @@ class MLPSpeculatorLayerNorm(nn.Module):
             self.bias = nn.Parameter(torch.empty(normalized_shape))
         self.eps = eps
 
-    def forward(self, x):
+        self.use_custom_op = try_load_torch_library()
+
+    def forward_fallback(self, x):
         xf = x
         xf = xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + self.eps)
         x = xf.type_as(x)
@@ -93,6 +98,22 @@ class MLPSpeculatorLayerNorm(nn.Module):
             x = self.weight * x
             x = x + self.bias
         return x
+
+    def forward_opt(self, x):
+        return speculator_ln(
+            x,
+            self.weight if self.elementwise_scale_and_shift else None,
+            self.bias if self.elementwise_scale_and_shift else None,
+            float(self.eps),
+        )
+
+    def forward(self, x):
+        if self.use_custom_op:
+            return self.forward_opt(x)
+        else:
+            return self.forward_fallback(x)
+
+
 
 
 def _generate_cg_key(padding_size: int, head_index: int):
