@@ -33,7 +33,7 @@ TORCH_LIBRARY(arctic_inference, ops) {
   ops.def("speculator_ln_cuda(Tensor input,"
           "                   Tensor? weight,"
           "                   Tensor? bias,"
-          "                   float eps) -> Tensor"); 
+          "                   float eps) -> Tensor");
   ops.impl("speculator_ln_cuda", torch::kCUDA, &speculator_ln_cuda);
 }
 
