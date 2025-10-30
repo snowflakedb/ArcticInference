@@ -708,21 +708,18 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     ) -> list[SuffixDecodingDraft]:
         config = self.speculative_config
         
-        # Fast path: early exit if no tokens sampled
+        # Fast path: exit if no tokens sampled
         if not any(sampled_token_ids):
             return [SuffixDecodingDraft() for _ in sampled_token_ids]
         
-        # Pre-allocate with estimated size for better performance
         num_requests = len(sampled_token_ids)
         batch_req_ids = []
         batch_contexts = []
         req_to_batch_idx = {}
-        
-        # Optimization: compute min_max_spec_tokens once
+
         min_max_spec_tokens = MAX_SPEC_LEN
         max_depth = config.suffix_cache_max_depth
         
-        # Build batch parameters - optimized loop
         for i in range(num_requests):
             sampled_ids = sampled_token_ids[i]
             if not sampled_ids:
@@ -737,7 +734,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             if available_tokens <= 0:
                 continue
 
-            # Extract context slice - numpy view is zero-copy
+            # Extract context slice - np view is zero-copy
             start = max(0, num_tokens - max_depth)
             pattern = self.input_batch.token_ids_cpu[i, start:num_tokens]
             
@@ -745,11 +742,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             batch_contexts.append(pattern)
             req_to_batch_idx[i] = len(batch_req_ids) - 1
             
-            # Update min_max_spec_tokens
             if available_tokens < min_max_spec_tokens:
                 min_max_spec_tokens = available_tokens
         
-        # Call batch speculation if there are any valid requests
+        # Call batch speculation
         if not batch_req_ids:
             return [SuffixDecodingDraft() for _ in sampled_token_ids]
         
@@ -761,7 +757,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             max_spec_offset=config.suffix_max_spec_offset,
             min_token_prob=config.suffix_min_token_prob)
         
-        # Map batch results back to original request order - pre-allocated
+        # Map batch results back to original request order
         results = [SuffixDecodingDraft() for _ in range(num_requests)]
         for i, batch_idx in req_to_batch_idx.items():
             results[i] = batch_results[batch_idx]

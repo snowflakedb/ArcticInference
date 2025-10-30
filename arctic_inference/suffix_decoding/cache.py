@@ -20,11 +20,7 @@ from typing import Dict, Hashable, KeysView, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from arctic_inference.suffix_decoding._C import (
-    SuffixTree, Draft, batch_extend, batch_speculate,
-    batch_speculate_dual, batch_speculate_dual_ndarray,
-    batch_extend_packed_ndarray,
-)
+from arctic_inference.suffix_decoding._C import SuffixTree, Draft, batch_extend, batch_speculate_dual, batch_speculate_dual_ndarray, batch_extend_packed_ndarray
 
 
 @dataclass
@@ -256,7 +252,6 @@ class SuffixDecodingCache:
         
         # Flush global tree updates (packed zero-copy path)
         if self._pending_updates:
-            # Count total tokens and prepare arrays
             seq_ids_list: list[int] = []
             offsets_list: list[int] = []
             lengths_list: list[int] = []
@@ -282,7 +277,7 @@ class SuffixDecodingCache:
                 offsets_arr = np.asarray(offsets_list, dtype=np.int32)
                 lengths_arr = np.asarray(lengths_list, dtype=np.int32)
 
-                # Single native call: packed updates into the global tree
+                # Single call for all the updates into the global tree
                 batch_extend_packed_ndarray(
                     self._global_tree,
                     seq_ids_arr,
@@ -421,7 +416,7 @@ class SuffixDecodingCache:
         if self._pending_local_updates:
             self.flush()
         
-        # Fast path: detect if all contexts are numpy arrays
+        # Fast path: calling batch_speculate_dual_ndarray if token seqs are ndarray
         all_ndarray = all(isinstance(ctx, np.ndarray) for _, ctx in zip(req_ids, contexts) 
                          if _ in self._local_trees)
         
@@ -431,12 +426,10 @@ class SuffixDecodingCache:
         max_depth = self._max_tree_depth
         
         if all_ndarray:
-            # Fast path: all numpy arrays, use zero-copy
             for idx, (req_id, context) in enumerate(zip(req_ids, contexts)):
                 if req_id not in self._local_trees:
                     continue
                 
-                # Truncate if needed (avoid extra array allocations)
                 if len(context) > max_depth:
                     context = context[-max_depth:]
                 
@@ -454,16 +447,12 @@ class SuffixDecodingCache:
             
             if not dual_batch:
                 return [SuffixDecodingDraft() for _ in req_ids]
-            
-            # Zero-copy ndarray path (fastest)
+
             drafts = batch_speculate_dual_ndarray(dual_batch)
         else:
-            # Fallback: mixed types, convert to lists
             for idx, (req_id, context) in enumerate(zip(req_ids, contexts)):
                 if req_id not in self._local_trees:
                     continue
-                
-                # Convert to list and truncate
                 if isinstance(context, np.ndarray):
                     context = context.tolist()
                 else:
@@ -487,10 +476,8 @@ class SuffixDecodingCache:
             if not dual_batch:
                 return [SuffixDecodingDraft() for _ in req_ids]
             
-            # List conversion path
             drafts = batch_speculate_dual(dual_batch)
         
-        # Map results back to original order
         results = [SuffixDecodingDraft() for _ in req_ids]
         for i, draft in enumerate(drafts):
             results[valid_indices[i]] = SuffixDecodingDraft.from_native(draft)

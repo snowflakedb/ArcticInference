@@ -24,35 +24,17 @@
 
 namespace nb = nanobind;
 
-using Int32Array1D = nb::ndarray<int32_t, nb::numpy, nb::shape<-1>,
-                                 nb::device::cpu, nb::any_contig>;
-using BatchVecSingle = std::vector<std::pair<int, std::vector<int32_t>>>;
+using Int32Array1D = nb::ndarray<int32_t, nb::numpy, nb::shape<-1>, nb::device::cpu, nb::any_contig>;
 using BatchVecMulti = std::vector<std::tuple<SuffixTree&, int, std::vector<int32_t>>>;
 
 
-// batch single-tree
-void batch_extend_single(SuffixTree& tree, const BatchVecSingle& batches) {
-    // Process all updates in a single pass to minimize overhead
-    for (const auto& item : batches) {
-        const int seq_id = item.first;
-        const auto& vec = item.second;
-        if (!vec.empty()) {
-            // Use span view directly for zero-copy access
-            tree.extend(seq_id, std::span<const int32_t>(vec.data(), vec.size()));
-        }
-    }
-}
-
 // batch across multiple trees
 void batch_extend(const BatchVecMulti& batch) {
-    // Process all updates in a single pass to minimize nanobind overhead
-    // Group by tree for potential future optimizations
     for (const auto& tup : batch) {
         SuffixTree& tree = std::get<0>(tup);
         int seq_id = std::get<1>(tup);
         const auto& vec = std::get<2>(tup);
         if (!vec.empty()) {
-            // Use span view directly for zero-copy access
             tree.extend(seq_id, std::span<const int32_t>(vec.data(), vec.size()));
         }
     }
@@ -109,43 +91,7 @@ Draft speculate_vector(SuffixTree& tree,
 }
 
 
-// Batch speculation across multiple trees and contexts.
-// Each tuple contains: (tree, context, max_spec_tokens, max_spec_factor, max_spec_offset, min_token_prob, use_tree_spec)
-using SpeculateParams = std::tuple<SuffixTree&, std::vector<int32_t>, int, float, float, float, bool>;
-
-std::vector<Draft> batch_speculate(const std::vector<SpeculateParams>& batch) {
-    // Pre-allocate results vector to avoid reallocations
-    std::vector<Draft> results;
-    results.reserve(batch.size());
-    
-    // Process all speculations in a single pass to minimize nanobind overhead
-    for (const auto& params : batch) {
-        const auto& [tree, context, max_spec_tokens, max_spec_factor,
-                     max_spec_offset, min_token_prob, use_tree_spec] = params;
-        
-        // Use span view directly for zero-copy access when context is not empty
-        if (!context.empty()) {
-            Draft draft = tree.speculate(
-                std::span<const int32_t>(context.data(), context.size()),
-                max_spec_tokens,
-                max_spec_factor,
-                max_spec_offset,
-                min_token_prob,
-                use_tree_spec);
-            results.push_back(std::move(draft));
-        } else {
-            // Empty context produces empty draft
-            results.emplace_back();
-        }
-    }
-    
-    return results;
-}
-
-
-// Dual-tree batch speculation: speculates on both local and global trees,
-// selects the best draft in C++ to minimize Python overhead.
-// Each tuple contains: (local_tree, global_tree, context, max_spec_tokens, max_spec_factor, max_spec_offset, min_token_prob, use_tree_spec)
+// Dual-tree batch speculation: speculates on both local and global trees
 using DualSpeculateParams = std::tuple<SuffixTree&, SuffixTree&, std::vector<int32_t>, int, float, float, float, bool>;
 
 std::vector<Draft> batch_speculate_dual(const std::vector<DualSpeculateParams>& batch) {
@@ -153,7 +99,6 @@ std::vector<Draft> batch_speculate_dual(const std::vector<DualSpeculateParams>& 
     std::vector<Draft> results;
     results.reserve(batch.size());
     
-    // Process all dual-tree speculations in a single pass
     for (const auto& params : batch) {
         const auto& [local_tree, global_tree, context, max_spec_tokens, max_spec_factor,
                      max_spec_offset, min_token_prob, use_tree_spec] = params;
@@ -166,17 +111,16 @@ std::vector<Draft> batch_speculate_dual(const std::vector<DualSpeculateParams>& 
         // Create span view for zero-copy access
         std::span<const int32_t> ctx_span(context.data(), context.size());
         
-        // Speculate on local tree
+        // local tree
         Draft local_draft = local_tree.speculate(
             ctx_span, max_spec_tokens, max_spec_factor,
             max_spec_offset, min_token_prob, use_tree_spec);
         
-        // Speculate on global tree
+        // global tree
         Draft global_draft = global_tree.speculate(
             ctx_span, max_spec_tokens, max_spec_factor,
             max_spec_offset, min_token_prob, use_tree_spec);
-        
-        // Select best draft based on score (done in C++ for efficiency)
+    
         if (local_draft.score >= global_draft.score) {
             results.push_back(std::move(local_draft));
         } else {
@@ -293,8 +237,6 @@ NB_MODULE(_C, m) {
         .def("estimate_memory", &SuffixTree::estimate_memory);
 
     m.def("batch_extend", &batch_extend);
-    m.def("batch_extend_single", &batch_extend_single);
-    m.def("batch_speculate", &batch_speculate);
     m.def("batch_speculate_dual", &batch_speculate_dual);
     m.def("batch_speculate_dual_ndarray", &batch_speculate_dual_ndarray);
     m.def("batch_extend_packed_ndarray", &batch_extend_packed_ndarray);
