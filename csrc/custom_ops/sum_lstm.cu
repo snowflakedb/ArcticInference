@@ -10,7 +10,7 @@
 #include <stdint.h>
 #include <type_traits>
 
-// ------------------------ dtype helpers (same pattern as speculator_ln) ------------------------
+// ------------------------ dtype helpers ------------------------
 template <typename T> struct IsSupported : std::false_type {};
 template <> struct IsSupported<at::Half> : std::true_type {};
 template <> struct IsSupported<at::BFloat16> : std::true_type {};
@@ -33,10 +33,13 @@ __device__ __forceinline__ __nv_bfloat16 from_float_device_bf16(float f) {
 #if !defined(__CUDA_NO_BF16__)
   return __float2bfloat16(f);
 #else
-  uint32_t u = __float_as_uint(f);
-  uint16_t hi = (uint16_t)(u >> 16);
+  // Round-to-nearest-even when chopping 16 LSBs.
+  uint32_t x = __float_as_uint(f);
+  uint32_t lsb = (x >> 16) & 1u;     // target LSB after truncation
+  x += 0x7FFFu + lsb;                // bias for RNE
+  uint16_t hi = static_cast<uint16_t>(x >> 16);
   __nv_bfloat16 h;
-  *reinterpret_cast<uint16_t *>(&h) = hi;
+  *reinterpret_cast<uint16_t*>(&h) = hi;
   return h;
 #endif
 }
@@ -55,41 +58,35 @@ template <> struct DevHalf<at::BFloat16> {
 
 template <typename T, int N> struct alignas(sizeof(T) * N) Pack { T v[N]; };
 
-struct SumOp {
-  __device__ __forceinline__ float operator()(const float &a, const float &b) const { return a + b; }
-};
-
 static inline bool is_aligned(const void *p, size_t bytes) {
   return (reinterpret_cast<uintptr_t>(p) % bytes) == 0;
 }
 
 // ------------------------ math helpers ------------------------
 __device__ __forceinline__ float sigmoid_f(float x) {
-  // numerically stable sigmoid
   return 1.0f / (1.0f + expf(-x));
 }
 
 __device__ __forceinline__ float gelu_erf(float x) {
-  // exact GELU (matches torch.nn.GELU(default))
   const float kInvSqrt2 = 0.70710678118654752440f; // 1/sqrt(2)
   return 0.5f * x * (1.0f + erff(x * kInvSqrt2));
 }
 
 __device__ __forceinline__ float gelu_tanh(float x) {
-  // fast/approximate GELU (Hendrycks 2016)
   const float kSqrt2OverPi = 0.79788456080286535588f;
   return 0.5f * x * (1.0f + tanhf(kSqrt2OverPi * (x + 0.044715f * x * x * x)));
 }
 
 // ------------------------ fused kernels ------------------------
-template <typename ATenScalarT, int VEC>
+// Vectorized kernel (VEC=4 or 8). BLOCK_THREADS must equal blockDim.x.
+template <typename ATenScalarT, int VEC, int BLOCK_THREADS>
 __global__ void sum_lstm_vec_kernel(
     // outputs
     typename DevHalf<ATenScalarT>::type *__restrict__ out_state, // [rows, D]
     typename DevHalf<ATenScalarT>::type *__restrict__ out_cell,  // [rows, D]
     // inputs
     const typename DevHalf<ATenScalarT>::type *__restrict__ states_4d, // [rows, 4D]
-    const typename DevHalf<ATenScalarT>::type *__restrict__ z4_4d,     // [rows, 4D] (the repeated emb)
+    const typename DevHalf<ATenScalarT>::type *__restrict__ z4_4d,     // [rows, 4D]
     const typename DevHalf<ATenScalarT>::type *__restrict__ prev_cell, // [rows, D]
     // layernorm params
     const typename DevHalf<ATenScalarT>::type *__restrict__ w_cell, // [D] or null
@@ -103,9 +100,10 @@ __global__ void sum_lstm_vec_kernel(
     float alpha, float eps_cell, float eps_state,
     int use_fast_gelu)
 {
-  using DH = DevHalf<ATenScalarT>;
-  using H  = typename DH::type;
+  using DH    = DevHalf<ATenScalarT>;
+  using H     = typename DH::type;
   using VPack = Pack<H, VEC>;
+  using BlockReduce = cub::BlockReduce<float, BLOCK_THREADS>;
 
   const int row = blockIdx.x;
   const H *row_s  = states_4d + row * states_row_stride;
@@ -115,14 +113,14 @@ __global__ void sum_lstm_vec_kernel(
   H *row_out_cell  = out_cell  + row * out_row_stride;
   H *row_out_state = out_state + row * out_row_stride;
 
-  const int vec_len = D / VEC; // vector packs along D
+  const int vec_len = D / VEC;
 
-  // ---- Stage 0: RMS of cell_candidate pre-act (c_pre = s3 + alpha*z3) ----
+  // ---- Stage 0: RMS(c_pre = s3 + alpha*z3) ----
   float local_ss_cpre = 0.f;
   const VPack* s3_vec  = reinterpret_cast<const VPack*>(row_s  + 3*D);
   const VPack* z3_vec  = reinterpret_cast<const VPack*>(row_z4 + 3*D);
 
-  for (int i = threadIdx.x; i < vec_len; i += blockDim.x) {
+  for (int i = threadIdx.x; i < vec_len; i += BLOCK_THREADS) {
     VPack s3 = s3_vec[i];
     VPack z3 = z3_vec[i];
 #pragma unroll
@@ -132,9 +130,8 @@ __global__ void sum_lstm_vec_kernel(
     }
   }
 
-  using BlockReduce = cub::BlockReduce<float, 1024>;
   __shared__ typename BlockReduce::TempStorage temp0;
-  float sumsq_cpre = BlockReduce(temp0).Reduce(local_ss_cpre, SumOp{}, blockDim.x);
+  float sumsq_cpre = BlockReduce(temp0).Sum(local_ss_cpre);
 
   __shared__ float inv_rms_cpre;
   if (threadIdx.x == 0) {
@@ -143,18 +140,16 @@ __global__ void sum_lstm_vec_kernel(
   }
   __syncthreads();
 
-  // ---- Stage 1: build new cell, accumulate its RMS ----
+  // ---- Stage 1: c_new and its RMS ----
   float local_ss_cnew = 0.f;
 
   const VPack* s0_vec = reinterpret_cast<const VPack*>(row_s + 0*D);
   const VPack* s1_vec = reinterpret_cast<const VPack*>(row_s + 1*D);
   const VPack* s2_vec = reinterpret_cast<const VPack*>(row_s + 2*D);
-  // s3_vec already defined
 
   const VPack* z0_vec = reinterpret_cast<const VPack*>(row_z4 + 0*D);
   const VPack* z1_vec = reinterpret_cast<const VPack*>(row_z4 + 1*D);
   const VPack* z2_vec = reinterpret_cast<const VPack*>(row_z4 + 2*D);
-  // z3_vec already defined
 
   const VPack* pc_vec = reinterpret_cast<const VPack*>(row_pc);
   VPack* outc_vec     = reinterpret_cast<VPack*>(row_out_cell);
@@ -162,35 +157,28 @@ __global__ void sum_lstm_vec_kernel(
   const VPack* wcell_vec = reinterpret_cast<const VPack*>(w_cell);
   const VPack* bcell_vec = reinterpret_cast<const VPack*>(b_cell);
 
-  for (int i = threadIdx.x; i < vec_len; i += blockDim.x) {
+  const bool use_w_cell = (w_cell  != nullptr);
+  const bool use_b_cell = (b_cell  != nullptr);
+
+  for (int i = threadIdx.x; i < vec_len; i += BLOCK_THREADS) {
     VPack s0 = s0_vec[i], s1 = s1_vec[i], s2 = s2_vec[i], s3 = s3_vec[i];
     VPack z0 = z0_vec[i], z1 = z1_vec[i], z2 = z2_vec[i], z3 = z3_vec[i];
     VPack pc = pc_vec[i];
 
-    VPack oc; // out cell pack
+    VPack oc;
     VPack wcell, bcell;
-    bool use_w_cell = (w_cell != nullptr);
-    bool use_b_cell = (b_cell != nullptr);
     if (use_w_cell) wcell = wcell_vec[i];
     if (use_b_cell) bcell = bcell_vec[i];
 
 #pragma unroll
     for (int k = 0; k < VEC; ++k) {
-      float z0f = DH::to_float(z0.v[k]);
-      float z1f = DH::to_float(z1.v[k]);
-      float z2f = DH::to_float(z2.v[k]);
-      float z3f = DH::to_float(z3.v[k]);
-
-      float pre_f = DH::to_float(s0.v[k]) + alpha * z0f;
-      float pre_i = DH::to_float(s1.v[k]) + alpha * z1f;
-      float pre_o = DH::to_float(s2.v[k]) + alpha * z2f; // used in stage 3
-      (void)pre_o; // silence unused warning (will recompute later anyway)
-      float cpre  = DH::to_float(s3.v[k]) + alpha * z3f;
+      float pre_f = DH::to_float(s0.v[k]) + alpha * DH::to_float(z0.v[k]);
+      float pre_i = DH::to_float(s1.v[k]) + alpha * DH::to_float(z1.v[k]);
+      float cpre  = DH::to_float(s3.v[k]) + alpha * DH::to_float(z3.v[k]);
 
       float fgate = sigmoid_f(pre_f);
       float igate = sigmoid_f(pre_i);
 
-      // cell LN (RMS), then GELU
       float cn = cpre * inv_rms_cpre;
       if (use_w_cell) cn *= DH::to_float(wcell.v[k]);
       if (use_b_cell) cn += DH::to_float(bcell.v[k]);
@@ -203,11 +191,11 @@ __global__ void sum_lstm_vec_kernel(
       local_ss_cnew += cnew * cnew;
       oc.v[k] = DH::from_float(cnew);
     }
-    outc_vec[i] = oc; // write new cell (kept for output + stage 3)
+    outc_vec[i] = oc;
   }
 
   __shared__ typename BlockReduce::TempStorage temp1;
-  float sumsq_cnew = BlockReduce(temp1).Reduce(local_ss_cnew, SumOp{}, blockDim.x);
+  float sumsq_cnew = BlockReduce(temp1).Sum(local_ss_cnew);
 
   __shared__ float inv_rms_cnew;
   if (threadIdx.x == 0) {
@@ -216,25 +204,25 @@ __global__ void sum_lstm_vec_kernel(
   }
   __syncthreads();
 
-  // ---- Stage 3: final state = GELU( LN(cnew) ) * ogate ----
+  // ---- Stage 3: state = GELU( LN(c_new) ) * o_gate ----
   const VPack* outc_read = reinterpret_cast<const VPack*>(row_out_cell);
-  VPack* outs_vec        = reinterpret_cast<VPack*>(row_out_state);
+  VPack*       outs_vec  = reinterpret_cast<VPack*>(row_out_state);
 
   const VPack* wstate_vec = reinterpret_cast<const VPack*>(w_state);
   const VPack* bstate_vec = reinterpret_cast<const VPack*>(b_state);
+  const bool use_w_st = (w_state != nullptr);
+  const bool use_b_st = (b_state != nullptr);
 
-  for (int i = threadIdx.x; i < vec_len; i += blockDim.x) {
+  for (int i = threadIdx.x; i < vec_len; i += BLOCK_THREADS) {
     VPack s2 = s2_vec[i];
     VPack z2 = z2_vec[i];
     VPack oc = outc_read[i];
 
     VPack wst, bst;
-    bool use_w_st = (w_state != nullptr);
-    bool use_b_st = (b_state != nullptr);
     if (use_w_st) wst = wstate_vec[i];
     if (use_b_st) bst = bstate_vec[i];
 
-    VPack os; // out state pack
+    VPack os;
 #pragma unroll
     for (int k = 0; k < VEC; ++k) {
       float cnew = DH::to_float(oc.v[k]);
@@ -254,7 +242,8 @@ __global__ void sum_lstm_vec_kernel(
   }
 }
 
-template <typename ATenScalarT>
+// Scalar kernel. BLOCK_THREADS must equal blockDim.x.
+template <typename ATenScalarT, int BLOCK_THREADS>
 __global__ void sum_lstm_scalar_kernel(
     // outputs
     typename DevHalf<ATenScalarT>::type *__restrict__ out_state,
@@ -277,6 +266,7 @@ __global__ void sum_lstm_scalar_kernel(
 {
   using DH = DevHalf<ATenScalarT>;
   using H  = typename DH::type;
+  using BlockReduce = cub::BlockReduce<float, BLOCK_THREADS>;
 
   const int row = blockIdx.x;
   const H *s  = states_4d + row * states_row_stride;
@@ -288,14 +278,13 @@ __global__ void sum_lstm_scalar_kernel(
 
   // Stage 0: RMS(c_pre)
   float local_ss_cpre = 0.f;
-  for (int j = threadIdx.x; j < D; j += blockDim.x) {
+  for (int j = threadIdx.x; j < D; j += BLOCK_THREADS) {
     float c = DH::to_float(s[3*D + j]) + alpha * DH::to_float(z4[3*D + j]);
     local_ss_cpre += c * c;
   }
 
-  using BlockReduce = cub::BlockReduce<float, 1024>;
   __shared__ typename BlockReduce::TempStorage temp0;
-  float sumsq_cpre = BlockReduce(temp0).Reduce(local_ss_cpre, SumOp{}, blockDim.x);
+  float sumsq_cpre = BlockReduce(temp0).Sum(local_ss_cpre);
 
   __shared__ float inv_rms_cpre;
   if (threadIdx.x == 0) {
@@ -306,7 +295,7 @@ __global__ void sum_lstm_scalar_kernel(
 
   // Stage 1: new cell + its RMS
   float local_ss_cnew = 0.f;
-  for (int j = threadIdx.x; j < D; j += blockDim.x) {
+  for (int j = threadIdx.x; j < D; j += BLOCK_THREADS) {
     float pre_f = DH::to_float(s[0*D + j]) + alpha * DH::to_float(z4[0*D + j]);
     float pre_i = DH::to_float(s[1*D + j]) + alpha * DH::to_float(z4[1*D + j]);
     float cpre  = DH::to_float(s[3*D + j]) + alpha * DH::to_float(z4[3*D + j]);
@@ -326,7 +315,7 @@ __global__ void sum_lstm_scalar_kernel(
   }
 
   __shared__ typename BlockReduce::TempStorage temp1;
-  float sumsq_cnew = BlockReduce(temp1).Reduce(local_ss_cnew, SumOp{}, blockDim.x);
+  float sumsq_cnew = BlockReduce(temp1).Sum(local_ss_cnew);
 
   __shared__ float inv_rms_cnew;
   if (threadIdx.x == 0) {
@@ -336,7 +325,7 @@ __global__ void sum_lstm_scalar_kernel(
   __syncthreads();
 
   // Stage 3: final state
-  for (int j = threadIdx.x; j < D; j += blockDim.x) {
+  for (int j = threadIdx.x; j < D; j += BLOCK_THREADS) {
     float cn = DH::to_float(oc[j]) * inv_rms_cnew;
     if (w_state) cn *= DH::to_float(w_state[j]);
     if (b_state) cn += DH::to_float(b_state[j]);
@@ -387,41 +376,36 @@ static std::tuple<torch::Tensor, torch::Tensor> sum_lstm_cuda_impl(
   auto p2 = prev_cell_d.view({-1, D});
 
   const int64_t rows     = s2.size(0);
-  const int64_t s_stride = s2.stride(0);   // elements per row in states (== 4*D + pad4)
-  const int64_t z_stride = z2.stride(0);   // elements per row in z4 (== 4*D + pad4)
-  const int64_t p_stride = p2.stride(0);   // elements per row in prev_cell (== D + padD)
+  const int64_t s_stride = s2.stride(0);
+  const int64_t z_stride = z2.stride(0);
+  const int64_t p_stride = p2.stride(0);
 
-  // --- Allocate outputs with the **same strides** as p2 (robust for pitched inputs)
+  // Allocate outputs with the same row stride as prev_cell (supports pitched inputs)
   auto out_cell  = at::empty_strided(p2.sizes(),  p2.strides(),  p2.options());
   auto out_state = at::empty_strided(p2.sizes(),  p2.strides(),  p2.options());
 
-  // Or (acceptable alternative): at::empty_like(p2) and then use out_cell.stride(0)
   const int64_t out_stride_cell  = out_cell.stride(0);
   const int64_t out_stride_state = out_state.stride(0);
   TORCH_CHECK(out_stride_cell == out_stride_state,
               "sum_lstm: internal - output strides mismatch");
 
-  // Return tensors shaped like prev_cell_d; stride may differ (that’s fine).
   auto out_cell_orig  = out_cell.view(prev_cell_d.sizes());
   auto out_state_orig = out_state.view(prev_cell_d.sizes());
 
   using H = typename DevHalf<ATenScalarT>::type;
   const auto stream = at::cuda::getCurrentCUDAStream();
-  const int BLOCK = (rows < 256) ? 1024 : 256;
-  dim3 grid(rows);
-  dim3 block(std::min<int64_t>(D, BLOCK));
+
+  // Alignment / vectorization checks (no effect on correctness)
+  const bool row_aligned_8 =
+      (s_stride % 8 == 0) && (z_stride % 8 == 0) && (out_stride_cell % 8 == 0);
+  const bool row_aligned_4 =
+      (s_stride % 4 == 0) && (z_stride % 4 == 0) && (out_stride_cell % 4 == 0);
 
   H* out_state_ptr = reinterpret_cast<H*>(out_state.data_ptr());
   H* out_cell_ptr  = reinterpret_cast<H*>(out_cell.data_ptr());
   const H* s_ptr   = reinterpret_cast<const H*>(s2.data_ptr());
   const H* z_ptr   = reinterpret_cast<const H*>(z2.data_ptr());
   const H* p_ptr   = reinterpret_cast<const H*>(p2.data_ptr());
-
-  // Alignment / vectorization checks (relaxed; no effect on correctness)
-  const bool row_aligned_8 =
-      (s_stride % 8 == 0) && (z_stride % 8 == 0) && (out_stride_cell % 8 == 0);
-  const bool row_aligned_4 =
-      (s_stride % 4 == 0) && (z_stride % 4 == 0) && (out_stride_cell % 4 == 0);
 
   const bool can_vec8 =
       (D % 8 == 0) && row_aligned_8 &&
@@ -438,37 +422,50 @@ static std::tuple<torch::Tensor, torch::Tensor> sum_lstm_cuda_impl(
   float eps_state = static_cast<float>(eps_state_d);
   int fast        = use_fast_gelu ? 1 : 0;
 
+  // Compile-time block sizes chosen to avoid "too many resources" on common GPUs.
+  constexpr int BLK_128 = 128;
+  constexpr int BLK_256 = 256;
+
+  dim3 grid(rows);
+
+  auto wcell_ptr  = w_cell  ? reinterpret_cast<const H*>(w_cell->data_ptr())  : nullptr;
+  auto bcell_ptr  = b_cell  ? reinterpret_cast<const H*>(b_cell->data_ptr())  : nullptr;
+  auto wstate_ptr = w_state ? reinterpret_cast<const H*>(w_state->data_ptr()) : nullptr;
+  auto bstate_ptr = b_state ? reinterpret_cast<const H*>(b_state->data_ptr()) : nullptr;
+
+#define LAUNCH_VEC(V, BLK)                                                                 \
+  do {                                                                                     \
+    dim3 block((BLK));                                                                     \
+    sum_lstm_vec_kernel<ATenScalarT, (V), (BLK)><<<grid, block, 0, stream>>>(              \
+        out_state_ptr, out_cell_ptr,                                                       \
+        s_ptr, z_ptr, p_ptr,                                                               \
+        wcell_ptr, bcell_ptr, wstate_ptr, bstate_ptr,                                      \
+        s_stride, z_stride, p_stride, out_stride_cell, static_cast<int>(D),                \
+        alpha, eps_cell, eps_state, fast);                                                 \
+  } while (0)
+
+#define LAUNCH_SCALAR(BLK)                                                                 \
+  do {                                                                                     \
+    dim3 block((BLK));                                                                     \
+    sum_lstm_scalar_kernel<ATenScalarT, (BLK)><<<grid, block, 0, stream>>>(                \
+        out_state_ptr, out_cell_ptr,                                                       \
+        s_ptr, z_ptr, p_ptr,                                                               \
+        wcell_ptr, bcell_ptr, wstate_ptr, bstate_ptr,                                      \
+        s_stride, z_stride, p_stride, out_stride_cell, static_cast<int>(D),                \
+        alpha, eps_cell, eps_state, fast);                                                 \
+  } while (0)
+
   if (can_vec8) {
-    sum_lstm_vec_kernel<ATenScalarT, 8><<<grid, block, 0, stream>>>(
-        out_state_ptr, out_cell_ptr,
-        s_ptr, z_ptr, p_ptr,
-        /*w_cell*/  w_cell  ? reinterpret_cast<const H*>(w_cell->data_ptr())  : nullptr,
-        /*b_cell*/  b_cell  ? reinterpret_cast<const H*>(b_cell->data_ptr())  : nullptr,
-        /*w_state*/ w_state ? reinterpret_cast<const H*>(w_state->data_ptr()) : nullptr,
-        /*b_state*/ b_state ? reinterpret_cast<const H*>(b_state->data_ptr()) : nullptr,
-        s_stride, z_stride, p_stride, out_stride_cell, (int)D,
-        alpha, eps_cell, eps_state, fast);
+    // Heaviest kernel => use smaller block to avoid per-block resource overflow
+    LAUNCH_VEC(8, BLK_128);
   } else if (can_vec4) {
-    sum_lstm_vec_kernel<ATenScalarT, 4><<<grid, block, 0, stream>>>(
-        out_state_ptr, out_cell_ptr,
-        s_ptr, z_ptr, p_ptr,
-        /*w_cell*/  w_cell  ? reinterpret_cast<const H*>(w_cell->data_ptr())  : nullptr,
-        /*b_cell*/  b_cell  ? reinterpret_cast<const H*>(b_cell->data_ptr())  : nullptr,
-        /*w_state*/ w_state ? reinterpret_cast<const H*>(w_state->data_ptr()) : nullptr,
-        /*b_state*/ b_state ? reinterpret_cast<const H*>(b_state->data_ptr()) : nullptr,
-        s_stride, z_stride, p_stride, out_stride_cell, (int)D,
-        alpha, eps_cell, eps_state, fast);
+    LAUNCH_VEC(4, BLK_256);
   } else {
-    sum_lstm_scalar_kernel<ATenScalarT><<<grid, block, 0, stream>>>(
-        out_state_ptr, out_cell_ptr,
-        s_ptr, z_ptr, p_ptr,
-        /*w_cell*/  w_cell  ? reinterpret_cast<const H*>(w_cell->data_ptr())  : nullptr,
-        /*b_cell*/  b_cell  ? reinterpret_cast<const H*>(b_cell->data_ptr())  : nullptr,
-        /*w_state*/ w_state ? reinterpret_cast<const H*>(w_state->data_ptr()) : nullptr,
-        /*b_state*/ b_state ? reinterpret_cast<const H*>(b_state->data_ptr()) : nullptr,
-        s_stride, z_stride, p_stride, out_stride_cell, (int)D,
-        alpha, eps_cell, eps_state, fast);
+    LAUNCH_SCALAR(BLK_256);
   }
+
+#undef LAUNCH_VEC
+#undef LAUNCH_SCALAR
 
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   return {out_state_orig, out_cell_orig};
@@ -499,4 +496,3 @@ std::tuple<torch::Tensor, torch::Tensor> sum_lstm_cuda(
       TORCH_CHECK(false, "sum_lstm: only fp16 and bf16 are supported.");
   }
 }
-

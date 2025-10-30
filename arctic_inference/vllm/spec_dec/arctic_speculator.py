@@ -34,9 +34,10 @@ from arctic_inference.vllm.spec_dec.vocab_parallel_embedding import (
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
 from arctic_inference.py_custom_ops import (try_load_torch_library,
-                                            speculator_ln)
+                                            speculator_ln, sum_lstm)
 
 SQRT2 = 2**0.5
+USE_CUSTOM_OP = try_load_torch_library()
 
 
 def padding_size(size: int) -> int:
@@ -88,8 +89,6 @@ class MLPSpeculatorLayerNorm(nn.Module):
             self.bias = nn.Parameter(torch.empty(normalized_shape))
         self.eps = eps
 
-        self.use_custom_op = try_load_torch_library()
-
     def forward_fallback(self, x):
         xf = x
         xf = xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + self.eps)
@@ -108,7 +107,7 @@ class MLPSpeculatorLayerNorm(nn.Module):
         )
 
     def forward(self, x):
-        if self.use_custom_op:
+        if USE_CUSTOM_OP:
             return self.forward_opt(x)
         else:
             return self.forward_fallback(x)
@@ -683,32 +682,58 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
 
             prev_state = previous_hidden_states
 
-            z = self.forget_emb[actual_i](last_tokens).repeat(1, 1, 4)  # b n d
+            z4 = self.forget_emb[actual_i](last_tokens).repeat(1, 1, 4)  # b n d
             states = self.projs[actual_proj_i](prev_state)
-            added_states = torch.add(states,
-                                     z,
-                                     alpha=self.emb_weight / self.state_weight)
 
-            forget_input_output, cell_candidate = added_states.split(
-                [self.proj_dim[0] * 3, self.proj_dim[0]], dim=-1)
-            forget_gate, input_gate, output_gate = torch.sigmoid(
-                forget_input_output).split(
-                    [self.proj_dim[0], self.proj_dim[0], self.proj_dim[0]],
-                    dim=-1)
+            if USE_CUSTOM_OP:
+                # flatten batch dims for the kernel
+                states_4d = states.flatten(0, 1)          # [B, 4D]
+                z4_4d     = z4.flatten(0, 1)              # [B, 4D]
+                pc_d      = cell_states.flatten(0, 1)     # [B, D]
 
-            cell_candidate = self.activation(
-                self.cell_ln[actual_i](cell_candidate))  # b n d
-            cell_candidate = cell_candidate * input_gate
+                w_cell = self.cell_ln[actual_i].weight
+                b_cell = self.cell_ln[actual_i].bias
+                w_state = self.state_ln[actual_i].weight
+                b_state = self.state_ln[actual_i].bias
 
-            cell_states = cell_states * forget_gate
-            cell_states = cell_states + cell_candidate
+                alpha = float(self.emb_weight / self.state_weight)
+                eps_cell = float(self.cell_ln[actual_i].eps)
+                eps_state = float(self.state_ln[actual_i].eps)
+                use_fast_gelu = False  # match nn.GELU default
 
-            state_candidate = self.activation(
-                self.state_ln[actual_i](cell_states))
-            state = state_candidate * output_gate
+                state_d, cell_d = sum_lstm(
+                    states_4d, z4_4d, pc_d,
+                    w_cell, b_cell, w_state, b_state,
+                    alpha, eps_cell, eps_state, use_fast_gelu
+                )
 
-            return state, cell_states
+                state = state_d.view_as(prev_state)      # [B,1,D]
+                cell_states = cell_d.view_as(prev_state) # [B,1,D]
+                return state, cell_states
+            else:
+                added_states = torch.add(states,
+                                         z,
+                                         alpha=self.emb_weight / self.state_weight)
 
+                forget_input_output, cell_candidate = added_states.split(
+                    [self.proj_dim[0] * 3, self.proj_dim[0]], dim=-1)
+                forget_gate, input_gate, output_gate = torch.sigmoid(
+                    forget_input_output).split(
+                        [self.proj_dim[0], self.proj_dim[0], self.proj_dim[0]],
+                        dim=-1)
+
+                cell_candidate = self.activation(
+                    self.cell_ln[actual_i](cell_candidate))  # b n d
+                cell_candidate = cell_candidate * input_gate
+
+                cell_states = cell_states * forget_gate
+                cell_states = cell_states + cell_candidate
+
+                state_candidate = self.activation(
+                    self.state_ln[actual_i](cell_states))
+                state = state_candidate * output_gate
+
+                return state, cell_states
         else:
             # Project and predict
             z = self.emb[actual_i](last_tokens)  # b k d
