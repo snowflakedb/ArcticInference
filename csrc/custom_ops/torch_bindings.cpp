@@ -35,6 +35,19 @@ TORCH_LIBRARY(arctic_inference, ops) {
           "                   Tensor? bias,"
           "                   float eps) -> Tensor");
   ops.impl("speculator_ln_cuda", torch::kCUDA, &speculator_ln_cuda);
+
+  ops.def("sum_lstm_cuda(Tensor states_4d,"
+          "               Tensor z4_4d,"
+          "               Tensor prev_cell_d,"
+          "               Tensor? w_cell,"
+          "               Tensor? b_cell,"
+          "               Tensor? w_state,"
+          "               Tensor? b_state,"
+          "               float alpha,"
+          "               float eps_cell,"
+          "               float eps_state,"
+          "               bool use_fast_gelu) -> (Tensor, Tensor)");
+  ops.impl("sum_lstm_cuda", torch::kCUDA, &sum_lstm_cuda);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {}

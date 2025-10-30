@@ -28,3 +28,14 @@ torch::Tensor speculator_ln_cuda(const torch::Tensor &input,
                                  const c10::optional<torch::Tensor> &weight,
                                  const c10::optional<torch::Tensor> &bias,
                                  double eps);
+
+std::tuple<torch::Tensor, torch::Tensor> sum_lstm_cuda(
+    const torch::Tensor& states_4d,   // [..., 4D]
+    const torch::Tensor& z4_4d,       // [..., 4D]  (repeat along last dim)
+    const torch::Tensor& prev_cell_d, // [..., D]
+    const c10::optional<torch::Tensor>& w_cell,
+    const c10::optional<torch::Tensor>& b_cell,
+    const c10::optional<torch::Tensor>& w_state,
+    const c10::optional<torch::Tensor>& b_state,
+    double alpha, double eps_cell, double eps_state,
+    bool use_fast_gelu);
