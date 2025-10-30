@@ -673,29 +673,32 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         return draft_token_ids
 
     def _update_suffix_cache(self, sampled_token_ids: list[list[int]]) -> None:
+        # Optimization: build seen set once, pre-sized
+        num_requests = len(sampled_token_ids)
         seen_req_ids = set()
-        for i, sampled_ids in enumerate(sampled_token_ids):
+        
+        for i in range(num_requests):
+            sampled_ids = sampled_token_ids[i]
             req_id = self.input_batch.req_ids[i]
             seen_req_ids.add(req_id)
 
             if not sampled_ids:
                 continue
 
-            index = self.input_batch.req_id_to_index[req_id]
+            # Fast path: most requests are already active
             if req_id not in self._suffix_cache.active_requests:
                 if req_id in self._suffix_cache.cached_requests:
                     # Reset the suffix cache for this request.
                     self._suffix_cache.evict_cached_response(req_id)
+                index = self.input_batch.req_id_to_index[req_id]
                 num_prompt_tokens = self.input_batch.num_prompt_tokens[index]
-                prompt_token_ids = (
-                    self.input_batch.token_ids_cpu[index, :num_prompt_tokens])
-                prompt_token_ids = prompt_token_ids.tolist()
+                prompt_token_ids = self.input_batch.token_ids_cpu[index, :num_prompt_tokens]
                 self._suffix_cache.start_request(req_id, prompt_token_ids)
 
             self._suffix_cache.add_active_response(req_id, sampled_ids)
 
-        # Stop requests that are not seen
-        for req_id in list(self._suffix_cache.active_requests):
+        active_requests = self._suffix_cache.active_requests
+        for req_id in list(active_requests):
             if req_id not in seen_req_ids:
                 self._suffix_cache.stop_request(req_id)
 
@@ -705,15 +708,24 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     ) -> list[SuffixDecodingDraft]:
         config = self.speculative_config
         
-        # Build batch parameters for requests that can speculate
+        # Fast path: early exit if no tokens sampled
+        if not any(sampled_token_ids):
+            return [SuffixDecodingDraft() for _ in sampled_token_ids]
+        
+        # Pre-allocate with estimated size for better performance
+        num_requests = len(sampled_token_ids)
         batch_req_ids = []
         batch_contexts = []
-        batch_max_spec_tokens = []
         req_to_batch_idx = {}
         
-        for i, sampled_ids in enumerate(sampled_token_ids):
-            num_sampled_ids = len(sampled_ids)
-            if not num_sampled_ids:
+        # Optimization: compute min_max_spec_tokens once
+        min_max_spec_tokens = MAX_SPEC_LEN
+        max_depth = config.suffix_cache_max_depth
+        
+        # Build batch parameters - optimized loop
+        for i in range(num_requests):
+            sampled_ids = sampled_token_ids[i]
+            if not sampled_ids:
                 continue
 
             req_id = self.input_batch.req_ids[i]
@@ -721,37 +733,38 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 continue
 
             num_tokens = self.input_batch.num_tokens_no_spec[i]
-            if num_tokens >= self.max_model_len:
+            available_tokens = self.max_model_len - num_tokens - 1
+            if available_tokens <= 0:
                 continue
 
-            start = max(0, num_tokens - config.suffix_cache_max_depth)
+            # Extract context slice - numpy view is zero-copy
+            start = max(0, num_tokens - max_depth)
             pattern = self.input_batch.token_ids_cpu[i, start:num_tokens]
             
             batch_req_ids.append(req_id)
             batch_contexts.append(pattern)
-            batch_max_spec_tokens.append(min(MAX_SPEC_LEN, self.max_model_len - num_tokens - 1))
             req_to_batch_idx[i] = len(batch_req_ids) - 1
+            
+            # Update min_max_spec_tokens
+            if available_tokens < min_max_spec_tokens:
+                min_max_spec_tokens = available_tokens
         
         # Call batch speculation if there are any valid requests
-        if batch_req_ids:
-            min_max_spec_tokens = min(batch_max_spec_tokens)
-            batch_results = self._suffix_cache.speculate_batch(
-                req_ids=batch_req_ids,
-                contexts=batch_contexts,
-                max_spec_tokens=min_max_spec_tokens,
-                max_spec_factor=config.suffix_max_spec_factor,
-                max_spec_offset=config.suffix_max_spec_offset,
-                min_token_prob=config.suffix_min_token_prob)
-        else:
-            batch_results = []
+        if not batch_req_ids:
+            return [SuffixDecodingDraft() for _ in sampled_token_ids]
         
-        # Map batch results back to original request order
-        results = []
-        for i in range(len(sampled_token_ids)):
-            if i in req_to_batch_idx:
-                results.append(batch_results[req_to_batch_idx[i]])
-            else:
-                results.append(SuffixDecodingDraft())
+        batch_results = self._suffix_cache.speculate_batch(
+            req_ids=batch_req_ids,
+            contexts=batch_contexts,
+            max_spec_tokens=min_max_spec_tokens,
+            max_spec_factor=config.suffix_max_spec_factor,
+            max_spec_offset=config.suffix_max_spec_offset,
+            min_token_prob=config.suffix_min_token_prob)
+        
+        # Map batch results back to original request order - pre-allocated
+        results = [SuffixDecodingDraft() for _ in range(num_requests)]
+        for i, batch_idx in req_to_batch_idx.items():
+            results[i] = batch_results[batch_idx]
         
         return results
 
