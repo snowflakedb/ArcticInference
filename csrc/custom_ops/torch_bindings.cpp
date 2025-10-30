@@ -18,17 +18,23 @@ TORCH_LIBRARY(arctic_inference, ops) {
            &reshape_and_cache_flash_bulk);
 
   ops.def("reshape_and_cache_flash_fp4(Tensor key,"
-          "                          Tensor value,"
-          "                          Tensor(c!) key_cache,"
-          "                          Tensor(d!) value_cache,"
-          "                          Tensor slot_mapping,"
-          "                          str kv_cache_dtype,"
-          "                          Tensor k_scale,"
-          "                          Tensor v_scale,"
-          "                          Tensor(e!) key_scale_cache,"
-          "                          Tensor(f!) value_scale_cache) -> ()");
+          "                            Tensor value,"
+          "                            Tensor(c!) key_cache,"
+          "                            Tensor(d!) value_cache,"
+          "                            Tensor slot_mapping,"
+          "                            str kv_cache_dtype,"
+          "                            Tensor k_scale,"
+          "                            Tensor v_scale,"
+          "                            Tensor(e!) key_scale_cache,"
+          "                            Tensor(f!) value_scale_cache) -> ()");
   ops.impl("reshape_and_cache_flash_fp4", torch::kCUDA,
            &reshape_and_cache_flash_fp4);
+
+  ops.def("speculator_ln_cuda(Tensor input,"
+          "                   Tensor? weight,"
+          "                   Tensor? bias,"
+          "                   float eps) -> Tensor"); 
+  ops.impl("speculator_ln_cuda", torch::kCUDA, &speculator_ln_cuda);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {}

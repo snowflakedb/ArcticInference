@@ -24,3 +24,9 @@ void reshape_and_cache_flash_fp4(
     const std::string &kv_cache_dtype, torch::Tensor &k_scale,
     torch::Tensor &v_scale, torch::Tensor &key_scale_cache,
     torch::Tensor &value_scale_cache);
+
+torch::Tensor speculator_ln_cuda(
+    const torch::Tensor& input,
+    const c10::optional<torch::Tensor>& weight,
+    const c10::optional<torch::Tensor>& bias,
+    double eps);

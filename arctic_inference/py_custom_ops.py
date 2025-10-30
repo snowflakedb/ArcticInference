@@ -88,3 +88,13 @@ def reshape_and_cache_flash_fp4(
     torch.ops.arctic_inference.reshape_and_cache_flash_fp4(
         keys, values, key_cache, value_cache, slot_mapping, kv_cache_dtype,
         k_scale, v_scale, key_cache_scales, value_cache_scales)
+
+
+def speculator_ln(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor,
+    eps: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    return torch.ops.arctic_inference.speculator_ln_cuda(
+        input, weight, bias, eps)
