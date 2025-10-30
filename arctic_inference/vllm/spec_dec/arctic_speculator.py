@@ -686,20 +686,30 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
             states = self.projs[actual_proj_i](prev_state)
 
             if USE_CUSTOM_OP:
-                # flatten batch dims for the kernel
-                states_4d = states.flatten(0, 1)          # [B, 4D]
-                z4_4d     = z4.flatten(0, 1)              # [B, 4D]
-                pc_d      = cell_states.flatten(0, 1)     # [B, D]
+                # Shapes:
+                #   prev_state: [B, 1, D_eff] (e.g., 2880 in the first round and 4096 later)
+                #   states:     [B, 1, 4*D_gate] (e.g., 4*4096)
+                #   z4:         [B, 1, 4*D_gate]
+                states_4d = states.flatten(0, 1).contiguous()  # [B, 4*D_gate]
+                z4_4d     = z4.flatten(0, 1).contiguous()      # [B, 4*D_gate]
 
-                w_cell = self.cell_ln[actual_i].weight
-                b_cell = self.cell_ln[actual_i].bias
+                orig_cell_shape = cell_states.shape           # [B, 1, D_gate]
+                pc_d  = cell_states.flatten(0, 1).contiguous()  # [B, D_gate]
+ 
+                # Optional precondition checks that mirror the kernel's TORCH_CHECKs:
+                assert states_4d.size(-1) % 4 == 0
+                assert z4_4d.size(-1) == states_4d.size(-1)
+                assert pc_d.size(-1) == states_4d.size(-1) // 4
+
+                w_cell  = self.cell_ln[actual_i].weight
+                b_cell  = self.cell_ln[actual_i].bias
                 w_state = self.state_ln[actual_i].weight
                 b_state = self.state_ln[actual_i].bias
 
-                alpha = float(self.emb_weight / self.state_weight)
-                eps_cell = float(self.cell_ln[actual_i].eps)
-                eps_state = float(self.state_ln[actual_i].eps)
-                use_fast_gelu = False  # match nn.GELU default
+                alpha      = float(self.emb_weight / self.state_weight)
+                eps_cell   = float(self.cell_ln[actual_i].eps)
+                eps_state  = float(self.state_ln[actual_i].eps)
+                use_fast_gelu = False
 
                 state_d, cell_d = sum_lstm(
                     states_4d, z4_4d, pc_d,
@@ -707,12 +717,13 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
                     alpha, eps_cell, eps_state, use_fast_gelu
                 )
 
-                state = state_d.view_as(prev_state)      # [B,1,D]
-                cell_states = cell_d.view_as(prev_state) # [B,1,D]
+                state       = state_d.reshape(orig_cell_shape)    # [B, 1, D_gate]
+                cell_states = cell_d.reshape(orig_cell_shape)     # [B, 1, D_gate]
+
                 return state, cell_states
             else:
                 added_states = torch.add(states,
-                                         z,
+                                         z4,
                                          alpha=self.emb_weight / self.state_weight)
 
                 forget_input_output, cell_candidate = added_states.split(

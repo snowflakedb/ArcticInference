@@ -1,4 +1,3 @@
-// sum_lstm.cu
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <torch/extension.h>
@@ -10,65 +9,14 @@
 #include <stdint.h>
 #include <type_traits>
 
-// ------------------------ dtype helpers ------------------------
-template <typename T> struct IsSupported : std::false_type {};
-template <> struct IsSupported<at::Half> : std::true_type {};
-template <> struct IsSupported<at::BFloat16> : std::true_type {};
+#include "dtype_common.cuh"
 
-__device__ __forceinline__ float to_float_device(__half h) { return __half2float(h); }
-__device__ __forceinline__ __half from_float_device(float f) { return __float2half(f); }
-
-__device__ __forceinline__ float to_float_device(__nv_bfloat16 h) {
-#if !defined(__CUDA_NO_BF16__)
-  return __bfloat162float(h);
-#else
-  uint16_t raw = *reinterpret_cast<const uint16_t *>(&h);
-  uint32_t u32 = (uint32_t)raw << 16;
-  float out = __uint_as_float(u32);
-  return out;
-#endif
-}
-
-__device__ __forceinline__ __nv_bfloat16 from_float_device_bf16(float f) {
-#if !defined(__CUDA_NO_BF16__)
-  return __float2bfloat16(f);
-#else
-  // Round-to-nearest-even when chopping 16 LSBs.
-  uint32_t x = __float_as_uint(f);
-  uint32_t lsb = (x >> 16) & 1u;     // target LSB after truncation
-  x += 0x7FFFu + lsb;                // bias for RNE
-  uint16_t hi = static_cast<uint16_t>(x >> 16);
-  __nv_bfloat16 h;
-  *reinterpret_cast<uint16_t*>(&h) = hi;
-  return h;
-#endif
-}
-
-template <typename T> struct DevHalf;
-template <> struct DevHalf<at::Half> {
-  using type = __half;
-  static __device__ __forceinline__ float to_float(__half h) { return to_float_device(h); }
-  static __device__ __forceinline__ __half from_float(float f) { return from_float_device(f); }
-};
-template <> struct DevHalf<at::BFloat16> {
-  using type = __nv_bfloat16;
-  static __device__ __forceinline__ float to_float(__nv_bfloat16 h) { return to_float_device(h); }
-  static __device__ __forceinline__ __nv_bfloat16 from_float(float f) { return from_float_device_bf16(f); }
-};
-
-template <typename T, int N> struct alignas(sizeof(T) * N) Pack { T v[N]; };
-
-static inline bool is_aligned(const void *p, size_t bytes) {
-  return (reinterpret_cast<uintptr_t>(p) % bytes) == 0;
-}
-
-// ------------------------ math helpers ------------------------
 __device__ __forceinline__ float sigmoid_f(float x) {
   return 1.0f / (1.0f + expf(-x));
 }
 
 __device__ __forceinline__ float gelu_erf(float x) {
-  const float kInvSqrt2 = 0.70710678118654752440f; // 1/sqrt(2)
+  const float kInvSqrt2 = 0.70710678118654752440f;
   return 0.5f * x * (1.0f + erff(x * kInvSqrt2));
 }
 
@@ -77,48 +25,42 @@ __device__ __forceinline__ float gelu_tanh(float x) {
   return 0.5f * x * (1.0f + tanhf(kSqrt2OverPi * (x + 0.044715f * x * x * x)));
 }
 
-// ------------------------ fused kernels ------------------------
-// Vectorized kernel (VEC=4 or 8). BLOCK_THREADS must equal blockDim.x.
 template <typename ATenScalarT, int VEC, int BLOCK_THREADS>
 __global__ void sum_lstm_vec_kernel(
-    // outputs
-    typename DevHalf<ATenScalarT>::type *__restrict__ out_state, // [rows, D]
-    typename DevHalf<ATenScalarT>::type *__restrict__ out_cell,  // [rows, D]
-    // inputs
-    const typename DevHalf<ATenScalarT>::type *__restrict__ states_4d, // [rows, 4D]
-    const typename DevHalf<ATenScalarT>::type *__restrict__ z4_4d,     // [rows, 4D]
-    const typename DevHalf<ATenScalarT>::type *__restrict__ prev_cell, // [rows, D]
-    // layernorm params
-    const typename DevHalf<ATenScalarT>::type *__restrict__ w_cell, // [D] or null
-    const typename DevHalf<ATenScalarT>::type *__restrict__ b_cell, // [D] or null
-    const typename DevHalf<ATenScalarT>::type *__restrict__ w_state,// [D] or null
-    const typename DevHalf<ATenScalarT>::type *__restrict__ b_state,// [D] or null
-    // strides / sizes
+    typename DevHalf<ATenScalarT>::type *__restrict__ out_state,
+    typename DevHalf<ATenScalarT>::type *__restrict__ out_cell,
+
+    const typename DevHalf<ATenScalarT>::type *__restrict__ states_4d,
+    const typename DevHalf<ATenScalarT>::type *__restrict__ z4_4d,
+    const typename DevHalf<ATenScalarT>::type *__restrict__ prev_cell,
+
+    const typename DevHalf<ATenScalarT>::type *__restrict__ w_cell,
+    const typename DevHalf<ATenScalarT>::type *__restrict__ b_cell,
+    const typename DevHalf<ATenScalarT>::type *__restrict__ w_state,
+    const typename DevHalf<ATenScalarT>::type *__restrict__ b_state,
+
     int64_t states_row_stride, int64_t z4_row_stride, int64_t cell_row_stride,
-    int64_t out_row_stride, int D,
-    // scalars
-    float alpha, float eps_cell, float eps_state,
-    int use_fast_gelu)
-{
-  using DH    = DevHalf<ATenScalarT>;
-  using H     = typename DH::type;
+    int64_t out_row_stride, int D_eff, int D_gate,
+
+    float alpha, float eps_cell, float eps_state, int use_fast_gelu) {
+  using DH = DevHalf<ATenScalarT>;
+  using H = typename DH::type;
   using VPack = Pack<H, VEC>;
   using BlockReduce = cub::BlockReduce<float, BLOCK_THREADS>;
 
   const int row = blockIdx.x;
-  const H *row_s  = states_4d + row * states_row_stride;
-  const H *row_z4 = z4_4d     + row * z4_row_stride;
+  const H *row_s = states_4d + row * states_row_stride;
+  const H *row_z4 = z4_4d + row * z4_row_stride;
   const H *row_pc = prev_cell + row * cell_row_stride;
 
-  H *row_out_cell  = out_cell  + row * out_row_stride;
+  H *row_out_cell = out_cell + row * out_row_stride;
   H *row_out_state = out_state + row * out_row_stride;
 
-  const int vec_len = D / VEC;
+  const int vec_len = D_eff / VEC;
 
-  // ---- Stage 0: RMS(c_pre = s3 + alpha*z3) ----
   float local_ss_cpre = 0.f;
-  const VPack* s3_vec  = reinterpret_cast<const VPack*>(row_s  + 3*D);
-  const VPack* z3_vec  = reinterpret_cast<const VPack*>(row_z4 + 3*D);
+  const VPack *s3_vec = reinterpret_cast<const VPack *>(row_s + 3 * D_gate);
+  const VPack *z3_vec = reinterpret_cast<const VPack *>(row_z4 + 3 * D_gate);
 
   for (int i = threadIdx.x; i < vec_len; i += BLOCK_THREADS) {
     VPack s3 = s3_vec[i];
@@ -135,30 +77,29 @@ __global__ void sum_lstm_vec_kernel(
 
   __shared__ float inv_rms_cpre;
   if (threadIdx.x == 0) {
-    float mean = sumsq_cpre / static_cast<float>(D);
+    float mean = sumsq_cpre / static_cast<float>(D_eff);
     inv_rms_cpre = rsqrtf(mean + eps_cell);
   }
   __syncthreads();
 
-  // ---- Stage 1: c_new and its RMS ----
   float local_ss_cnew = 0.f;
 
-  const VPack* s0_vec = reinterpret_cast<const VPack*>(row_s + 0*D);
-  const VPack* s1_vec = reinterpret_cast<const VPack*>(row_s + 1*D);
-  const VPack* s2_vec = reinterpret_cast<const VPack*>(row_s + 2*D);
+  const VPack *s0_vec = reinterpret_cast<const VPack *>(row_s + 0 * D_gate);
+  const VPack *s1_vec = reinterpret_cast<const VPack *>(row_s + 1 * D_gate);
+  const VPack *s2_vec = reinterpret_cast<const VPack *>(row_s + 2 * D_gate);
 
-  const VPack* z0_vec = reinterpret_cast<const VPack*>(row_z4 + 0*D);
-  const VPack* z1_vec = reinterpret_cast<const VPack*>(row_z4 + 1*D);
-  const VPack* z2_vec = reinterpret_cast<const VPack*>(row_z4 + 2*D);
+  const VPack *z0_vec = reinterpret_cast<const VPack *>(row_z4 + 0 * D_gate);
+  const VPack *z1_vec = reinterpret_cast<const VPack *>(row_z4 + 1 * D_gate);
+  const VPack *z2_vec = reinterpret_cast<const VPack *>(row_z4 + 2 * D_gate);
 
-  const VPack* pc_vec = reinterpret_cast<const VPack*>(row_pc);
-  VPack* outc_vec     = reinterpret_cast<VPack*>(row_out_cell);
+  const VPack *pc_vec = reinterpret_cast<const VPack *>(row_pc);
+  VPack *outc_vec = reinterpret_cast<VPack *>(row_out_cell);
 
-  const VPack* wcell_vec = reinterpret_cast<const VPack*>(w_cell);
-  const VPack* bcell_vec = reinterpret_cast<const VPack*>(b_cell);
+  const VPack *wcell_vec = reinterpret_cast<const VPack *>(w_cell);
+  const VPack *bcell_vec = reinterpret_cast<const VPack *>(b_cell);
 
-  const bool use_w_cell = (w_cell  != nullptr);
-  const bool use_b_cell = (b_cell  != nullptr);
+  const bool use_w_cell = (w_cell != nullptr);
+  const bool use_b_cell = (b_cell != nullptr);
 
   for (int i = threadIdx.x; i < vec_len; i += BLOCK_THREADS) {
     VPack s0 = s0_vec[i], s1 = s1_vec[i], s2 = s2_vec[i], s3 = s3_vec[i];
@@ -167,24 +108,28 @@ __global__ void sum_lstm_vec_kernel(
 
     VPack oc;
     VPack wcell, bcell;
-    if (use_w_cell) wcell = wcell_vec[i];
-    if (use_b_cell) bcell = bcell_vec[i];
+    if (use_w_cell)
+      wcell = wcell_vec[i];
+    if (use_b_cell)
+      bcell = bcell_vec[i];
 
 #pragma unroll
     for (int k = 0; k < VEC; ++k) {
       float pre_f = DH::to_float(s0.v[k]) + alpha * DH::to_float(z0.v[k]);
       float pre_i = DH::to_float(s1.v[k]) + alpha * DH::to_float(z1.v[k]);
-      float cpre  = DH::to_float(s3.v[k]) + alpha * DH::to_float(z3.v[k]);
+      float cpre = DH::to_float(s3.v[k]) + alpha * DH::to_float(z3.v[k]);
 
       float fgate = sigmoid_f(pre_f);
       float igate = sigmoid_f(pre_i);
 
       float cn = cpre * inv_rms_cpre;
-      if (use_w_cell) cn *= DH::to_float(wcell.v[k]);
-      if (use_b_cell) cn += DH::to_float(bcell.v[k]);
+      if (use_w_cell)
+        cn *= DH::to_float(wcell.v[k]);
+      if (use_b_cell)
+        cn += DH::to_float(bcell.v[k]);
 
       float cact = (use_fast_gelu ? gelu_tanh(cn) : gelu_erf(cn));
-      float pcv  = DH::to_float(pc.v[k]);
+      float pcv = DH::to_float(pc.v[k]);
 
       float cnew = pcv * fgate + cact * igate;
 
@@ -199,17 +144,16 @@ __global__ void sum_lstm_vec_kernel(
 
   __shared__ float inv_rms_cnew;
   if (threadIdx.x == 0) {
-    float mean = sumsq_cnew / static_cast<float>(D);
+    float mean = sumsq_cnew / static_cast<float>(D_eff);
     inv_rms_cnew = rsqrtf(mean + eps_state);
   }
   __syncthreads();
 
-  // ---- Stage 3: state = GELU( LN(c_new) ) * o_gate ----
-  const VPack* outc_read = reinterpret_cast<const VPack*>(row_out_cell);
-  VPack*       outs_vec  = reinterpret_cast<VPack*>(row_out_state);
+  const VPack *outc_read = reinterpret_cast<const VPack *>(row_out_cell);
+  VPack *outs_vec = reinterpret_cast<VPack *>(row_out_state);
 
-  const VPack* wstate_vec = reinterpret_cast<const VPack*>(w_state);
-  const VPack* bstate_vec = reinterpret_cast<const VPack*>(b_state);
+  const VPack *wstate_vec = reinterpret_cast<const VPack *>(w_state);
+  const VPack *bstate_vec = reinterpret_cast<const VPack *>(b_state);
   const bool use_w_st = (w_state != nullptr);
   const bool use_b_st = (b_state != nullptr);
 
@@ -219,16 +163,20 @@ __global__ void sum_lstm_vec_kernel(
     VPack oc = outc_read[i];
 
     VPack wst, bst;
-    if (use_w_st) wst = wstate_vec[i];
-    if (use_b_st) bst = bstate_vec[i];
+    if (use_w_st)
+      wst = wstate_vec[i];
+    if (use_b_st)
+      bst = bstate_vec[i];
 
     VPack os;
 #pragma unroll
     for (int k = 0; k < VEC; ++k) {
       float cnew = DH::to_float(oc.v[k]);
-      float cn   = cnew * inv_rms_cnew;
-      if (use_w_st) cn *= DH::to_float(wst.v[k]);
-      if (use_b_st) cn += DH::to_float(bst.v[k]);
+      float cn = cnew * inv_rms_cnew;
+      if (use_w_st)
+        cn *= DH::to_float(wst.v[k]);
+      if (use_b_st)
+        cn += DH::to_float(bst.v[k]);
 
       float sact = (use_fast_gelu ? gelu_tanh(cn) : gelu_erf(cn));
 
@@ -242,44 +190,41 @@ __global__ void sum_lstm_vec_kernel(
   }
 }
 
-// Scalar kernel. BLOCK_THREADS must equal blockDim.x.
 template <typename ATenScalarT, int BLOCK_THREADS>
 __global__ void sum_lstm_scalar_kernel(
-    // outputs
+
     typename DevHalf<ATenScalarT>::type *__restrict__ out_state,
     typename DevHalf<ATenScalarT>::type *__restrict__ out_cell,
-    // inputs
+
     const typename DevHalf<ATenScalarT>::type *__restrict__ states_4d,
     const typename DevHalf<ATenScalarT>::type *__restrict__ z4_4d,
     const typename DevHalf<ATenScalarT>::type *__restrict__ prev_cell,
-    // layernorm params
+
     const typename DevHalf<ATenScalarT>::type *__restrict__ w_cell,
     const typename DevHalf<ATenScalarT>::type *__restrict__ b_cell,
     const typename DevHalf<ATenScalarT>::type *__restrict__ w_state,
     const typename DevHalf<ATenScalarT>::type *__restrict__ b_state,
-    // strides / sizes
+
     int64_t states_row_stride, int64_t z4_row_stride, int64_t cell_row_stride,
-    int64_t out_row_stride, int D,
-    // scalars
-    float alpha, float eps_cell, float eps_state,
-    int use_fast_gelu)
-{
+    int64_t out_row_stride, int D_eff, int D_gate,
+
+    float alpha, float eps_cell, float eps_state, int use_fast_gelu) {
   using DH = DevHalf<ATenScalarT>;
-  using H  = typename DH::type;
+  using H = typename DH::type;
   using BlockReduce = cub::BlockReduce<float, BLOCK_THREADS>;
 
   const int row = blockIdx.x;
-  const H *s  = states_4d + row * states_row_stride;
-  const H *z4 = z4_4d     + row * z4_row_stride;
+  const H *s = states_4d + row * states_row_stride;
+  const H *z4 = z4_4d + row * z4_row_stride;
   const H *pc = prev_cell + row * cell_row_stride;
 
-  H *oc = out_cell  + row * out_row_stride;
+  H *oc = out_cell + row * out_row_stride;
   H *os = out_state + row * out_row_stride;
 
-  // Stage 0: RMS(c_pre)
   float local_ss_cpre = 0.f;
-  for (int j = threadIdx.x; j < D; j += BLOCK_THREADS) {
-    float c = DH::to_float(s[3*D + j]) + alpha * DH::to_float(z4[3*D + j]);
+  for (int j = threadIdx.x; j < D_eff; j += BLOCK_THREADS) {
+    float c = DH::to_float(s[3 * D_gate + j]) +
+              alpha * DH::to_float(z4[3 * D_gate + j]);
     local_ss_cpre += c * c;
   }
 
@@ -288,24 +233,28 @@ __global__ void sum_lstm_scalar_kernel(
 
   __shared__ float inv_rms_cpre;
   if (threadIdx.x == 0) {
-    float mean = sumsq_cpre / static_cast<float>(D);
+    float mean = sumsq_cpre / static_cast<float>(D_eff);
     inv_rms_cpre = rsqrtf(mean + eps_cell);
   }
   __syncthreads();
 
-  // Stage 1: new cell + its RMS
   float local_ss_cnew = 0.f;
-  for (int j = threadIdx.x; j < D; j += BLOCK_THREADS) {
-    float pre_f = DH::to_float(s[0*D + j]) + alpha * DH::to_float(z4[0*D + j]);
-    float pre_i = DH::to_float(s[1*D + j]) + alpha * DH::to_float(z4[1*D + j]);
-    float cpre  = DH::to_float(s[3*D + j]) + alpha * DH::to_float(z4[3*D + j]);
+  for (int j = threadIdx.x; j < D_eff; j += BLOCK_THREADS) {
+    float pre_f = DH::to_float(s[0 * D_gate + j]) +
+                  alpha * DH::to_float(z4[0 * D_gate + j]);
+    float pre_i = DH::to_float(s[1 * D_gate + j]) +
+                  alpha * DH::to_float(z4[1 * D_gate + j]);
+    float cpre = DH::to_float(s[3 * D_gate + j]) +
+                 alpha * DH::to_float(z4[3 * D_gate + j]);
 
     float fgate = sigmoid_f(pre_f);
     float igate = sigmoid_f(pre_i);
 
     float cn = cpre * inv_rms_cpre;
-    if (w_cell) cn *= DH::to_float(w_cell[j]);
-    if (b_cell) cn += DH::to_float(b_cell[j]);
+    if (w_cell)
+      cn *= DH::to_float(w_cell[j]);
+    if (b_cell)
+      cn += DH::to_float(b_cell[j]);
 
     float cact = (use_fast_gelu ? gelu_tanh(cn) : gelu_erf(cn));
     float cnew = DH::to_float(pc[j]) * fgate + cact * igate;
@@ -319,19 +268,21 @@ __global__ void sum_lstm_scalar_kernel(
 
   __shared__ float inv_rms_cnew;
   if (threadIdx.x == 0) {
-    float mean = sumsq_cnew / static_cast<float>(D);
+    float mean = sumsq_cnew / static_cast<float>(D_eff);
     inv_rms_cnew = rsqrtf(mean + eps_state);
   }
   __syncthreads();
 
-  // Stage 3: final state
-  for (int j = threadIdx.x; j < D; j += BLOCK_THREADS) {
+  for (int j = threadIdx.x; j < D_eff; j += BLOCK_THREADS) {
     float cn = DH::to_float(oc[j]) * inv_rms_cnew;
-    if (w_state) cn *= DH::to_float(w_state[j]);
-    if (b_state) cn += DH::to_float(b_state[j]);
+    if (w_state)
+      cn *= DH::to_float(w_state[j]);
+    if (b_state)
+      cn += DH::to_float(b_state[j]);
 
     float sact = (use_fast_gelu ? gelu_tanh(cn) : gelu_erf(cn));
-    float pre_o = DH::to_float(s[2*D + j]) + alpha * DH::to_float(z4[2*D + j]);
+    float pre_o = DH::to_float(s[2 * D_gate + j]) +
+                  alpha * DH::to_float(z4[2 * D_gate + j]);
     float ogate = sigmoid_f(pre_o);
 
     float st = sact * ogate;
@@ -339,124 +290,151 @@ __global__ void sum_lstm_scalar_kernel(
   }
 }
 
-// ------------------------ host dispatch ------------------------
 template <typename ATenScalarT>
-static std::tuple<torch::Tensor, torch::Tensor> sum_lstm_cuda_impl(
-    const torch::Tensor& states_4d,   // [..., 4D]
-    const torch::Tensor& z4_4d,       // [..., 4D]
-    const torch::Tensor& prev_cell_d, // [..., D]
-    const c10::optional<torch::Tensor>& w_cell,
-    const c10::optional<torch::Tensor>& b_cell,
-    const c10::optional<torch::Tensor>& w_state,
-    const c10::optional<torch::Tensor>& b_state,
-    double alpha_d, double eps_cell_d, double eps_state_d,
-    bool use_fast_gelu)
-{
+static std::tuple<torch::Tensor, torch::Tensor>
+sum_lstm_cuda_impl(const torch::Tensor &states_4d, const torch::Tensor &z4_4d,
+                   const torch::Tensor &prev_cell_d,
+                   const c10::optional<torch::Tensor> &w_cell,
+                   const c10::optional<torch::Tensor> &b_cell,
+                   const c10::optional<torch::Tensor> &w_state,
+                   const c10::optional<torch::Tensor> &b_state, double alpha_d,
+                   double eps_cell_d, double eps_state_d, bool use_fast_gelu) {
   TORCH_CHECK(states_4d.is_cuda() && z4_4d.is_cuda() && prev_cell_d.is_cuda(),
               "sum_lstm: inputs must be CUDA tensors");
-  TORCH_CHECK(IsSupported<ATenScalarT>::value, "sum_lstm: dtype must be fp16 or bf16");
+  TORCH_CHECK(IsSupported<ATenScalarT>::value,
+              "sum_lstm: dtype must be fp16 or bf16");
 
   const auto dtype = states_4d.scalar_type();
-  TORCH_CHECK(z4_4d.scalar_type() == dtype && prev_cell_d.scalar_type() == dtype,
+  TORCH_CHECK(z4_4d.scalar_type() == dtype &&
+                  prev_cell_d.scalar_type() == dtype,
               "sum_lstm: all input dtypes must match");
 
   const int64_t hidden4 = states_4d.size(-1);
-  TORCH_CHECK(hidden4 > 0 && hidden4 % 4 == 0, "sum_lstm: last dim of states must be 4*D");
-  const int64_t D = hidden4 / 4;
+  TORCH_CHECK(hidden4 > 0 && hidden4 % 4 == 0,
+              "sum_lstm: last dim of states must be 4*D_gate");
+  const int64_t D_gate = hidden4 / 4;
 
-  TORCH_CHECK(z4_4d.size(-1) == hidden4, "sum_lstm: z4 must have last dim 4*D");
-  TORCH_CHECK(prev_cell_d.size(-1) == D, "sum_lstm: prev_cell last dim must be D");
+  TORCH_CHECK(z4_4d.size(-1) == hidden4,
+              "sum_lstm: z4 must have last dim 4*D_gate");
 
-  TORCH_CHECK(states_4d.stride(-1) == 1 && z4_4d.stride(-1) == 1 && prev_cell_d.stride(-1) == 1,
+  const int64_t D_cell = prev_cell_d.size(-1);
+  TORCH_CHECK(D_cell == D_gate,
+              "sum_lstm: prev_cell last dim must equal D_gate. Got ", D_cell,
+              " vs expected ", D_gate, ".");
+  const int64_t D_eff = D_gate;
+
+  TORCH_CHECK(states_4d.stride(-1) == 1 && z4_4d.stride(-1) == 1 &&
+                  prev_cell_d.stride(-1) == 1,
               "sum_lstm: last dimension must be contiguous (stride -1 == 1)");
 
-  // Flatten to 2D while keeping row strides
+  auto check_opt_len = [&](const c10::optional<torch::Tensor> &t,
+                           const char *name) {
+    if (t.has_value()) {
+      TORCH_CHECK(t->is_cuda(), "sum_lstm: ", name, " must be CUDA");
+      TORCH_CHECK(t->scalar_type() == dtype, "sum_lstm: ", name,
+                  " dtype mismatch");
+      TORCH_CHECK(t->numel() >= D_eff, "sum_lstm: ", name,
+                  " must have length >= D_eff");
+      TORCH_CHECK(t->is_contiguous(), "sum_lstm: ", name,
+                  " must be contiguous");
+    }
+  };
+  check_opt_len(w_cell, "w_cell");
+  check_opt_len(b_cell, "b_cell");
+  check_opt_len(w_state, "w_state");
+  check_opt_len(b_state, "b_state");
+
   auto s2 = states_4d.view({-1, hidden4});
   auto z2 = z4_4d.view({-1, hidden4});
-  auto p2 = prev_cell_d.view({-1, D});
+  auto p2 = prev_cell_d.view({-1, D_cell});
 
-  const int64_t rows     = s2.size(0);
+  const int64_t rows = s2.size(0);
   const int64_t s_stride = s2.stride(0);
   const int64_t z_stride = z2.stride(0);
   const int64_t p_stride = p2.stride(0);
 
-  // Allocate outputs with the same row stride as prev_cell (supports pitched inputs)
-  auto out_cell  = at::empty_strided(p2.sizes(),  p2.strides(),  p2.options());
-  auto out_state = at::empty_strided(p2.sizes(),  p2.strides(),  p2.options());
+  auto out_cell = at::empty_strided(p2.sizes(), p2.strides(), p2.options());
+  auto out_state = at::empty_strided(p2.sizes(), p2.strides(), p2.options());
 
-  const int64_t out_stride_cell  = out_cell.stride(0);
+  const int64_t out_stride_cell = out_cell.stride(0);
   const int64_t out_stride_state = out_state.stride(0);
   TORCH_CHECK(out_stride_cell == out_stride_state,
               "sum_lstm: internal - output strides mismatch");
 
-  auto out_cell_orig  = out_cell.view(prev_cell_d.sizes());
+  auto out_cell_orig = out_cell.view(prev_cell_d.sizes());
   auto out_state_orig = out_state.view(prev_cell_d.sizes());
 
   using H = typename DevHalf<ATenScalarT>::type;
   const auto stream = at::cuda::getCurrentCUDAStream();
 
-  // Alignment / vectorization checks (no effect on correctness)
+  H *out_state_ptr = reinterpret_cast<H *>(out_state.data_ptr());
+  H *out_cell_ptr = reinterpret_cast<H *>(out_cell.data_ptr());
+  const H *s_ptr = reinterpret_cast<const H *>(s2.data_ptr());
+  const H *z_ptr = reinterpret_cast<const H *>(z2.data_ptr());
+  const H *p_ptr = reinterpret_cast<const H *>(p2.data_ptr());
+
   const bool row_aligned_8 =
       (s_stride % 8 == 0) && (z_stride % 8 == 0) && (out_stride_cell % 8 == 0);
   const bool row_aligned_4 =
       (s_stride % 4 == 0) && (z_stride % 4 == 0) && (out_stride_cell % 4 == 0);
 
-  H* out_state_ptr = reinterpret_cast<H*>(out_state.data_ptr());
-  H* out_cell_ptr  = reinterpret_cast<H*>(out_cell.data_ptr());
-  const H* s_ptr   = reinterpret_cast<const H*>(s2.data_ptr());
-  const H* z_ptr   = reinterpret_cast<const H*>(z2.data_ptr());
-  const H* p_ptr   = reinterpret_cast<const H*>(p2.data_ptr());
-
-  const bool can_vec8 =
-      (D % 8 == 0) && row_aligned_8 &&
+  const bool base_aligned_16 =
       is_aligned(s_ptr, 16) && is_aligned(z_ptr, 16) && is_aligned(p_ptr, 16) &&
       is_aligned(out_state_ptr, 16) && is_aligned(out_cell_ptr, 16);
 
-  const bool can_vec4 =
-      (D % 4 == 0) && row_aligned_4 &&
+  const bool base_aligned_8 =
       is_aligned(s_ptr, 8) && is_aligned(z_ptr, 8) && is_aligned(p_ptr, 8) &&
       is_aligned(out_state_ptr, 8) && is_aligned(out_cell_ptr, 8);
 
-  float alpha     = static_cast<float>(alpha_d);
-  float eps_cell  = static_cast<float>(eps_cell_d);
-  float eps_state = static_cast<float>(eps_state_d);
-  int fast        = use_fast_gelu ? 1 : 0;
+  const bool gates_div_8 = (D_gate % 8 == 0);
+  const bool gates_div_4 = (D_gate % 4 == 0);
 
-  // Compile-time block sizes chosen to avoid "too many resources" on common GPUs.
+  const bool can_vec8 =
+      (D_eff % 8 == 0) && gates_div_8 && row_aligned_8 && base_aligned_16;
+
+  const bool can_vec4 =
+      (D_eff % 4 == 0) && gates_div_4 && row_aligned_4 && base_aligned_8;
+
+  float alpha = static_cast<float>(alpha_d);
+  float eps_cell = static_cast<float>(eps_cell_d);
+  float eps_state = static_cast<float>(eps_state_d);
+  int fast = use_fast_gelu ? 1 : 0;
+
   constexpr int BLK_128 = 128;
   constexpr int BLK_256 = 256;
 
   dim3 grid(rows);
 
-  auto wcell_ptr  = w_cell  ? reinterpret_cast<const H*>(w_cell->data_ptr())  : nullptr;
-  auto bcell_ptr  = b_cell  ? reinterpret_cast<const H*>(b_cell->data_ptr())  : nullptr;
-  auto wstate_ptr = w_state ? reinterpret_cast<const H*>(w_state->data_ptr()) : nullptr;
-  auto bstate_ptr = b_state ? reinterpret_cast<const H*>(b_state->data_ptr()) : nullptr;
+  auto wcell_ptr =
+      w_cell ? reinterpret_cast<const H *>(w_cell->data_ptr()) : nullptr;
+  auto bcell_ptr =
+      b_cell ? reinterpret_cast<const H *>(b_cell->data_ptr()) : nullptr;
+  auto wstate_ptr =
+      w_state ? reinterpret_cast<const H *>(w_state->data_ptr()) : nullptr;
+  auto bstate_ptr =
+      b_state ? reinterpret_cast<const H *>(b_state->data_ptr()) : nullptr;
 
-#define LAUNCH_VEC(V, BLK)                                                                 \
-  do {                                                                                     \
-    dim3 block((BLK));                                                                     \
-    sum_lstm_vec_kernel<ATenScalarT, (V), (BLK)><<<grid, block, 0, stream>>>(              \
-        out_state_ptr, out_cell_ptr,                                                       \
-        s_ptr, z_ptr, p_ptr,                                                               \
-        wcell_ptr, bcell_ptr, wstate_ptr, bstate_ptr,                                      \
-        s_stride, z_stride, p_stride, out_stride_cell, static_cast<int>(D),                \
-        alpha, eps_cell, eps_state, fast);                                                 \
+#define LAUNCH_VEC(V, BLK)                                                     \
+  do {                                                                         \
+    dim3 block((BLK));                                                         \
+    sum_lstm_vec_kernel<ATenScalarT, (V), (BLK)><<<grid, block, 0, stream>>>(  \
+        out_state_ptr, out_cell_ptr, s_ptr, z_ptr, p_ptr, wcell_ptr,           \
+        bcell_ptr, wstate_ptr, bstate_ptr, s_stride, z_stride, p_stride,       \
+        out_stride_cell, static_cast<int>(D_eff), static_cast<int>(D_gate),    \
+        alpha, eps_cell, eps_state, fast);                                     \
   } while (0)
 
-#define LAUNCH_SCALAR(BLK)                                                                 \
-  do {                                                                                     \
-    dim3 block((BLK));                                                                     \
-    sum_lstm_scalar_kernel<ATenScalarT, (BLK)><<<grid, block, 0, stream>>>(                \
-        out_state_ptr, out_cell_ptr,                                                       \
-        s_ptr, z_ptr, p_ptr,                                                               \
-        wcell_ptr, bcell_ptr, wstate_ptr, bstate_ptr,                                      \
-        s_stride, z_stride, p_stride, out_stride_cell, static_cast<int>(D),                \
-        alpha, eps_cell, eps_state, fast);                                                 \
+#define LAUNCH_SCALAR(BLK)                                                     \
+  do {                                                                         \
+    dim3 block((BLK));                                                         \
+    sum_lstm_scalar_kernel<ATenScalarT, (BLK)><<<grid, block, 0, stream>>>(    \
+        out_state_ptr, out_cell_ptr, s_ptr, z_ptr, p_ptr, wcell_ptr,           \
+        bcell_ptr, wstate_ptr, bstate_ptr, s_stride, z_stride, p_stride,       \
+        out_stride_cell, static_cast<int>(D_eff), static_cast<int>(D_gate),    \
+        alpha, eps_cell, eps_state, fast);                                     \
   } while (0)
 
   if (can_vec8) {
-    // Heaviest kernel => use smaller block to avoid per-block resource overflow
     LAUNCH_VEC(8, BLK_128);
   } else if (can_vec4) {
     LAUNCH_VEC(4, BLK_256);
@@ -471,28 +449,25 @@ static std::tuple<torch::Tensor, torch::Tensor> sum_lstm_cuda_impl(
   return {out_state_orig, out_cell_orig};
 }
 
-std::tuple<torch::Tensor, torch::Tensor> sum_lstm_cuda(
-    const torch::Tensor& states_4d,   // [..., 4D]
-    const torch::Tensor& z4_4d,       // [..., 4D]  (repeat along last dim)
-    const torch::Tensor& prev_cell_d, // [..., D]
-    const c10::optional<torch::Tensor>& w_cell,
-    const c10::optional<torch::Tensor>& b_cell,
-    const c10::optional<torch::Tensor>& w_state,
-    const c10::optional<torch::Tensor>& b_state,
-    double alpha, double eps_cell, double eps_state,
-    bool use_fast_gelu)
-{
+std::tuple<torch::Tensor, torch::Tensor>
+sum_lstm_cuda(const torch::Tensor &states_4d, const torch::Tensor &z4_4d,
+              const torch::Tensor &prev_cell_d,
+              const c10::optional<torch::Tensor> &w_cell,
+              const c10::optional<torch::Tensor> &b_cell,
+              const c10::optional<torch::Tensor> &w_state,
+              const c10::optional<torch::Tensor> &b_state, double alpha,
+              double eps_cell, double eps_state, bool use_fast_gelu) {
   const at::cuda::OptionalCUDAGuard device_guard(device_of(states_4d));
   switch (states_4d.scalar_type()) {
-    case at::kHalf:
-      return sum_lstm_cuda_impl<at::Half>(
-          states_4d, z4_4d, prev_cell_d, w_cell, b_cell, w_state, b_state,
-          alpha, eps_cell, eps_state, use_fast_gelu);
-    case at::kBFloat16:
-      return sum_lstm_cuda_impl<at::BFloat16>(
-          states_4d, z4_4d, prev_cell_d, w_cell, b_cell, w_state, b_state,
-          alpha, eps_cell, eps_state, use_fast_gelu);
-    default:
-      TORCH_CHECK(false, "sum_lstm: only fp16 and bf16 are supported.");
+  case at::kHalf:
+    return sum_lstm_cuda_impl<at::Half>(states_4d, z4_4d, prev_cell_d, w_cell,
+                                        b_cell, w_state, b_state, alpha,
+                                        eps_cell, eps_state, use_fast_gelu);
+  case at::kBFloat16:
+    return sum_lstm_cuda_impl<at::BFloat16>(
+        states_4d, z4_4d, prev_cell_d, w_cell, b_cell, w_state, b_state, alpha,
+        eps_cell, eps_state, use_fast_gelu);
+  default:
+    TORCH_CHECK(false, "sum_lstm: only fp16 and bf16 are supported.");
   }
 }
