@@ -640,6 +640,7 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
         cell_states=None,
         use_lstm=False,
     ):
+        # TODO: optimize this
         self.static_cuda_buffers["last_tokens"][:size] = last_tokens
         if cell_states is not None:
             self.static_cuda_buffers["cell_states"][:size] = cell_states
@@ -786,6 +787,7 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
                 last_tokens = torch.argmax(logits,
                                            dim=-1).reshape(batch_size, -1)
             else:
+                # TODO: fuse topk + all_gather
                 vals, indices = torch.topk(logits, 1, dim=-1)
                 indices = indices + self.tp_rank * logits.shape[-1]
 
