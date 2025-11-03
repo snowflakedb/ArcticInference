@@ -51,6 +51,8 @@ def apply_shift_parallel_patches():
     UlyssesMultiprocExecutor.apply_patch()
     UlyssesAttention.apply_patch()
     UlyssesCudagraphDispatcher.apply_patch()
+    # test
+    UlyssesEngineCore.apply_patch()
 
 
 class UlyssesModelConfig(ArcticPatch[ModelConfig]):
@@ -520,4 +522,52 @@ class UlyssesCudagraphDispatcher(ArcticPatch[CudagraphDispatcher]):
                 self.add_cudagraph_key(
                     cudagraph_mode.mixed_mode(),
                     BatchDescriptor(num_tokens=bs * sp_size, uniform_decode=False))
+                
+from v1.engine.core import EngineCore
+import time
+from v1.engine.outputs import EngineCoreOutputs
+class UlyssesEngineCore(ArcticPatch[EngineCore]):
+
+        def step(self) -> tuple[dict[int, EngineCoreOutputs], bool]:
+            """Schedule, execute, and make output.
+
+            Returns tuple of outputs and a flag indicating whether the model
+            was executed.
+            """
+
+            step_start_time = time.monotonic()
+
+            # Check for any requests remaining in the scheduler - unfinished,
+            # or finished and not yet removed from the batch.
+            if not self.scheduler.has_requests():
+                return {}, False
+
+            scheduler_start = time.monotonic()
+            scheduler_output = self.scheduler.schedule()
+            torch.cuda.synchronize()
+            scheduler_time_ms = (time.monotonic() - scheduler_start) * 1000
+
+            model_start = time.monotonic()
+            model_output = self.execute_model_with_error_logging(
+                self.model_executor.execute_model,  # type: ignore
+                scheduler_output)
+            torch.cuda.synchronize()
+            model_time_ms = (time.monotonic() - model_start) * 1000
+
+            update_start = time.monotonic()
+            engine_core_outputs = self.scheduler.update_from_output(scheduler_output, model_output)
+            torch.cuda.synchronize()
+            update_time_ms = (time.monotonic() - update_start) * 1000
+
+            total_time_ms = (time.monotonic() - step_start_time) * 1000
+
+            # if _forward_context is not None and get_forward_context().attn_metadata.num_prefill_tokens == 0:
+            concurrency = len(scheduler_output.num_scheduled_tokens.keys())
+            model_tflops = 8e9 * 2 * concurrency / (model_time_ms/1000) / 1e12
+            e2e_tflops = 8e9 * 2 * concurrency / (total_time_ms/1000) / 1e12
+            print(f"BS: {concurrency}, time_schedule: {scheduler_time_ms:.2f}ms, time_execute: {model_time_ms:.2f}ms, time_update: {update_time_ms:.2f}ms, total_time: {total_time_ms:.2f}ms, Model: {int(model_tflops)}TF, E2E: {int(e2e_tflops)}TF")
+
+            return (engine_core_outputs,
+                    scheduler_output.total_num_scheduled_tokens > 0)
+
 
