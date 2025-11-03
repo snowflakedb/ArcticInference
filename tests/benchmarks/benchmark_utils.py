@@ -76,7 +76,6 @@ PERFORMANCE_TASKS = {
             "random_input_len": 2000,
             "random_output_len": 250,
             "num_prompts": 2000,
-            "ignore_eos": True,
         },
         metrics={
             "throughput": "total_token_throughput",
@@ -89,7 +88,6 @@ PERFORMANCE_TASKS = {
             "random_output_len": 250,
             "num_prompts": 20,
             "max_concurrency": 1,
-            "ignore_eos": True,
         },
         metrics={
             "ttft_ms": "mean_ttft_ms",
