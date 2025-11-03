@@ -3,6 +3,11 @@ from typing import Any, Callable, Dict
 
 import pandas as pd
 
+from vllm.config.compilation import CUDAGraphMode, CompilationConfig
+compilation_config = CompilationConfig(
+   cudagraph_mode=CUDAGraphMode.PIECEWISE
+)
+
 
 @dataclass
 class BenchmarkTask:
@@ -32,6 +37,7 @@ VLLM_CONFIGS = {
         "model": "Snowflake/Llama-3.1-SwiftKV-8B-Instruct-FP8",
         "tensor_parallel_size": 4,
         "enable_prefix_caching": False,
+        "compilation_config": compilation_config,
     },
     "llama_8b_suffix": {
         "model": "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic",
