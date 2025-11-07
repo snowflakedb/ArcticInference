@@ -8,7 +8,7 @@ requires = [
     # uv pip install vllm==0.9.1 --dry-run 2>&1 | grep protobuf | sed 's/^ + //'
     "protobuf==5.29.5",
     "grpcio-tools",
-    "torch == 2.7.0",
+    "torch==2.8.0", # need to be same as user env.
 ]
 build-backend = "setuptools.build_meta"
 
@@ -43,7 +43,7 @@ packages = [
 
 [project.optional-dependencies]
 vllm = [
-    'vllm==0.10.1',
+    'vllm==0.11.0',
 ]
 
 docs = [

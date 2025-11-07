@@ -18,6 +18,8 @@ find_package(Torch REQUIRED)
 pybind11_add_module(custom_ops
   reshape_and_cache_flash_fp4.cu
   reshape_and_cache_flash_bulk.cu
+  speculator_ln.cu
+  sum_lstm.cu
   torch_bindings.cpp
 )
 

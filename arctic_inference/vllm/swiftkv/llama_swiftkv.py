@@ -40,7 +40,7 @@ from vllm.model_executor.models.llama import (LlamaAttention,
                                               LlamaMLP)
 from vllm.model_executor.models.utils import (AutoWeightsLoader,
                                               maybe_prefix)
-from vllm.model_executor.sampling_metadata import SamplingMetadata
+from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.sequence import IntermediateTensors
 
 # Add FlashInfer backend detection
@@ -344,10 +344,9 @@ class LlamaSwiftKVModel(nn.Module):
             quant_config=self.quant_config,
         )
         self.layers = torch.nn.ModuleList([
-            LlamaDecoderLayer(config=config,
-                              cache_config=vllm_config.cache_config,
-                              quant_config=vllm_config.quant_config,
-                              prefix=f"{prefix}.layers.{idx}")
+            LlamaDecoderLayer(vllm_config=vllm_config,
+                              prefix=f"{prefix}.layers.{idx}",
+                              config=config,)
             for idx in range(config.num_key_value_layers)
         ])
         with model_runner.set_shift_parallel_mode(True):
@@ -857,10 +856,8 @@ class LlamaSwiftKVForCausalLM(nn.Module):
     def compute_logits(
         self,
         hidden_states: torch.Tensor,
-        sampling_metadata: SamplingMetadata,
     ) -> Optional[torch.Tensor]:
-        logits = self.logits_processor(self.lm_head, hidden_states,
-                                       sampling_metadata)
+        logits = self.logits_processor(self.lm_head, hidden_states)
         return logits
 
     def load_weights(self, weights: Iterable[tuple[str,
