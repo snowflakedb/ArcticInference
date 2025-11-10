@@ -45,12 +45,13 @@ from arctic_inference.patching import ArcticPatch
 
 
 def apply_shift_parallel_patches():
-    UlyssesModelConfig.apply_patch()
-    UlyssesParallelState.apply_patch()
-    UlyssesWorkerProc.apply_patch()
-    UlyssesMultiprocExecutor.apply_patch()
-    UlyssesAttention.apply_patch()
-    UlyssesCudagraphDispatcher.apply_patch()
+    pass
+    # UlyssesModelConfig.apply_patch()
+    # UlyssesParallelState.apply_patch()
+    # UlyssesWorkerProc.apply_patch()
+    # UlyssesMultiprocExecutor.apply_patch()
+    # UlyssesAttention.apply_patch()
+    # UlyssesCudagraphDispatcher.apply_patch()
 
 
 class UlyssesModelConfig(ArcticPatch[ModelConfig]):
