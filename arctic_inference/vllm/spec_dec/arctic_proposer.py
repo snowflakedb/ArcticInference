@@ -157,6 +157,54 @@ class ArcticProposer:
 
         return next_tokens.cpu().numpy()
 
+    def prepare_inputs_padded():
+        pass
+        # TODO: conbine context_token_ids preparation and hidden_states preparation
+        # into a single function. No blocking CPU-GPU sync in the hot path.
+
+    @torch.inference_mode()
+    def prepare_next_token_ids_padded(
+        self,
+        common_attn_metadata,  # vllm.v1.attention.backends.utils.CommonAttentionMetadata
+        sampled_token_ids: torch.Tensor,  # [B, 1 + num_spec_tokens], on device
+        requests: dict,                   # req_id -> CachedRequestState
+        gpu_input_batch,                  # vllm.v1.worker.gpu_input_batch.InputBatch
+        discard_request_indices: torch.Tensor,  # [<=B] long, device
+        num_discarded_requests: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Return (next_token_ids[B], valid_sampled_tokens_count[B]) on device.
+        No CPU-GPU sync in the hot path.
+        """
+        device = sampled_token_ids.device
+        B = sampled_token_ids.size(0)
+
+        # 1) Prepare backup next-token ids for rows with no valid token
+        #    (prefill-only or all drafts rejected).
+        # NOTE: we read seq_lens from CPU but copy once to GPU; this is non-blocking.
+        #       This mirrors EAGLE.
+        seq_lens_cpu = common_attn_metadata.seq_lens_cpu  # CPU tensor length B
+        backup_ids_cpu = []
+        for i, req_id in enumerate(gpu_input_batch.req_ids):
+            seq_len_i = int(seq_lens_cpu[i].item())
+            backup_ids_cpu.append(requests[req_id].get_token_id(seq_len_i))
+        backup_next_token_ids = torch.tensor(backup_ids_cpu, device=device, dtype=torch.long)
+
+        # 2) Mask out prefill-only rows in the sampled grid
+        valid_grid = sampled_token_ids.clone()
+        if num_discarded_requests:
+            valid_grid.index_fill_(0, discard_request_indices[:num_discarded_requests], -1)
+
+        # 3) Count valids per row, and take the last valid entry
+        valid_mask = (valid_grid != -1) & (valid_grid < gpu_input_batch.vocab_size)
+        valid_counts = valid_mask.sum(dim=1).to(torch.int64)             # [B]
+        last_idx = torch.clamp(valid_counts - 1, min=0)                  # [B]
+        last_tok = valid_grid.gather(1, last_idx.view(-1, 1)).squeeze(1) # [B]
+
+        # 4) If no valid tokens in row => fall back to backup_get_token_id
+        next_token_ids = torch.where(valid_counts > 0, last_tok, backup_next_token_ids)
+        return next_token_ids, valid_counts
+
 
 class SuffixProposer:
     def __init__(self):
