@@ -210,6 +210,42 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         return spec_token_ids
 
+
+    def propose_arctic_draft_from_next_tokens(
+        self,
+        next_token_ids: torch.Tensor,                 # [B] device
+        previous_hidden_states: Optional[torch.Tensor],
+    ) -> List[List[int]]:
+        """
+        Fast pre-bookkeeping Arctic path:
+        - next_token_ids are computed on device (no CPU sync)
+        - previous_hidden_states already selected on device
+        - produce a python List[List[int]] for the scheduler.
+        """
+        assert isinstance(self.drafter, ArcticProposer)
+
+        # Compute how many tokens we can safely propose (bounded by drafter length)
+        # Use *drafter's* max length, not target's.
+        max_spec_tokens = self.speculative_config.num_speculative_tokens
+
+        current_max_seq = int(self.input_batch.num_tokens_no_spec.max().item())
+        final_max_spec = max_spec_tokens
+        if final_max_spec <= 0:
+            return [[] for _ in range(next_token_ids.shape[0])]
+
+        # Let the speculator propose (keeps everything on device)
+        drafter_output = self.drafter.propose(
+            context_token_ids=next_token_ids,                     # [B] device
+            previous_hidden_states=previous_hidden_states,        # [B, H] or None
+            num_predict_tokens=final_max_spec,
+        )
+        if drafter_output is None:
+            return [[] for _ in range(next_token_ids.shape[0])]
+
+        # Convert to the format the runtime expects (python lists per row)
+        return drafter_output.tolist()
+
+
     def propose_arctic_draft_token_ids(
         self,
         scheduler_output: "SchedulerOutput",
@@ -351,10 +387,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         self, grammar_output: "GrammarOutput | None"
     ) -> ModelRunnerOutput | AsyncModelRunnerOutput | IntermediateTensors:
         if self.execute_model_state is None:
-            # Nothing to do (PP non-final rank case), output isn't used.
-            return None  # noqa
+            return None  # PP non-final rank case
 
-        # Unpack ephemeral state.
+        # Unpack ephemeral state and immediately clear
         (
             scheduler_output,
             logits,
@@ -365,10 +400,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             aux_hidden_states,
             kv_connector_output,
         ) = self.execute_model_state
-        # Clear ephemeral state.
         self.execute_model_state = None
 
-        # Apply structured output bitmasks if present.
+        # Apply structured output constraints if any
         if grammar_output is not None:
             apply_grammar_bitmask(
                 scheduler_output, grammar_output, self.input_batch, logits
@@ -377,12 +411,14 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         with record_function_or_nullcontext("Sample"):
             sampler_output = self._sample(logits, spec_decode_metadata)
 
-        def propose_draft_token_ids(sampled_token_ids):
+        # Small wrapper to invoke the class method with the *updated signature*
+        def _run_proposer_after_bookkeep(valid_sampled_token_ids):
             assert spec_decode_common_attn_metadata is not None
             with record_function_or_nullcontext("Draft"):
                 self._draft_token_ids = self.propose_draft_token_ids(
                     scheduler_output,
-                    sampled_token_ids,
+                    valid_sampled_token_ids,                    
+                    sampler_output.sampled_token_ids,        
                     self.input_batch.sampling_metadata,
                     hidden_states,
                     sample_hidden_states,
@@ -391,11 +427,14 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                     spec_decode_common_attn_metadata,
                 )
 
+        # --- Figure out per-method padded-batch optimization ---
         use_padded_batch_for_eagle = (
             self.speculative_config
             and self.speculative_config.use_eagle()
             and not self.speculative_config.disable_padded_drafter_batch
         )
+
+        # input_fits_in_drafter is only relevant for EAGLE-style drafters.
         effective_drafter_max_model_len = self.max_model_len
         if effective_drafter_max_model_len is None:
             effective_drafter_max_model_len = self.model_config.max_model_len
@@ -407,20 +446,36 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             effective_drafter_max_model_len = (
                 self.speculative_config.draft_model_config.max_model_len
             )
-        input_fits_in_drafter = spec_decode_common_attn_metadata and (
-            spec_decode_common_attn_metadata.max_seq_len
-            + self.speculative_config.num_speculative_tokens
-            <= effective_drafter_max_model_len
+        input_fits_in_drafter = (
+            spec_decode_common_attn_metadata
+            and (spec_decode_common_attn_metadata.max_seq_len
+                 + self.speculative_config.num_speculative_tokens
+                 <= effective_drafter_max_model_len)
         )
+
+        use_padded_batch_for_arctic = (
+            self.speculative_config
+            and self.speculative_config.method in ("arctic", "mlp_speculator")
+            and self.use_async_scheduling
+        )
+
         if use_padded_batch_for_eagle:
             if input_fits_in_drafter:
-                # EAGLE speculative decoding can use the GPU sampled tokens
-                # as inputs, and does not need to wait for bookkeeping to finish.
-                propose_draft_token_ids(sampler_output.sampled_token_ids)
+                # EAGLE uses the GPU sampled tokens as inputs (no wait for bookkeeping)
+                with record_function_or_nullcontext("Draft"):
+                    self._draft_token_ids = self.propose_draft_token_ids(
+                        scheduler_output,
+                        sampler_output.sampled_token_ids,            # GPU tensor
+                        sampler_output.sampled_token_ids,            # original grid
+                        self.input_batch.sampling_metadata,
+                        hidden_states,
+                        sample_hidden_states,
+                        aux_hidden_states,
+                        spec_decode_metadata,
+                        spec_decode_common_attn_metadata,
+                    )
             elif self.use_async_scheduling:
-                # input_fits_in_drafter is false, but _draft_token_ids are generated
-                # at this step, so we need to prepare the next token ids
-                # and valid sampled token count with actutally sampled tokens.
+                # Prepare the 'valid_sampled_token_count' early for downstream overlap.
                 if self._draft_token_ids is not None:
                     next_token_ids, valid_sampled_tokens_count = (
                         self.drafter.prepare_next_token_ids_padded(
@@ -432,20 +487,50 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                             self.num_discarded_requests,
                         )
                     )
-                    self._copy_valid_sampled_token_count(
-                        next_token_ids, valid_sampled_tokens_count
-                    )
+                    self._copy_valid_sampled_token_count(next_token_ids, valid_sampled_tokens_count)
                     self._draft_token_ids = None
                 else:
-                    # No draft tokens available, all requests are sampled
-                    # normally but rejection sampling.
                     self.valid_sampled_token_count_cpu.fill_(1)
 
+        # Arctic pre-bookkeeping (new, mirrors EAGLE overlap but stays on device)
+        if use_padded_batch_for_arctic:
+            # Compute the last token per row and the per-row valid count on device
+            next_token_ids, valid_sampled_tokens_count = (
+                self.drafter.prepare_next_token_ids_padded(
+                    spec_decode_common_attn_metadata,
+                    sampler_output.sampled_token_ids,
+                    self.requests,
+                    self.input_batch,
+                    self.discard_request_indices.gpu,
+                    self.num_discarded_requests,
+                )
+            )
+            # Make these counts visible to consumer (overlap with prepare_input on target)
+            self._copy_valid_sampled_token_count(next_token_ids, valid_sampled_tokens_count)
+
+            # Select per-request previous hidden states entirely on device
+            if spec_decode_metadata is not None:
+                previous_hidden_states = self.drafter.prepare_hidden_states(
+                    sample_hidden_states=sample_hidden_states,
+                    sampled_token_ids=sampler_output.sampled_token_ids,
+                    spec_decode_metadata=spec_decode_metadata,
+                )
+            else:
+                previous_hidden_states = None
+
+            # Propose immediately to overlap with bookkeeping
+            with record_function_or_nullcontext("Draft"):
+                self._draft_token_ids = self.propose_arctic_draft_from_next_tokens(
+                    next_token_ids=next_token_ids,
+                    previous_hidden_states=previous_hidden_states,
+                )
+
+        # === Bookkeeping (CPU) ===
         with record_function_or_nullcontext("Bookkeep"):
             (
                 num_nans_in_logits,
                 logprobs_lists,
-                valid_sampled_token_ids,
+                valid_sampled_token_ids,          # CPU list[list[int]]
                 prompt_logprobs_dict,
                 req_ids_output_copy,
                 req_id_to_index_output_copy,
@@ -459,18 +544,15 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 spec_decode_metadata,
             )
 
-        if (
-            self.speculative_config
-            and not use_padded_batch_for_eagle
-            and input_fits_in_drafter
-        ):
-            # ngram and other speculative decoding methods use the sampled
-            # tokens on the CPU, so they are run after bookkeeping.
-            propose_draft_token_ids(valid_sampled_token_ids)
+        if self.speculative_config and not use_padded_batch_for_eagle:
+            if not use_padded_batch_for_arctic:
+                _run_proposer_after_bookkeep(valid_sampled_token_ids)
 
+        # === EPLB ===
         with record_function_or_nullcontext("EPLB"):
             self.eplb_step()
 
+        # Pack output
         output = ModelRunnerOutput(
             req_ids=req_ids_output_copy,
             req_id_to_index=req_id_to_index_output_copy,
@@ -485,6 +567,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         if not self.use_async_scheduling:
             return output
 
+        # Async wrapper
         async_output = AsyncGPUModelRunnerOutput(
             model_runner_output=output,
             sampled_token_ids=sampler_output.sampled_token_ids,
@@ -494,8 +577,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             vocab_size=self.input_batch.vocab_size,
         )
 
-        # Save ref of sampled_token_ids CPU tensor if the batch contains
-        # any requests with sampling params that that require output ids.
+        # Expose sampled_token_ids CPU tensor if some requests need it
         self.input_batch.set_async_sampled_token_ids(
             async_output.sampled_token_ids_cpu,
             async_output.async_copy_ready_event,
