@@ -132,83 +132,108 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             )
 
 
-    def propose_draft_token_ids(
-        self,
-        scheduler_output: "SchedulerOutput",
-        sampled_token_ids: list[list[int]],
-        original_sampled_token_ids: Union[np.ndarray, torch.Tensor],
-        sampling_metadata: SamplingMetadata,
-        hidden_states: torch.Tensor,
-        sample_hidden_states: torch.Tensor,
-        aux_hidden_states: Optional[torch.Tensor],
-        spec_decode_metadata: Optional[SpecDecodeMetadata],
-        common_attn_metadata: CommonAttentionMetadata,
-    ) -> list[list[int]]:
-        disable_spec_decode = (
-            self.speculative_config
-            and self.speculative_config.disable_by_batch_size
-            and len(self.input_batch.req_ids) > self.speculative_config.disable_by_batch_size
-        )
-        if disable_spec_decode:
-            return [[] for _ in sampled_token_ids]
+def propose_draft_token_ids(
+    self,
+    scheduler_output: "SchedulerOutput",
+    sampled_token_ids: Union[list[list[int]], torch.Tensor],
+    original_sampled_token_ids: Union[np.ndarray, torch.Tensor],
+    sampling_metadata: SamplingMetadata,
+    hidden_states: torch.Tensor,
+    sample_hidden_states: torch.Tensor,
+    aux_hidden_states: Optional[torch.Tensor],
+    spec_decode_metadata: Optional[SpecDecodeMetadata],
+    common_attn_metadata: CommonAttentionMetadata,
+) -> list[list[int]]:
+    # Honor disable-by-batch-size first.
+    disable_spec_decode = (
+        self.speculative_config
+        and self.speculative_config.disable_by_batch_size
+        and len(self.input_batch.req_ids) > self.speculative_config.disable_by_batch_size
+    )
+    if disable_spec_decode:
+        return [[] for _ in range(len(self.input_batch.req_ids))]
 
-        suffix_spec_token_ids = None
+    method = self.speculative_config.method if self.speculative_config else None
+
+    # Suffix preemption set-up (only meaningful when we have CPU lists).
+    # If we're on the GPU fast path we’ll merge suffix *after* bookkeeping.
+    if isinstance(sampled_token_ids, list):
         new_sampled_token_ids = sampled_token_ids.copy()
-        if self._suffix_cache is not None:
-            results = self.propose_suffix_draft_token_ids(new_sampled_token_ids)
-            suffix_spec_token_ids = []
-            min_score = 0 if self.speculative_config.method == "suffix" \
-                else self.speculative_config.num_speculative_tokens
-            for i, result in enumerate(results):
-                if result.score >= min_score:
-                    new_sampled_token_ids[i] = []
-                    suffix_spec_token_ids.append(result.token_ids)
-                else:
-                    suffix_spec_token_ids.append([])
+        suffix_candidates = self.propose_suffix_draft_token_ids(new_sampled_token_ids) \
+            if self._suffix_cache is not None else None
+    else:
+        new_sampled_token_ids = None
+        suffix_candidates = None
 
-        spec_token_ids = None
-        if self.speculative_config.method == "suffix":
-            pass
-        elif self.speculative_config.method in ("arctic", "mlp_speculator"):
-            assert isinstance(self.drafter, ArcticProposer)
-            if isinstance(original_sampled_token_ids, np.ndarray):
-                original_sampled_token_ids_tensor = torch.from_numpy(
-                    original_sampled_token_ids
-                ).to(self.device)
-            else:
-                original_sampled_token_ids_tensor = original_sampled_token_ids
+    spec_token_ids = None
 
-            previous_hidden_states = self.drafter.prepare_hidden_states(
-                sample_hidden_states=sample_hidden_states,
-                sampled_token_ids=original_sampled_token_ids_tensor,
-                spec_decode_metadata=spec_decode_metadata,
-            )
-            spec_token_ids = self.propose_arctic_draft_token_ids(
-                scheduler_output,
-                new_sampled_token_ids,
-                previous_hidden_states=previous_hidden_states,
-            )
-        else:
-            spec_token_ids = self._orig_propose_draft_token_ids(
-                scheduler_output,
-                new_sampled_token_ids,
-                sampling_metadata,
-                hidden_states,
-                sample_hidden_states,
-                aux_hidden_states,
-                spec_decode_metadata,
-                common_attn_metadata,
-            )
+    if method in ("arctic", "mlp_speculator") \
+       and isinstance(original_sampled_token_ids, torch.Tensor) \
+       and self.use_async_scheduling and common_attn_metadata is not None:
+        # --- Arctic GPU fast path (pre-bookkeeping) ---
+        next_token_ids, valid_counts = self.drafter.prepare_next_token_ids_padded(
+            common_attn_metadata,
+            original_sampled_token_ids,
+            self.requests,
+            self.input_batch,
+            self.discard_request_indices.gpu,
+            self.num_discarded_requests,
+        )
+        self._copy_valid_sampled_token_count(next_token_ids, valid_counts)
 
-        if spec_token_ids is None:
-            spec_token_ids = suffix_spec_token_ids
-        elif suffix_spec_token_ids is not None:
-            spec_token_ids = [
-                suffix_spec_token_ids[i] or spec_token_ids[i]
-                for i in range(len(suffix_spec_token_ids))
-            ]
+        prev_h = (self.drafter.prepare_hidden_states(
+            sample_hidden_states=sample_hidden_states,
+            sampled_token_ids=original_sampled_token_ids,
+            spec_decode_metadata=spec_decode_metadata,
+        ) if spec_decode_metadata is not None else None)
 
-        return spec_token_ids
+        spec_token_ids = self.propose_arctic_draft_from_next_tokens(
+            next_token_ids=next_token_ids,
+            previous_hidden_states=prev_h,
+        )
+
+    elif method in ("arctic", "mlp_speculator"):
+        # --- Arctic CPU path (post-bookkeeping lists) ---
+        assert isinstance(new_sampled_token_ids, list)
+        if isinstance(original_sampled_token_ids, np.ndarray):
+            original_sampled_token_ids = torch.from_numpy(original_sampled_token_ids).to(self.device)
+        prev_h = self.drafter.prepare_hidden_states(
+            sample_hidden_states=sample_hidden_states,
+            sampled_token_ids=original_sampled_token_ids,
+            spec_decode_metadata=spec_decode_metadata,
+        ) if spec_decode_metadata is not None else None
+        spec_token_ids = self.propose_arctic_draft_token_ids(
+            scheduler_output,
+            new_sampled_token_ids,
+            previous_hidden_states=prev_h,
+        )
+
+    elif method == "suffix":
+        # No drafter; suffix only.
+        spec_token_ids = [[] for _ in range(len(self.input_batch.req_ids))]
+
+    else:
+        # Delegate to original for other methods (Eagle, Medusa, etc.)
+        spec_token_ids = self._orig_propose_draft_token_ids(
+            scheduler_output,
+            sampled_token_ids,
+            sampling_metadata,
+            hidden_states,
+            sample_hidden_states,
+            aux_hidden_states,
+            spec_decode_metadata,
+            common_attn_metadata,
+        )
+
+    # Merge suffix preemption *if we had CPU lists in this call*.
+    if suffix_candidates is not None:
+        min_score = 0 if method == "suffix" else self.speculative_config.num_speculative_tokens
+        merged = []
+        for i, cand in enumerate(suffix_candidates):
+            merged.append(cand.token_ids if cand.score >= min_score else spec_token_ids[i])
+        spec_token_ids = merged
+
+    return spec_token_ids
 
 
     def propose_arctic_draft_from_next_tokens(
@@ -492,37 +517,18 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 else:
                     self.valid_sampled_token_count_cpu.fill_(1)
 
-        # Arctic pre-bookkeeping (new, mirrors EAGLE overlap but stays on device)
-        if use_padded_batch_for_arctic:
-            # Compute the last token per row and the per-row valid count on device
-            next_token_ids, valid_sampled_tokens_count = (
-                self.drafter.prepare_next_token_ids_padded(
-                    spec_decode_common_attn_metadata,
-                    sampler_output.sampled_token_ids,
-                    self.requests,
-                    self.input_batch,
-                    self.discard_request_indices.gpu,
-                    self.num_discarded_requests,
-                )
-            )
-            # Make these counts visible to consumer (overlap with prepare_input on target)
-            self._copy_valid_sampled_token_count(next_token_ids, valid_sampled_tokens_count)
-
-            # Select per-request previous hidden states entirely on device
-            if spec_decode_metadata is not None:
-                previous_hidden_states = self.drafter.prepare_hidden_states(
-                    sample_hidden_states=sample_hidden_states,
-                    sampled_token_ids=sampler_output.sampled_token_ids,
-                    spec_decode_metadata=spec_decode_metadata,
-                )
-            else:
-                previous_hidden_states = None
-
-            # Propose immediately to overlap with bookkeeping
+        if use_padded_batch_for_arctic and spec_decode_common_attn_metadata::
             with record_function_or_nullcontext("Draft"):
-                self._draft_token_ids = self.propose_arctic_draft_from_next_tokens(
-                    next_token_ids=next_token_ids,
-                    previous_hidden_states=previous_hidden_states,
+                self._draft_token_ids = self.propose_draft_token_ids(
+                    scheduler_output,
+                    sampled_token_ids=[],           
+                    original_sampled_token_ids=sampler_output.sampled_token_ids, 
+                    sampling_metadata=self.input_batch.sampling_metadata,
+                    hidden_states=hidden_states,
+                    sample_hidden_states=sample_hidden_states,
+                    aux_hidden_states=aux_hidden_states,
+                    spec_decode_metadata=spec_decode_metadata,
+                    common_attn_metadata=spec_decode_common_attn_metadata,
                 )
 
         # === Bookkeeping (CPU) ===
@@ -530,7 +536,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             (
                 num_nans_in_logits,
                 logprobs_lists,
-                valid_sampled_token_ids,          # CPU list[list[int]]
+                valid_sampled_token_ids,
                 prompt_logprobs_dict,
                 req_ids_output_copy,
                 req_id_to_index_output_copy,
