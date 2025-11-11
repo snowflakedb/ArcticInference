@@ -49,6 +49,16 @@ from vllm.v1.worker.gpu_model_runner import (
     AsyncGPUModelRunnerOutput,
 )
 
+# Try to import the grammar bitmask helper; degrade gracefully if unavailable.
+apply_grammar_bitmask: Any
+try:
+    from vllm.v1.structured.output import apply_grammar_bitmask  # type: ignore
+except Exception:
+    try:
+        from vllm.v1.structured.grammar import apply_grammar_bitmask  # type: ignore
+    except Exception:
+        apply_grammar_bitmask = None  # type: ignore
+
 if TYPE_CHECKING:
     from vllm.v1.core.sched.output import SchedulerOutput
 
@@ -94,6 +104,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         else:
             self.use_ulysses = False
 
+        # Intercept Arctic/suffix/mlp_speculator configs so we can manage drafter lifecycle.
         if (vllm_config.speculative_config is not None and
                 vllm_config.speculative_config.method in ("arctic", "suffix", "mlp_speculator")):
             arctic_speculative_config = vllm_config.speculative_config
@@ -102,8 +113,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             arctic_speculative_config = None
 
         self._orig_init(vllm_config, device)
-        
-        self._suffix_cache = None
+
+        self._suffix_cache: Optional[SuffixDecodingCache] = None
         if arctic_speculative_config is not None:
             self.vllm_config.speculative_config = arctic_speculative_config
             self.speculative_config = arctic_speculative_config
@@ -131,116 +142,128 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 max_cached_requests=spec_cfg.suffix_cache_max_requests
             )
 
-
-def propose_draft_token_ids(
-    self,
-    scheduler_output: "SchedulerOutput",
-    sampled_token_ids: Union[list[list[int]], torch.Tensor],
-    original_sampled_token_ids: Union[np.ndarray, torch.Tensor],
-    sampling_metadata: SamplingMetadata,
-    hidden_states: torch.Tensor,
-    sample_hidden_states: torch.Tensor,
-    aux_hidden_states: Optional[torch.Tensor],
-    spec_decode_metadata: Optional[SpecDecodeMetadata],
-    common_attn_metadata: CommonAttentionMetadata,
-) -> list[list[int]]:
-    # Honor disable-by-batch-size first.
-    disable_spec_decode = (
-        self.speculative_config
-        and self.speculative_config.disable_by_batch_size
-        and len(self.input_batch.req_ids) > self.speculative_config.disable_by_batch_size
-    )
-    if disable_spec_decode:
-        return [[] for _ in range(len(self.input_batch.req_ids))]
-
-    method = self.speculative_config.method if self.speculative_config else None
-
-    # Suffix preemption set-up (only meaningful when we have CPU lists).
-    # If we're on the GPU fast path we’ll merge suffix *after* bookkeeping.
-    if isinstance(sampled_token_ids, list):
-        new_sampled_token_ids = sampled_token_ids.copy()
-        suffix_candidates = self.propose_suffix_draft_token_ids(new_sampled_token_ids) \
-            if self._suffix_cache is not None else None
-    else:
-        new_sampled_token_ids = None
-        suffix_candidates = None
-
-    spec_token_ids = None
-
-    if method in ("arctic", "mlp_speculator") \
-       and isinstance(original_sampled_token_ids, torch.Tensor) \
-       and self.use_async_scheduling and common_attn_metadata is not None:
-        # --- Arctic GPU fast path (pre-bookkeeping) ---
-        next_token_ids, valid_counts = self.drafter.prepare_next_token_ids_padded(
-            common_attn_metadata,
-            original_sampled_token_ids,
-            self.requests,
-            self.input_batch,
-            self.discard_request_indices.gpu,
-            self.num_discarded_requests,
+    def propose_draft_token_ids(
+        self,
+        scheduler_output: "SchedulerOutput",
+        sampled_token_ids: Union[list[list[int]], torch.Tensor],
+        original_sampled_token_ids: Union[np.ndarray, torch.Tensor],
+        sampling_metadata: SamplingMetadata,
+        hidden_states: torch.Tensor,
+        sample_hidden_states: torch.Tensor,
+        aux_hidden_states: Optional[torch.Tensor],
+        spec_decode_metadata: Optional[SpecDecodeMetadata],
+        common_attn_metadata: CommonAttentionMetadata,
+    ) -> list[list[int]]:
+        # Honor disable-by-batch-size first.
+        disable_spec_decode = (
+            self.speculative_config
+            and self.speculative_config.disable_by_batch_size
+            and len(self.input_batch.req_ids) > self.speculative_config.disable_by_batch_size
         )
-        self._copy_valid_sampled_token_count(next_token_ids, valid_counts)
+        if disable_spec_decode:
+            return [[] for _ in range(len(self.input_batch.req_ids))]
 
-        prev_h = (self.drafter.prepare_hidden_states(
-            sample_hidden_states=sample_hidden_states,
-            sampled_token_ids=original_sampled_token_ids,
-            spec_decode_metadata=spec_decode_metadata,
-        ) if spec_decode_metadata is not None else None)
+        method = self.speculative_config.method if self.speculative_config else None
 
-        spec_token_ids = self.propose_arctic_draft_from_next_tokens(
-            next_token_ids=next_token_ids,
-            previous_hidden_states=prev_h,
+        # Decide which path we will take.
+        used_gpu_fast_path = (
+            method in ("arctic", "mlp_speculator")
+            and isinstance(original_sampled_token_ids, torch.Tensor)
+            and self.use_async_scheduling
+            and common_attn_metadata is not None
         )
 
-    elif method in ("arctic", "mlp_speculator"):
-        # --- Arctic CPU path (post-bookkeeping lists) ---
-        assert isinstance(new_sampled_token_ids, list)
-        if isinstance(original_sampled_token_ids, np.ndarray):
-            original_sampled_token_ids = torch.from_numpy(original_sampled_token_ids).to(self.device)
-        prev_h = self.drafter.prepare_hidden_states(
-            sample_hidden_states=sample_hidden_states,
-            sampled_token_ids=original_sampled_token_ids,
-            spec_decode_metadata=spec_decode_metadata,
-        ) if spec_decode_metadata is not None else None
-        spec_token_ids = self.propose_arctic_draft_token_ids(
-            scheduler_output,
-            new_sampled_token_ids,
-            previous_hidden_states=prev_h,
-        )
+        spec_token_ids: Optional[list[list[int]]] = None
+        suffix_candidates: Optional[list[SuffixDecodingDraft]] = None
 
-    elif method == "suffix":
-        # No drafter; suffix only.
-        spec_token_ids = [[] for _ in range(len(self.input_batch.req_ids))]
+        if used_gpu_fast_path:
+            # --- Arctic GPU fast path (pre-bookkeeping) ---
+            next_token_ids, valid_counts = self.drafter.prepare_next_token_ids_padded(
+                common_attn_metadata,
+                original_sampled_token_ids,
+                self.requests,
+                self.input_batch,
+                self.discard_request_indices.gpu,
+                self.num_discarded_requests,
+            )
+            self._copy_valid_sampled_token_count(next_token_ids, valid_counts)
 
-    else:
-        # Delegate to original for other methods (Eagle, Medusa, etc.)
-        spec_token_ids = self._orig_propose_draft_token_ids(
-            scheduler_output,
-            sampled_token_ids,
-            sampling_metadata,
-            hidden_states,
-            sample_hidden_states,
-            aux_hidden_states,
-            spec_decode_metadata,
-            common_attn_metadata,
-        )
+            prev_h = (self.drafter.prepare_hidden_states(
+                sample_hidden_states=sample_hidden_states,
+                sampled_token_ids=original_sampled_token_ids,
+                spec_decode_metadata=spec_decode_metadata,
+            ) if spec_decode_metadata is not None else None)
 
-    # Merge suffix preemption *if we had CPU lists in this call*.
-    if suffix_candidates is not None:
-        min_score = 0 if method == "suffix" else self.speculative_config.num_speculative_tokens
-        merged = []
-        for i, cand in enumerate(suffix_candidates):
-            merged.append(cand.token_ids if cand.score >= min_score else spec_token_ids[i])
-        spec_token_ids = merged
+            spec_token_ids = self.propose_arctic_draft_from_next_tokens(
+                next_token_ids=next_token_ids,
+                previous_hidden_states=prev_h,
+            )
+            # IMPORTANT: do NOT attempt suffix-merge on the GPU fast path.
 
-    return spec_token_ids
+        else:
+            # CPU-list path: may be suffix-only, arctic CPU, or delegate.
+            if isinstance(sampled_token_ids, list):
+                # Consider suffix candidates only in CPU-list path.
+                if self._suffix_cache is not None:
+                    suffix_candidates = self.propose_suffix_draft_token_ids(
+                        sampled_token_ids.copy()
+                    )
 
+            if method in ("arctic", "mlp_speculator"):
+                # --- Arctic CPU path (post-bookkeeping lists) ---
+                assert isinstance(sampled_token_ids, list)
+                if isinstance(original_sampled_token_ids, np.ndarray):
+                    original_sampled_token_ids = torch.from_numpy(
+                        original_sampled_token_ids
+                    ).to(self.device)
+                prev_h = (self.drafter.prepare_hidden_states(
+                    sample_hidden_states=sample_hidden_states,
+                    sampled_token_ids=original_sampled_token_ids,
+                    spec_decode_metadata=spec_decode_metadata,
+                ) if spec_decode_metadata is not None else None)
+
+                spec_token_ids = self.propose_arctic_draft_token_ids(
+                    scheduler_output,
+                    sampled_token_ids,
+                    previous_hidden_states=prev_h,
+                )
+
+            elif method == "suffix":
+                # Suffix-only: proposals come purely from suffix preemption.
+                spec_token_ids = [[] for _ in range(len(self.input_batch.req_ids))]
+
+            else:
+                # Delegate to original for other methods (Eagle, Medusa, etc.)
+                spec_token_ids = self._orig_propose_draft_token_ids(
+                    scheduler_output,
+                    sampled_token_ids,
+                    sampling_metadata,
+                    hidden_states,
+                    sample_hidden_states,
+                    aux_hidden_states,
+                    spec_decode_metadata,
+                    common_attn_metadata,
+                )
+
+        # Merge suffix preemption *only* if we were on the CPU-list path.
+        if suffix_candidates is not None:
+            assert spec_token_ids is not None
+            min_score = 0 if method == "suffix" else self.speculative_config.num_speculative_tokens
+            merged: list[list[int]] = []
+            # suffix_candidates length should match batch length; if not, be conservative.
+            batch_len = len(spec_token_ids)
+            for i in range(batch_len):
+                cand = suffix_candidates[i] if i < len(suffix_candidates) else SuffixDecodingDraft()
+                merged.append(cand.token_ids if cand.score >= min_score else spec_token_ids[i])
+            spec_token_ids = merged
+
+        return spec_token_ids or [[] for _ in range(len(self.input_batch.req_ids))]
 
     def propose_arctic_draft_from_next_tokens(
         self,
         next_token_ids: torch.Tensor,                 # [B] device
         previous_hidden_states: Optional[torch.Tensor],
-    ) -> List[List[int]]:
+    ) -> list[list[int]]:
         """
         Fast pre-bookkeeping Arctic path:
         - next_token_ids are computed on device (no CPU sync)
@@ -250,19 +273,15 @@ def propose_draft_token_ids(
         assert isinstance(self.drafter, ArcticProposer)
 
         # Compute how many tokens we can safely propose (bounded by drafter length)
-        # Use *drafter's* max length, not target's.
         max_spec_tokens = self.speculative_config.num_speculative_tokens
-
-        current_max_seq = int(self.input_batch.num_tokens_no_spec.max().item())
-        final_max_spec = max_spec_tokens
-        if final_max_spec <= 0:
+        if max_spec_tokens <= 0:
             return [[] for _ in range(next_token_ids.shape[0])]
 
         # Let the speculator propose (keeps everything on device)
         drafter_output = self.drafter.propose(
             context_token_ids=next_token_ids,                     # [B] device
             previous_hidden_states=previous_hidden_states,        # [B, H] or None
-            num_predict_tokens=final_max_spec,
+            num_predict_tokens=max_spec_tokens,
         )
         if drafter_output is None:
             return [[] for _ in range(next_token_ids.shape[0])]
@@ -270,21 +289,21 @@ def propose_draft_token_ids(
         # Convert to the format the runtime expects (python lists per row)
         return drafter_output.tolist()
 
-
     def propose_arctic_draft_token_ids(
         self,
         scheduler_output: "SchedulerOutput",
         sampled_token_ids: list[list[int]],
         previous_hidden_states: Optional[torch.Tensor] = None,
     ) -> list[list[int]]:
-        last_tokens = []
+        last_tokens: list[Optional[int]] = []
         max_spec_tokens = self.speculative_config.num_speculative_tokens
         for i, sampled_ids in enumerate(sampled_token_ids):
             num_sampled_ids = len(sampled_ids)
 
             if num_sampled_ids == 0:
                 if self.speculative_config.enable_suffix_decoding:
-                    return [[]] * len(sampled_token_ids)
+                    # Avoid aliased inner lists
+                    return [[] for _ in range(len(sampled_token_ids))]
                 req_id = self.input_batch.req_ids[i]
                 req_state = self.requests[req_id]
                 seq_len = (req_state.num_computed_tokens +
@@ -334,7 +353,7 @@ def propose_draft_token_ids(
         )
 
         draft_token_ids_list = drafter_output.tolist()
-        final_draft_token_ids = []
+        final_draft_token_ids: list[list[int]] = []
         draft_iter = iter(draft_token_ids_list)
         for t in last_tokens:
             if t is not None:
@@ -372,7 +391,7 @@ def propose_draft_token_ids(
         sampled_token_ids: list[list[int]],
     ) -> list[SuffixDecodingDraft]:
         config = self.speculative_config
-        results = []
+        results: list[SuffixDecodingDraft] = []
         for i, sampled_ids in enumerate(sampled_token_ids):
             num_sampled_ids = len(sampled_ids)
             if not num_sampled_ids:
@@ -406,11 +425,10 @@ def propose_draft_token_ids(
 
         return results
 
-
     @torch.inference_mode
     def sample_tokens(
         self, grammar_output: "GrammarOutput | None"
-    ) -> ModelRunnerOutput | AsyncModelRunnerOutput | IntermediateTensors:
+    ) -> Union[ModelRunnerOutput, AsyncGPUModelRunnerOutput, IntermediateTensors]:
         if self.execute_model_state is None:
             return None  # PP non-final rank case
 
@@ -429,9 +447,14 @@ def propose_draft_token_ids(
 
         # Apply structured output constraints if any
         if grammar_output is not None:
-            apply_grammar_bitmask(
-                scheduler_output, grammar_output, self.input_batch, logits
-            )
+            if apply_grammar_bitmask is None:
+                logger.warning(
+                    "Grammar output requested but apply_grammar_bitmask is unavailable; skipping constraints."
+                )
+            else:
+                apply_grammar_bitmask(
+                    scheduler_output, grammar_output, self.input_batch, logits
+                )
 
         with record_function_or_nullcontext("Sample"):
             sampler_output = self._sample(logits, spec_decode_metadata)
@@ -442,8 +465,8 @@ def propose_draft_token_ids(
             with record_function_or_nullcontext("Draft"):
                 self._draft_token_ids = self.propose_draft_token_ids(
                     scheduler_output,
-                    valid_sampled_token_ids,                    
-                    sampler_output.sampled_token_ids,        
+                    valid_sampled_token_ids,                    # CPU lists
+                    sampler_output.sampled_token_ids,           # GPU tensor (original grid)
                     self.input_batch.sampling_metadata,
                     hidden_states,
                     sample_hidden_states,
@@ -460,9 +483,7 @@ def propose_draft_token_ids(
         )
 
         # input_fits_in_drafter is only relevant for EAGLE-style drafters.
-        effective_drafter_max_model_len = self.max_model_len
-        if effective_drafter_max_model_len is None:
-            effective_drafter_max_model_len = self.model_config.max_model_len
+        effective_drafter_max_model_len = self.max_model_len or self.model_config.max_model_len
         if (
             self.speculative_config
             and self.speculative_config.draft_model_config is not None
@@ -517,12 +538,14 @@ def propose_draft_token_ids(
                 else:
                     self.valid_sampled_token_count_cpu.fill_(1)
 
-        if use_padded_batch_for_arctic and spec_decode_common_attn_metadata::
+        if use_padded_batch_for_arctic and spec_decode_common_attn_metadata:
+            # Pre-bookkeeping Arctic fast path. Pass an empty list for sampled_token_ids
+            # but do NOT attempt suffix merging in this call (handled inside).
             with record_function_or_nullcontext("Draft"):
                 self._draft_token_ids = self.propose_draft_token_ids(
                     scheduler_output,
-                    sampled_token_ids=[],           
-                    original_sampled_token_ids=sampler_output.sampled_token_ids, 
+                    sampled_token_ids=[],                             # sentinel (CPU-list branch disabled)
+                    original_sampled_token_ids=sampler_output.sampled_token_ids,  # GPU tensor
                     sampling_metadata=self.input_batch.sampling_metadata,
                     hidden_states=hidden_states,
                     sample_hidden_states=sample_hidden_states,
@@ -549,6 +572,10 @@ def propose_draft_token_ids(
                 scheduler_output.total_num_scheduled_tokens,
                 spec_decode_metadata,
             )
+
+        # Keep suffix cache in sync with the latest sampled tokens.
+        if self._suffix_cache is not None:
+            self._update_suffix_cache(valid_sampled_token_ids)
 
         if self.speculative_config and not use_padded_batch_for_eagle:
             if not use_padded_batch_for_arctic:
