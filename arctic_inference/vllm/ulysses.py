@@ -51,6 +51,7 @@ def apply_shift_parallel_patches():
     UlyssesMultiprocExecutor.apply_patch()
     UlyssesAttention.apply_patch()
     UlyssesCudagraphDispatcher.apply_patch()
+    UlyssesEngineCore.apply_patch()
 
 
 class UlyssesModelConfig(ArcticPatch[ModelConfig]):
