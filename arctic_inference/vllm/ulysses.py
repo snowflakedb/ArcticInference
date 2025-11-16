@@ -524,6 +524,8 @@ from vllm.v1.engine import EngineCoreOutputs
 from vllm.v1.engine.core import EngineCore
 class UlyssesEngineCore(ArcticPatch[EngineCore]):
 
+        iteration = 0
+
         def step(self) -> tuple[dict[int, EngineCoreOutputs], bool]:
             """Schedule, execute, and make output.
 
@@ -561,7 +563,8 @@ class UlyssesEngineCore(ArcticPatch[EngineCore]):
             concurrency = len(scheduler_output.num_scheduled_tokens.keys())
             model_tflops = 8e9 * 2 * concurrency / (model_time_ms/1000) / 1e12
             e2e_tflops = 8e9 * 2 * concurrency / (total_time_ms/1000) / 1e12
-            print(f"BS: {concurrency}, time_schedule: {scheduler_time_ms:.2f}ms, time_execute: {model_time_ms:.2f}ms, time_update: {update_time_ms:.2f}ms, total_time: {total_time_ms:.2f}ms, Model: {int(model_tflops)}TF, E2E: {int(e2e_tflops)}TF")
+            print(f"iteration {self.iteration}, BS: {concurrency}, time_schedule: {scheduler_time_ms:.2f}ms, time_execute: {model_time_ms:.2f}ms, time_update: {update_time_ms:.2f}ms, total_time: {total_time_ms:.2f}ms, Model: {int(model_tflops)}TF, E2E: {int(e2e_tflops)}TF")
+            self.iteration += 1
 
             return (engine_core_outputs,
                     scheduler_output.total_num_scheduled_tokens > 0)
