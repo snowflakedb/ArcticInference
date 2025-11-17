@@ -545,6 +545,9 @@ class UlyssesEngineCore(ArcticPatch[EngineCore]):
             torch.cuda.synchronize()
             scheduler_time_ms = (time.monotonic() - scheduler_start) * 1000
 
+            # print(f"scheduler_output {scheduler_output}")
+            # print(f"scheduled tokens {scheduler_output.total_num_scheduled_tokens}")
+
             model_start = time.monotonic()
             model_output = self.execute_model_with_error_logging(
                 self.model_executor.execute_model,  # type: ignore
@@ -560,10 +563,9 @@ class UlyssesEngineCore(ArcticPatch[EngineCore]):
             total_time_ms = (time.monotonic() - step_start_time) * 1000
 
             # if _forward_context is not None and get_forward_context().attn_metadata.num_prefill_tokens == 0:
+            scheduled_tokens = scheduler_output.total_num_scheduled_tokens
             concurrency = len(scheduler_output.num_scheduled_tokens.keys())
-            model_tflops = 8e9 * 2 * concurrency / (model_time_ms/1000) / 1e12
-            e2e_tflops = 8e9 * 2 * concurrency / (total_time_ms/1000) / 1e12
-            print(f"iteration {self.iteration}, BS: {concurrency}, time_schedule: {scheduler_time_ms:.2f}ms, time_execute: {model_time_ms:.2f}ms, time_update: {update_time_ms:.2f}ms, total_time: {total_time_ms:.2f}ms, Model: {int(model_tflops)}TF, E2E: {int(e2e_tflops)}TF")
+            print(f"iteration {self.iteration}, scheduled tokens: {scheduled_tokens}, concurrency: {concurrency}, time_schedule: {scheduler_time_ms:.2f}ms, time_execute: {model_time_ms:.2f}ms, time_update: {update_time_ms:.2f}ms, total_time: {total_time_ms:.2f}ms")
             self.iteration += 1
 
             return (engine_core_outputs,
