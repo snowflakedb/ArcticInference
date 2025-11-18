@@ -441,76 +441,29 @@ class UlyssesAttention(ArcticPatch[Attention]):
         if self.sp_size == 1 or is_shift_parallel_mode():
             return self._orig_forward(query, key, value, **kwargs)
 
+        # view
+        q = query.view(-1, self.sp_size, self.num_heads * self.head_size)
         if self.is_kv_replicated:
-            # Ulysses all-to-all 1/2 (query)
-            q = query.view(-1, self.sp_size, self.num_heads * self.head_size)
-            k = key.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size).repeat_interleave(
-                self.replication_factor, dim=1)
-            v = value.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size).repeat_interleave(
-                self.replication_factor, dim=1)
-            # q_ = torch.empty_like(q)
-            # torch.distributed.all_to_all_single(q_, q, group=self.sp_device_group)
-
-            # kv = torch.cat((key.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size),
-            #                 value.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size)),
-            #                dim=-1).transpose(0, 1).reshape(
-            #                    -1, 2 * self.num_kv_heads * self.head_size).repeat_interleave(
-            #                        self.replication_factor, dim=0)
-
-            # qkv = torch.cat((q, kv), dim=-1)
-
-            qkv = torch.cat((q, k, v), dim=-1).transpose(0, 1).reshape(
-                -1, (self.num_heads + 2 * self.num_kv_heads) * self.head_size)
-            
-            qkv_ = torch.empty_like(qkv)
-            
-            torch.distributed.all_to_all_single(qkv, qkv_, group=self.sp_device_group)
-
-            q_, k_, v_ = qkv_.split([
-                self.num_heads * self.head_size, 
-                self.num_kv_heads * self.head_size, 
-                self.num_kv_heads * self.head_size
-            ], dim=-1)
-            
-
-            # # Ulysses pack (key, value)
-            # kv = torch.cat((key.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size),
-            #                 value.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size)),
-            #                dim=-1).transpose(0, 1).reshape(
-            #                    -1, 2 * self.num_kv_heads * self.head_size)
-            # # Ulysses all-to-all (key, value)
-            # kv_part = torch.empty_like(kv)
-            # torch.distributed.all_to_all_single(kv_part, kv, group=self.sp_aa_device_group)
-            # # Ulysses all-gather (key, value)
-            # kv_ = torch.empty(q_.shape[0],
-            #                   2 * self.num_kv_heads * self.head_size,
-            #                   dtype=query.dtype,
-            #                   device=query.device)
-            # torch.distributed.all_gather_into_tensor(kv_,
-            #                                          kv_part,
-            #                                          group=self.sp_ag_device_group)
-            # # reorder
-            # kv_chunk = kv_.chunk(self.sp_size)
-            # kv_ordered = torch.cat([kv_chunk[i] for i in self.order])
-            # # unpack (key, value)
-            # k_, v_ = kv_ordered.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
+            k = key.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size).repeat_interleave(self.replication_factor, dim=1)
+            v = value.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size).repeat_interleave(self.replication_factor, dim=1)
         else:
-            # pack
-            qkv = (torch.cat(
-                (query.view(-1, self.sp_size, self.num_heads * self.head_size),
-                key.view(-1, self.sp_size, self.num_kv_heads * self.head_size),
-                value.view(-1, self.sp_size, self.num_kv_heads * self.head_size)),
-                dim=-1)
-                .transpose(0, 1)
-                .reshape(-1, (self.num_heads + 2 * self.num_kv_heads) * self.head_size))
-            # Ulysses all-to-all 1/2
-            qkv_ = torch.empty_like(qkv)
-            torch.distributed.all_to_all_single(qkv_, qkv, group=self.sp_device_group)
-            # unpack
-            q_, k_, v_ = qkv_.split([
-                self.num_heads * self.head_size, self.num_kv_heads *
-                self.head_size, self.num_kv_heads * self.head_size
-            ], dim=-1)
+            k = key.view(-1, self.sp_size, self.num_kv_heads * self.head_size)
+            v = value.view(-1, self.sp_size, self.num_kv_heads * self.head_size)
+
+        # pack
+        qkv = torch.cat((q, k, v), dim=-1).transpose(0, 1).reshape(
+            -1, (self.num_heads + 2 * self.num_kv_heads) * self.head_size)
+        
+        # Ulysses all-to-all 1/2
+        qkv_ = torch.empty_like(qkv)
+        torch.distributed.all_to_all_single(qkv, qkv_, group=self.sp_device_group)
+
+        # unpack
+        q_, k_, v_ = qkv_.split([
+            self.num_heads * self.head_size, 
+            self.num_kv_heads * self.head_size, 
+            self.num_kv_heads * self.head_size
+        ], dim=-1)
 
         # original attention
         c_ = self._orig_forward(q_, k_, v_, **kwargs)
