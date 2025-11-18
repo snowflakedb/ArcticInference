@@ -443,22 +443,26 @@ class UlyssesAttention(ArcticPatch[Attention]):
 
         if self.is_kv_replicated:
             # Ulysses all-to-all 1/2 (query)
-            q = query.view(-1,
-                           self.sp_size, self.num_heads * self.head_size).transpose(
-                               0, 1).reshape(-1,
-                                             self.num_heads * self.head_size)
+            q = query.view(-1, self.sp_size, self.num_heads * self.head_size)
+            k = key.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size).repeat_interleave(
+                self.replication_factor, dim=1)
+            v = value.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size).repeat_interleave(
+                self.replication_factor, dim=1)
             # q_ = torch.empty_like(q)
             # torch.distributed.all_to_all_single(q_, q, group=self.sp_device_group)
 
-            kv = torch.cat((key.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size),
-                            value.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size)),
-                           dim=-1).transpose(0, 1).reshape(
-                               -1, 2 * self.num_kv_heads * self.head_size).repeat_interleave(
-                                   self.replication_factor, dim=0)
+            # kv = torch.cat((key.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size),
+            #                 value.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size)),
+            #                dim=-1).transpose(0, 1).reshape(
+            #                    -1, 2 * self.num_kv_heads * self.head_size).repeat_interleave(
+            #                        self.replication_factor, dim=0)
 
-            qkv = torch.cat((q, kv), dim=-1)
+            # qkv = torch.cat((q, kv), dim=-1)
+
+            qkv = torch.cat((q, k, v), dim=-1).transpose(0, 1).reshape(
+                -1, (self.num_heads + 2 * self.num_kv_heads) * self.head_size)
             
-            qkv_ = torch.empty_like(kv)
+            qkv_ = torch.empty_like(qkv)
             
             torch.distributed.all_to_all_single(qkv, qkv_, group=self.sp_device_group)
 
