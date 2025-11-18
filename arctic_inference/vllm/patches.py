@@ -29,7 +29,7 @@ from arctic_inference.vllm.config import (ParallelConfigPatch,
 from arctic_inference.vllm.stats import (SpecDecodingStatsPatch, 
                                          SpecDecodingLoggingPatch)
 from arctic_inference.vllm.structured_output import XgrammarBackendPatch
-from arctic_inference.vllm.ulysses import apply_shift_parallel_patches
+#from arctic_inference.vllm.ulysses import apply_shift_parallel_patches
 
 
 logger = init_logger(__name__)
@@ -65,6 +65,7 @@ class WorkerBasePatch(ArcticPatch[WorkerBase]):
 
 
 def apply_arctic_patches():
+    print("\x1b[36;1mApplying Arctic Inference vLLM patches...\x1b[0m")
 
     from transformers import AutoConfig
     from arctic_inference.common.swiftkv import LlamaSwiftKVConfig
@@ -73,38 +74,39 @@ def apply_arctic_patches():
     AutoConfig.register("llama_swiftkv", LlamaSwiftKVConfig)
 
     from vllm import ModelRegistry
-    #from arctic_inference.vllm.swiftkv import LlamaSwiftKVForCausalLM
+    from arctic_inference.vllm.swiftkv import LlamaSwiftKVForCausalLM
 
     # Register SwiftKV model definitions to vLLM.
     ModelRegistry.register_model(
         "LlamaSwiftKVForCausalLM",
         "arctic_inference.vllm.swiftkv:LlamaSwiftKVForCausalLM")
 
-    # Register ArcticSpeculator models to vLLM.
-    from arctic_inference.vllm.spec_dec.arctic_speculator import (
-        ArcticMLPSpeculator, ArcticLSTMSpeculator)
-    ModelRegistry.register_model("ArcticMLPSpeculatorPreTrainedModel",
-                                 ArcticMLPSpeculator)
-    ModelRegistry.register_model("ArcticLSTMSpeculatorPreTrainedModel",
-                                 ArcticLSTMSpeculator)
+    # ModelRegistry.register_model(
+    #     "ArcticMLPSpeculatorPreTrainedModel",
+    #     "arctic_inference.vllm.spec_dec.arctic_speculator:ArcticMLPSpeculator",
+    # )
+    # ModelRegistry.register_model(
+    #     "ArcticLSTMSpeculatorPreTrainedModel",
+    #     "arctic_inference.vllm.spec_dec.arctic_speculator:ArcticLSTMSpeculator",
+    # )
     # This name is currently used in corvo
-    ModelRegistry.register_model("MLPVariantSpeculatorPreTrainedModel",
-                                 ArcticLSTMSpeculator)
+    # ModelRegistry.register_model("MLPVariantSpeculatorPreTrainedModel",
+    #                              ArcticLSTMSpeculator)
 
     # Patches that make later patches work properly.
     EngineCoreProcPatch.apply_patch()
     WorkerBasePatch.apply_patch()
 
     # Patches to vLLM arguments and configuration objects.
-    EngineArgsPatch.apply_patch()
-    AsyncEngineArgsPatch.apply_patch()
-    ParallelConfigPatch.apply_patch()
+    #EngineArgsPatch.apply_patch()
+    #AsyncEngineArgsPatch.apply_patch()
+    #ParallelConfigPatch.apply_patch()
     SpeculativeConfigPatch.apply_patch()
     SpecDecodingStatsPatch.apply_patch()
     SpecDecodingLoggingPatch.apply_patch()
-    VllmConfigPatch.apply_patch()
-    XgrammarBackendPatch.apply_patch()
+    #VllmConfigPatch.apply_patch()
+    #XgrammarBackendPatch.apply_patch()
     MLPSpeculatorConfigPatch.apply_patch()
 
     # Main optimization patches.
-    apply_shift_parallel_patches()
+    #apply_shift_parallel_patches()

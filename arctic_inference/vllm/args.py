@@ -20,7 +20,7 @@ from dataclasses import dataclass, fields
 
 from vllm.config import ParallelConfig
 from vllm.engine.arg_utils import AsyncEngineArgs, EngineArgs
-from vllm.utils import FlexibleArgumentParser
+from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 from arctic_inference.patching import ArcticPatch
 from arctic_inference.vllm.config import ArcticParallelConfig
@@ -50,7 +50,7 @@ class EngineArgsPatch(ArcticPatch[EngineArgs]):
     _orig_add_cli_args = EngineArgs.add_cli_args
     _orig_from_cli_args = EngineArgs.__dict__["from_cli_args"].__wrapped__
     _orig_create_engine_config = EngineArgs.create_engine_config
-    _orig_is_v1_supported_oracle = EngineArgs._is_v1_supported_oracle
+    #_orig_is_v1_supported_oracle = EngineArgs._is_v1_supported_oracle
 
     def __new__(cls, *args, **kwargs):
         # Override __new__ to return an ArcticEngineArgs instead of an
@@ -121,20 +121,20 @@ class EngineArgsPatch(ArcticPatch[EngineArgs]):
         vllm_config.parallel_config = ArcticParallelConfig(**kwargs)
         return vllm_config
 
-    def _is_v1_supported_oracle(self, *args, **kwargs):
-        orig_speculative_config = self.speculative_config
+    # def _is_v1_supported_oracle(self, *args, **kwargs):
+    #     orig_speculative_config = self.speculative_config
 
-        # Since Arctic Inference is only compatible with v1 and we already
-        # check it earlier, we can just disable this check altogether.
-        if (self.speculative_config is not None and
-                self.speculative_config.get("method") in ("arctic", "suffix")):
-            self.speculative_config = None
+    #     # Since Arctic Inference is only compatible with v1 and we already
+    #     # check it earlier, we can just disable this check altogether.
+    #     if (self.speculative_config is not None and
+    #             self.speculative_config.get("method") in ("arctic", "suffix")):
+    #         self.speculative_config = None
 
-        res = self._orig_is_v1_supported_oracle(*args, **kwargs)
+    #     res = self._orig_is_v1_supported_oracle(*args, **kwargs)
 
-        self.speculative_config = orig_speculative_config
+    #     self.speculative_config = orig_speculative_config
 
-        return res
+    #     return res
 
 
 class AsyncEngineArgsPatch(ArcticPatch[AsyncEngineArgs]):
