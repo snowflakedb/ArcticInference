@@ -447,24 +447,25 @@ class UlyssesAttention(ArcticPatch[Attention]):
                            self.sp_size, self.num_heads * self.head_size).transpose(
                                0, 1).reshape(-1,
                                              self.num_heads * self.head_size)
-            q_ = torch.empty_like(q)
-            torch.distributed.all_to_all_single(q_, q, group=self.sp_device_group)
-
-            k = key.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size).repeat_interleave(
-                self.replication_factor, dim=1)
+            # q_ = torch.empty_like(q)
+            # torch.distributed.all_to_all_single(q_, q, group=self.sp_device_group)
 
             kv = torch.cat((key.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size),
                             value.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size)),
                            dim=-1).transpose(0, 1).reshape(
                                -1, 2 * self.num_kv_heads * self.head_size).repeat_interleave(
                                    self.replication_factor, dim=0)
-            
-            kv_ = torch.empty_like(kv)
-            
-            torch.distributed.all_to_all_single(kv, kv_, group=self.sp_device_group)
 
-            k_, v_ = qkv_.split([
-                self.num_kv_heads * self.head_size, self.num_kv_heads * self.head_size
+            qkv = torch.cat((q, kv), dim=-1)
+            
+            qkv_ = torch.empty_like(kv)
+            
+            torch.distributed.all_to_all_single(qkv, qkv_, group=self.sp_device_group)
+
+            q_, k_, v_ = qkv_.split([
+                self.num_heads * self.head_size, 
+                self.num_kv_heads * self.head_size, 
+                self.num_kv_heads * self.head_size
             ], dim=-1)
             
 
