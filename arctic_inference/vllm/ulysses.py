@@ -465,7 +465,7 @@ class UlyssesEngineCore(ArcticPatch[EngineCore]):
             batch_size = os.environ.get("ARCTIC_INFERENCE_BATCH_SIZE")
             if batch_size is not None:
                 batch_size = int(batch_size)
-                if self.iteration > 0 and waiting != batch_size:
+                if waiting != batch_size:
                     return {}, False
 
             print(f"iteration {self.iteration}, running: {running}, waiting: {waiting} batch_size {batch_size}")
