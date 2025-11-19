@@ -444,8 +444,8 @@ class UlyssesAttention(ArcticPatch[Attention]):
         # view
         q = query.view(-1, self.sp_size, self.num_heads * self.head_size)
         if self.is_kv_replicated:
-            k = key.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size).repeat_interleave(self.replication_factor, dim=1)
-            v = value.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size).repeat_interleave(self.replication_factor, dim=1)
+            k = key.view(-1, self.sp_size // self.replication_factor, self.num_kv_heads * self.head_size).repeat_interleave(self.replication_factor, dim=1)
+            v = value.view(-1, self.sp_size // self.replication_factor, self.num_kv_heads * self.head_size).repeat_interleave(self.replication_factor, dim=1)
         else:
             k = key.view(-1, self.sp_size, self.num_kv_heads * self.head_size)
             v = value.view(-1, self.sp_size, self.num_kv_heads * self.head_size)
