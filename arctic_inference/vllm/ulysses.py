@@ -463,11 +463,12 @@ class UlyssesEngineCore(ArcticPatch[EngineCore]):
 
             running, waiting = self.scheduler.get_request_counts()
             batch_size = os.environ.get("ARCTIC_INFERENCE_BATCH_SIZE")
-            print(f"iteration {self.iteration}, running: {running}, waiting: {waiting} batch_size {batch_size}")
             if batch_size is not None:
                 batch_size = int(batch_size)
                 if self.iteration > 0 and waiting != batch_size:
                     return {}, False
+
+            print(f"iteration {self.iteration}, running: {running}, waiting: {waiting} batch_size {batch_size}")
 
             scheduler_start = time.monotonic()
             scheduler_output = self.scheduler.schedule()
