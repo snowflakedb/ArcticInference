@@ -456,7 +456,7 @@ class UlyssesAttention(ArcticPatch[Attention]):
         
         # Ulysses all-to-all 1/2
         qkv_ = torch.empty_like(qkv)
-        torch.distributed.all_to_all_single(qkv, qkv_, group=self.sp_device_group)
+        torch.distributed.all_to_all_single(qkv_, qkv, group=self.sp_device_group)
 
         # unpack
         q_, k_, v_ = qkv_.split([
