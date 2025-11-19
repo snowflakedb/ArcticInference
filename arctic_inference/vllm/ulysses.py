@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import threading
 import weakref
 from contextlib import contextmanager
@@ -461,10 +462,11 @@ class UlyssesEngineCore(ArcticPatch[EngineCore]):
                 return {}, False
 
             running, waiting = self.scheduler.get_request_counts()
-            batch_size = 30
-
-            if self.iteration > 0 and waiting != batch_size:
-                return {}, False
+            batch_size = os.environ.get("ARCTIC_INFERENCE_BATCH_SIZE")
+            if batch_size is not None:
+                batch_size = int(batch_size)
+                if self.iteration > 0 and waiting != batch_size:
+                    return {}, False
 
             print(f"iteration {self.iteration}, running: {running}, waiting: {waiting} batch_size {batch_size}")
 
