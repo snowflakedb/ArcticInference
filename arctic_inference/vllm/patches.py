@@ -67,31 +67,33 @@ class WorkerBasePatch(ArcticPatch[WorkerBase]):
 def apply_arctic_patches():
     print("\x1b[36;1mApplying Arctic Inference vLLM patches...\x1b[0m")
 
-    from transformers import AutoConfig
-    from arctic_inference.common.swiftkv import LlamaSwiftKVConfig
+    #from transformers import AutoConfig
+    #from arctic_inference.common.swiftkv import LlamaSwiftKVConfig
 
     # Register SwiftKV model configurations to transformers.
-    AutoConfig.register("llama_swiftkv", LlamaSwiftKVConfig)
+    # bugbug: crashes
+    #AutoConfig.register("llama_swiftkv", LlamaSwiftKVConfig)
 
     from vllm import ModelRegistry
-    from arctic_inference.vllm.swiftkv import LlamaSwiftKVForCausalLM
+    #from arctic_inference.vllm.swiftkv import LlamaSwiftKVForCausalLM
 
     # Register SwiftKV model definitions to vLLM.
-    ModelRegistry.register_model(
-        "LlamaSwiftKVForCausalLM",
-        "arctic_inference.vllm.swiftkv:LlamaSwiftKVForCausalLM")
+    # ModelRegistry.register_model(
+    #     "LlamaSwiftKVForCausalLM",
+    #     "arctic_inference.vllm.swiftkv:LlamaSwiftKVForCausalLM")
 
-    # ModelRegistry.register_model(
-    #     "ArcticMLPSpeculatorPreTrainedModel",
-    #     "arctic_inference.vllm.spec_dec.arctic_speculator:ArcticMLPSpeculator",
-    # )
-    # ModelRegistry.register_model(
-    #     "ArcticLSTMSpeculatorPreTrainedModel",
-    #     "arctic_inference.vllm.spec_dec.arctic_speculator:ArcticLSTMSpeculator",
-    # )
+    # Register ArcticSpeculator models to vLLM.
+    print("Registering Arctic Speculator models...")
+    from arctic_inference.vllm.spec_dec.arctic_speculator import (
+        ArcticMLPSpeculator, ArcticLSTMSpeculator)
+    ModelRegistry.register_model("ArcticMLPSpeculatorPreTrainedModel",
+                                 ArcticMLPSpeculator)
+    ModelRegistry.register_model("ArcticLSTMSpeculatorPreTrainedModel",
+                                 ArcticLSTMSpeculator)
     # This name is currently used in corvo
-    # ModelRegistry.register_model("MLPVariantSpeculatorPreTrainedModel",
-    #                              ArcticLSTMSpeculator)
+    ModelRegistry.register_model("MLPVariantSpeculatorPreTrainedModel",
+                                 ArcticLSTMSpeculator)
+    print("Arctic Speculator models registered.")
 
     # Patches that make later patches work properly.
     EngineCoreProcPatch.apply_patch()

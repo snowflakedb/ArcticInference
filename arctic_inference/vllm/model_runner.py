@@ -35,7 +35,7 @@ from vllm.distributed.parallel_state import (get_pp_group, get_tp_group,
 from vllm.forward_context import BatchDescriptor, set_forward_context
 from vllm.model_executor.model_loader import get_model
 from vllm.sequence import IntermediateTensors
-from vllm.utils import round_up, cdiv
+#from vllm.utils import round_up, cdiv
 from vllm.v1.attention.backends.utils import CommonAttentionMetadata
 from vllm.v1.kv_cache_interface import KVCacheConfig
 from vllm.v1.outputs import (EMPTY_MODEL_RUNNER_OUTPUT, ModelRunnerOutput)
