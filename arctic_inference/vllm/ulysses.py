@@ -384,11 +384,11 @@ class UlyssesAttention(ArcticPatch[Attention]):
         if self.sp_size == 1 or is_shift_parallel_mode():
             return self._orig_forward(query, key, value, **kwargs)
 
-        # view
+        # prepare
         q = query.view(-1, self.sp_size, self.num_heads * self.head_size)
         if self.is_kv_replicated:
-            k = key.view(-1, self.sp_size // self.replication_factor, self.num_kv_heads * self.head_size).repeat_interleave(self.replication_factor, dim=1)
-            v = value.view(-1, self.sp_size // self.replication_factor, self.num_kv_heads * self.head_size).repeat_interleave(self.replication_factor, dim=1)
+            k = key.view(-1, self.sp_size // self.replication_factor, self.head_size).repeat_interleave(self.replication_factor, dim=1)
+            v = value.view(-1, self.sp_size // self.replication_factor, self.head_size).repeat_interleave(self.replication_factor, dim=1)
         else:
             k = key.view(-1, self.sp_size, self.num_kv_heads * self.head_size)
             v = value.view(-1, self.sp_size, self.num_kv_heads * self.head_size)
@@ -437,57 +437,3 @@ class UlyssesCudagraphDispatcher(ArcticPatch[CudagraphDispatcher]):
                 self.add_cudagraph_key(
                     cudagraph_mode.mixed_mode(),
                     BatchDescriptor(num_tokens=bs * sp_size, uniform_decode=False))
-
-
-# temporary
-import time
-from vllm.v1.engine import EngineCoreOutputs
-from vllm.v1.engine.core import EngineCore
-class UlyssesEngineCore(ArcticPatch[EngineCore]):
-
-        iteration = 0
-
-        def step(self) -> tuple[dict[int, EngineCoreOutputs], bool]:
-            """Schedule, execute, and make output.
-
-            Returns tuple of outputs and a flag indicating whether the model
-            was executed.
-            """
-
-            step_start_time = time.monotonic()
-
-            # Check for any requests remaining in the scheduler - unfinished,
-            # or finished and not yet removed from the batch.
-            if not self.scheduler.has_requests():
-                return {}, False
-
-            scheduler_start = time.monotonic()
-            scheduler_output = self.scheduler.schedule()
-            torch.cuda.synchronize()
-            scheduler_time_ms = (time.monotonic() - scheduler_start) * 1000
-
-            # print(f"scheduler_output {scheduler_output}")
-            # print(f"scheduled tokens {scheduler_output.total_num_scheduled_tokens}")
-
-            model_start = time.monotonic()
-            model_output = self.execute_model_with_error_logging(
-                self.model_executor.execute_model,  # type: ignore
-                scheduler_output)
-            torch.cuda.synchronize()
-            model_time_ms = (time.monotonic() - model_start) * 1000
-
-            update_start = time.monotonic()
-            engine_core_outputs = self.scheduler.update_from_output(scheduler_output, model_output)
-            torch.cuda.synchronize()
-            update_time_ms = (time.monotonic() - update_start) * 1000
-
-            total_time_ms = (time.monotonic() - step_start_time) * 1000
-
-            # if _forward_context is not None and get_forward_context().attn_metadata.num_prefill_tokens == 0:
-            scheduled_tokens = scheduler_output.total_num_scheduled_tokens
-            concurrency = len(scheduler_output.num_scheduled_tokens.keys())
-            print(f"iteration {self.iteration}, scheduled tokens: {scheduled_tokens}, concurrency: {concurrency}, time_schedule: {scheduler_time_ms:.2f}ms, time_execute: {model_time_ms:.2f}ms, time_update: {update_time_ms:.2f}ms, total_time: {total_time_ms:.2f}ms")
-            self.iteration += 1
-
-            return (engine_core_outputs,
-                    scheduler_output.total_num_scheduled_tokens > 0)
