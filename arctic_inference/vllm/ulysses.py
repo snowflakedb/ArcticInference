@@ -455,7 +455,7 @@ class UlyssesScheduler(ArcticPatch[Scheduler]):
 
         scheduler_output = self._orig_schedule()
 
-        print(f"myid {torch.distributed.get_rank()}")
+        print(f"scheduler_output inside {scheduler_output.total_num_scheduled_tokens}")
     
         return scheduler_output
 
