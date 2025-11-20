@@ -451,7 +451,12 @@ class UlyssesScheduler(ArcticPatch[Scheduler]):
     _orig_schedule = Scheduler.schedule
 
     def schedule(self) -> SchedulerOutput:
-        return self._orig_schedule()
+
+        scheduler_output = self._orig_schedule()
+
+        print(f"myid {torch.distributed.get_rank()}")
+    
+        return scheduler_output
 
 class UlyssesEngineCore(ArcticPatch[EngineCore]):
 
