@@ -48,6 +48,9 @@ from vllm.v1.worker.gpu_model_runner import (
     logger,
     AsyncGPUModelRunnerOutput,
 )
+from vllm.config import (
+    VllmConfig,
+)
 
 # Try to import the grammar bitmask helper; degrade gracefully if unavailable.
 apply_grammar_bitmask: Any
