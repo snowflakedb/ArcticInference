@@ -16,6 +16,7 @@
 from pydantic.dataclasses import dataclass
 import logging
 
+import vllm
 from vllm.config import ParallelConfig, SpeculativeConfig, VllmConfig
 from vllm.transformers_utils.configs.mlp_speculator import MLPSpeculatorConfig
 
@@ -116,6 +117,11 @@ class VllmConfigPatch(ArcticPatch[VllmConfig]):
     _orig_str = VllmConfig.__str__
     _orig_post_init = VllmConfig.__post_init__
 
+    from typing import Literal
+    OldEagleModelTypes = vllm.config.speculative.EagleModelTypes
+    NewEagleModelTypes = Literal["arctic", OldEagleModelTypes]
+
+
     def __str__(self, *args, **kwargs):
         string = self._orig_str(*args, **kwargs)
         string += f", ulysses_sequence_parallel_size={self.parallel_config.ulysses_sequence_parallel_size}"
@@ -130,11 +136,16 @@ class VllmConfigPatch(ArcticPatch[VllmConfig]):
         #             "Currently, async scheduling is only supported "
         #             "with EAGLE/MTP kind of speculative decoding"
         #         )
-        from vllm.config.speculative import EagleModelTypes
-        EagleModelTypes.append("arctic")
-        print("EagleModelTypes after append:", EagleModelTypes)
-        self._orig_post_init(*args, **kwargs)
-        EagleModelTypes.remove("arctic")
+        import sys
+        from typing import Literal
+        target_module = sys.modules[VllmConfig.__module__]
+        original_types = getattr(target_module, "EagleModelTypes")
+        NewEagleModelTypes = Literal["mlp_speculator", original_types]
+        setattr(target_module, "EagleModelTypes", NewEagleModelTypes)
+        try:
+            self._orig_post_init(*args, **kwargs)
+        finally:
+            setattr(target_module, "EagleModelTypes", original_types)
     
 
 
