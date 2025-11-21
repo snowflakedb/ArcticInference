@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
+from pydantic.dataclasses import dataclass
 import logging
 
 from vllm.config import ParallelConfig, SpeculativeConfig, VllmConfig
@@ -55,6 +55,7 @@ class ArcticParallelConfig(ParallelConfig):
 @dataclass
 class ArcticSpeculativeConfig(SpeculativeConfig):
 
+    method: str | None = None
     enable_suffix_decoding: bool = False
     suffix_cache_max_depth: int = 64
     suffix_speculative_tokens: int = 0
@@ -113,6 +114,7 @@ class SpeculativeConfigPatch(ArcticPatch[SpeculativeConfig]):
 class VllmConfigPatch(ArcticPatch[VllmConfig]):
 
     _orig_str = VllmConfig.__str__
+    _orig_post_init = VllmConfig.__post_init__
 
     def __str__(self, *args, **kwargs):
         string = self._orig_str(*args, **kwargs)
@@ -120,6 +122,21 @@ class VllmConfigPatch(ArcticPatch[VllmConfig]):
         string += f", enable_shift_parallel={self.parallel_config.enable_shift_parallel}"
         string += f", shift_parallel_threshold={self.parallel_config.shift_parallel_threshold}"
         return string
+    
+    def __post_init__(self, *args, **kwargs):
+        # if self.speculative_config is not None:
+        #     if self.speculative_config.method not in get_args(EagleModelTypes):
+        #         raise ValueError(
+        #             "Currently, async scheduling is only supported "
+        #             "with EAGLE/MTP kind of speculative decoding"
+        #         )
+        from vllm.config.speculative import EagleModelTypes
+        EagleModelTypes.append("arctic")
+        print("EagleModelTypes after append:", EagleModelTypes)
+        self._orig_post_init(*args, **kwargs)
+        EagleModelTypes.remove("arctic")
+    
+
 
 
 class MLPSpeculatorConfigPatch(ArcticPatch[MLPSpeculatorConfig]):

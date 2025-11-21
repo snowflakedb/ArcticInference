@@ -106,7 +106,7 @@ def apply_arctic_patches():
     SpeculativeConfigPatch.apply_patch()
     SpecDecodingStatsPatch.apply_patch()
     SpecDecodingLoggingPatch.apply_patch()
-    #VllmConfigPatch.apply_patch()
+    VllmConfigPatch.apply_patch()
     #XgrammarBackendPatch.apply_patch()
     MLPSpeculatorConfigPatch.apply_patch()
 
