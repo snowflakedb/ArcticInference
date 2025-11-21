@@ -130,7 +130,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                                      f"{self.speculative_config.method}")
                 else:
                     self.drafter = SuffixProposer()
-                self.rejection_sampler = RejectionSampler()
+                self.rejection_sampler = RejectionSampler(self.sampler)
 
         if (self.speculative_config is not None and
                 self.speculative_config.enable_suffix_decoding):

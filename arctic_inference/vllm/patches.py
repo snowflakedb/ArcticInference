@@ -67,20 +67,18 @@ class WorkerBasePatch(ArcticPatch[WorkerBase]):
 def apply_arctic_patches():
     print("\x1b[36;1mApplying Arctic Inference vLLM patches...\x1b[0m")
 
-    #from transformers import AutoConfig
-    #from arctic_inference.common.swiftkv import LlamaSwiftKVConfig
+    from transformers import AutoConfig
+    from arctic_inference.common.swiftkv import LlamaSwiftKVConfig
 
-    # Register SwiftKV model configurations to transformers.
-    # bugbug: crashes
-    #AutoConfig.register("llama_swiftkv", LlamaSwiftKVConfig)
+    AutoConfig.register("llama_swiftkv", LlamaSwiftKVConfig)
 
     from vllm import ModelRegistry
-    #from arctic_inference.vllm.swiftkv import LlamaSwiftKVForCausalLM
+    from arctic_inference.vllm.swiftkv import LlamaSwiftKVForCausalLM
 
     # Register SwiftKV model definitions to vLLM.
-    # ModelRegistry.register_model(
-    #     "LlamaSwiftKVForCausalLM",
-    #     "arctic_inference.vllm.swiftkv:LlamaSwiftKVForCausalLM")
+    ModelRegistry.register_model(
+        "LlamaSwiftKVForCausalLM",
+        "arctic_inference.vllm.swiftkv:LlamaSwiftKVForCausalLM")
 
     # Register ArcticSpeculator models to vLLM.
     print("Registering Arctic Speculator models...")
@@ -100,14 +98,14 @@ def apply_arctic_patches():
     WorkerBasePatch.apply_patch()
 
     # Patches to vLLM arguments and configuration objects.
-    #EngineArgsPatch.apply_patch()
-    #AsyncEngineArgsPatch.apply_patch()
-    #ParallelConfigPatch.apply_patch()
+    EngineArgsPatch.apply_patch()
+    AsyncEngineArgsPatch.apply_patch()
+    ParallelConfigPatch.apply_patch()
     SpeculativeConfigPatch.apply_patch()
     SpecDecodingStatsPatch.apply_patch()
     SpecDecodingLoggingPatch.apply_patch()
     VllmConfigPatch.apply_patch()
-    #XgrammarBackendPatch.apply_patch()
+    XgrammarBackendPatch.apply_patch()
     MLPSpeculatorConfigPatch.apply_patch()
 
     # Main optimization patches.
