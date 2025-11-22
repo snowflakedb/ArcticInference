@@ -149,7 +149,6 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         self,
         scheduler_output: "SchedulerOutput",
         sampled_token_ids: Union[list[list[int]], torch.Tensor],
-        sampled_token_ids: Union[np.ndarray, torch.Tensor],
         sampling_metadata: SamplingMetadata,
         hidden_states: torch.Tensor,
         sample_hidden_states: torch.Tensor,
@@ -207,7 +206,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             spec_token_ids = self.propose_arctic_draft_from_next_tokens(
                 next_token_ids=next_token_ids,
                 previous_hidden_states=target_hidden_states,
-            )        
+            ) 
+
+            return spec_token_ids       
 
         suffix_spec_token_ids = None
         new_sampled_token_ids = sampled_token_ids.copy()

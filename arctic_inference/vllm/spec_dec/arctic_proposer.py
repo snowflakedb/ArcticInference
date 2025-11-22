@@ -129,7 +129,6 @@ class ArcticProposer:
         sampled_token_ids: Union[torch.Tensor, np.ndarray],
         spec_decode_metadata: SpecDecodeMetadata,
     ) -> torch.Tensor:
-        # TODO: fuse it into one kernel
         assert sample_hidden_states is not None, "sample_hidden_states must be provided"
 
         if isinstance(sampled_token_ids, np.ndarray):
@@ -139,27 +138,25 @@ class ArcticProposer:
         elif sampled_token_ids.device != sample_hidden_states.device:
             sampled_token_ids = sampled_token_ids.to(sample_hidden_states.device, non_blocking=True)
 
-        max_gen_len = sampled_token_ids.shape[-1]
-        if max_gen_len == 1:
-            return sample_hidden_states
-
-        valid_mask = (sampled_token_ids != -1)
-        gen_lens = valid_mask.sum(dim=1).to(dtype=torch.int64) 
-
         if hasattr(spec_decode_metadata, "cu_num_draft_tokens") and spec_decode_metadata.cu_num_draft_tokens is not None:
             cu = spec_decode_metadata.cu_num_draft_tokens
             num_draft_tokens_gpu = torch.cat([cu[0:1], cu[1:] - cu[:-1]])
         else:
             num_draft_tokens_gpu = torch.as_tensor(
-                spec_decode_metadata.num_draft_tokens, device=sample_hidden_states.device, dtype=torch.int64
+                spec_decode_metadata.num_draft_tokens, 
+                device=sample_hidden_states.device, 
+                dtype=torch.int64
             )
 
-        num_sampled_tokens_per_req = num_draft_tokens_gpu + 1 
+        num_processed_tokens_per_req = num_draft_tokens_gpu + 1 
 
-        offsets = torch.cumsum(num_sampled_tokens_per_req, dim=0) - num_sampled_tokens_per_req
+        offsets = torch.cumsum(num_processed_tokens_per_req, dim=0) - num_processed_tokens_per_req
 
-        hidden_states_idx = offsets + (gen_lens - 1)
+        valid_mask = (sampled_token_ids != -1)
+        gen_lens = valid_mask.sum(dim=1).to(dtype=torch.int64)
 
+        hidden_states_idx = offsets + gen_lens
+        
         previous_hidden_states = sample_hidden_states.index_select(
             dim=0, index=hidden_states_idx
         )
@@ -168,6 +165,7 @@ class ArcticProposer:
             f"hidden_states dim {previous_hidden_states.size(-1)} != speculator expected {self.input_hidden_dim}. "
             "Make sure the spec model is trained with the same base model."
         )
+        
         return previous_hidden_states
 
     def propose(
@@ -178,7 +176,10 @@ class ArcticProposer:
     ) -> Optional[np.ndarray]:
         assert num_predict_tokens > 0
         if isinstance(context_token_ids, torch.Tensor):
-            input_ids = context_token_ids.to(self.device, dtype=torch.long, non_blocking=True)
+            if context_token_ids.device != self.device:
+                input_ids = context_token_ids.to(self.device, non_blocking=True)
+            else:
+                input_ids = context_token_ids
         else:
             input_ids = torch.as_tensor(context_token_ids, device=self.device, dtype=torch.long)
 
