@@ -149,7 +149,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         self,
         scheduler_output: "SchedulerOutput",
         sampled_token_ids: Union[list[list[int]], torch.Tensor],
-        original_sampled_token_ids: Union[np.ndarray, torch.Tensor],
+        sampled_token_ids: Union[np.ndarray, torch.Tensor],
         sampling_metadata: SamplingMetadata,
         hidden_states: torch.Tensor,
         sample_hidden_states: torch.Tensor,
@@ -170,38 +170,43 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         used_async_path = (
             self.speculative_config.method in ("arctic", "mlp_speculator")
             and self._suffix_cache is None
-            and isinstance(original_sampled_token_ids, torch.Tensor)
+            and isinstance(sampled_token_ids, torch.Tensor)
             and self.use_async_scheduling
             and common_attn_metadata is not None
         )
 
         if used_async_path:
             # --- Arctic GPU fast path (pre-bookkeeping) ---
-            next_token_ids, valid_counts = self.drafter.prepare_next_token_ids_padded(
-                common_attn_metadata,
-                original_sampled_token_ids,
-                self.requests,
-                self.input_batch,
-                self.discard_request_indices.gpu,
-                self.num_discarded_requests,
+            next_token_ids, valid_sampled_tokens_count = (
+                self.drafter.prepare_next_token_ids_padded(
+                    common_attn_metadata,
+                    sampled_token_ids,
+                    self.requests,
+                    self.input_batch,
+                    self.discard_request_indices.gpu,
+                    self.num_discarded_requests,
+                )
             )
-            print("next_token_ids:", next_token_ids)
-            print("valid_counts:", valid_counts)
-            self._copy_valid_sampled_token_count(next_token_ids, valid_counts)
 
-            print("sample_hidden_states shape:", sample_hidden_states.shape)
-            print("original_sampled_token_ids shape:", original_sampled_token_ids.shape)
-            print("spec_decode_metadata:", spec_decode_metadata)
-            previous_hidden_states = self.drafter.prepare_hidden_states(
-                sample_hidden_states=sample_hidden_states,
-                sampled_token_ids=original_sampled_token_ids,
-                spec_decode_metadata=spec_decode_metadata,
+            self._copy_valid_sampled_token_count(
+                next_token_ids, valid_sampled_tokens_count
             )
-            print("previous_hidden_states shape:", previous_hidden_states.shape)
+
+            num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
+
+            target_hidden_states = None
+            if spec_decode_metadata is None:
+                target_hidden_states = hidden_states[:num_scheduled_tokens]
+            else:
+                target_hidden_states = self.drafter.prepare_hidden_states(
+                    sample_hidden_states=sample_hidden_states,
+                    sampled_token_ids=sampled_token_ids,
+                    spec_decode_metadata=spec_decode_metadata,
+                )
 
             spec_token_ids = self.propose_arctic_draft_from_next_tokens(
                 next_token_ids=next_token_ids,
-                previous_hidden_states=previous_hidden_states,
+                previous_hidden_states=target_hidden_states,
             )        
 
         suffix_spec_token_ids = None
@@ -222,16 +227,16 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             pass
         elif self.speculative_config.method in ("arctic", "mlp_speculator"):
             assert isinstance(self.drafter, ArcticProposer)
-            if isinstance(original_sampled_token_ids, np.ndarray):
-                original_sampled_token_ids_tensor = torch.from_numpy(
-                    original_sampled_token_ids
+            if isinstance(sampled_token_ids, np.ndarray):
+                sampled_token_ids_tensor = torch.from_numpy(
+                    sampled_token_ids
                 ).to(self.device)
             else:
-                original_sampled_token_ids_tensor = original_sampled_token_ids
+                sampled_token_ids_tensor = sampled_token_ids
 
             previous_hidden_states = self.drafter.prepare_hidden_states(
                 sample_hidden_states=sample_hidden_states,
-                sampled_token_ids=original_sampled_token_ids_tensor,
+                sampled_token_ids=sampled_token_ids_tensor,
                 spec_decode_metadata=spec_decode_metadata,
             )
             spec_token_ids = self.propose_arctic_draft_token_ids(
@@ -265,31 +270,26 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         self,
         next_token_ids: torch.Tensor,                 # [B] device
         previous_hidden_states: Optional[torch.Tensor],
-    ) -> list[list[int]]:
+    ) -> torch.Tensor:
         """
         Fast pre-bookkeeping Arctic path:
         - next_token_ids are computed on device (no CPU sync)
-        - previous_hidden_states already selected on device
-        - produce a python List[List[int]] for the scheduler.
+        - produce a torch tensor stacked on dim 1
+
+        TODO: handle corner cases like max length reached
         """
         assert isinstance(self.drafter, ArcticProposer)
 
-        # Compute how many tokens we can safely propose (bounded by drafter length)
         max_spec_tokens = self.speculative_config.num_speculative_tokens
-        if max_spec_tokens <= 0:
-            return [[] for _ in range(next_token_ids.shape[0])]
 
-        # Let the speculator propose (keeps everything on device)
         drafter_output = self.drafter.propose(
-            context_token_ids=next_token_ids,                     # [B] device
-            previous_hidden_states=previous_hidden_states,        # [B, H] or None
+            context_token_ids=next_token_ids,                 
+            previous_hidden_states=previous_hidden_states,    
             num_predict_tokens=max_spec_tokens,
         )
-        if drafter_output is None:
-            return [[] for _ in range(next_token_ids.shape[0])]
 
-        # Convert to the format the runtime expects (python lists per row)
-        return drafter_output.tolist()
+        # [batch_size, num_speculative_tokens]
+        return drafter_output
 
     def propose_arctic_draft_token_ids(
         self,
