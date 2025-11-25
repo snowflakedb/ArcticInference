@@ -126,12 +126,16 @@ class ArcticProposer:
     def prepare_hidden_states(
         self,
         sample_hidden_states: torch.Tensor,
-        sampled_token_ids: Union[torch.Tensor, np.ndarray],
+        sampled_token_ids: Union[torch.Tensor, np.ndarray, List[List[int]]],
         spec_decode_metadata: SpecDecodeMetadata,
     ) -> torch.Tensor:
         assert sample_hidden_states is not None, "sample_hidden_states must be provided"
 
         if isinstance(sampled_token_ids, np.ndarray):
+            sampled_token_ids = torch.as_tensor(
+                sampled_token_ids, device=sample_hidden_states.device, dtype=torch.long
+            )
+        elif isinstance(sampled_token_ids, list):
             sampled_token_ids = torch.as_tensor(
                 sampled_token_ids, device=sample_hidden_states.device, dtype=torch.long
             )
@@ -163,15 +167,10 @@ class ArcticProposer:
 
         last_valid = torch.clamp(gen_lens - 1, min=0)
         hidden_states_idx = offsets + last_valid
-
-        print("hidden_states_idx:", hidden_states_idx)
-        print("sample_hidden_states.shape:", sample_hidden_states.shape)
         
         previous_hidden_states = sample_hidden_states.index_select(
             dim=0, index=hidden_states_idx
         )
-
-        print("previous_hidden_states.shape:", previous_hidden_states.shape)
   
         assert previous_hidden_states.size(-1) == self.input_hidden_dim, (
             f"hidden_states dim {previous_hidden_states.size(-1)} != speculator expected {self.input_hidden_dim}. "
