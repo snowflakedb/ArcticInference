@@ -191,17 +191,11 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 next_token_ids, valid_sampled_tokens_count
             )
 
-            num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
-
-            target_hidden_states = None
-            if spec_decode_metadata is None:
-                target_hidden_states = hidden_states[:num_scheduled_tokens]
-            else:
-                target_hidden_states = self.drafter.prepare_hidden_states(
-                    sample_hidden_states=sample_hidden_states,
-                    sampled_token_ids=sampled_token_ids,
-                    spec_decode_metadata=spec_decode_metadata,
-                )
+            target_hidden_states = self.drafter.prepare_hidden_states(
+                sample_hidden_states=sample_hidden_states,
+                sampled_token_ids=sampled_token_ids,
+                spec_decode_metadata=spec_decode_metadata,
+            )
 
             spec_token_ids = self.propose_arctic_draft_from_next_tokens(
                 next_token_ids=next_token_ids,
@@ -283,6 +277,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         max_spec_tokens = self.speculative_config.num_speculative_tokens
 
+        print("next_token_ids:", next_token_ids)
+        print("previous_hidden_states:", previous_hidden_states.shape)
+        print("max_spec_tokens:", max_spec_tokens)
         drafter_output = self.drafter.propose(
             context_token_ids=next_token_ids,                 
             previous_hidden_states=previous_hidden_states,    

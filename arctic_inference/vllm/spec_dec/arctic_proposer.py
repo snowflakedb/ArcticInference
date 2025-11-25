@@ -138,6 +138,12 @@ class ArcticProposer:
         elif sampled_token_ids.device != sample_hidden_states.device:
             sampled_token_ids = sampled_token_ids.to(sample_hidden_states.device, non_blocking=True)
 
+        max_gen_len = sampled_token_ids.shape[-1]
+        if max_gen_len == 1:
+            return sample_hidden_states
+
+        assert spec_decode_metadata is not None
+
         if hasattr(spec_decode_metadata, "cu_num_draft_tokens") and spec_decode_metadata.cu_num_draft_tokens is not None:
             cu = spec_decode_metadata.cu_num_draft_tokens
             num_draft_tokens_gpu = torch.cat([cu[0:1], cu[1:] - cu[:-1]])
@@ -156,6 +162,8 @@ class ArcticProposer:
         gen_lens = valid_mask.sum(dim=1).to(dtype=torch.int64)
 
         hidden_states_idx = offsets + gen_lens
+
+        print("hidden_states_idx:", hidden_states_idx)
         
         previous_hidden_states = sample_hidden_states.index_select(
             dim=0, index=hidden_states_idx

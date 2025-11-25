@@ -39,6 +39,7 @@ from arctic_inference.py_custom_ops import (try_load_torch_library,
 SQRT2 = 2**0.5
 # USE_CUSTOM_OP = try_load_torch_library() # do it in a lazy way otherwise terminate called after throwing an instance of 'std::length_error'
 #  what():  vector::reserve
+USE_CUSTOM_OP = False
 
 
 def padding_size(size: int) -> int:
