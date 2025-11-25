@@ -122,6 +122,19 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             self.vllm_config.speculative_config = arctic_speculative_config
             self.speculative_config = arctic_speculative_config
 
+            # re-derive async-spec state because base __init__
+            # was run with speculative_config=None.
+            # 1) num_spec_tokens / uniform decode length
+            self.num_spec_tokens = getattr(self.speculative_config,
+                                           "num_speculative_tokens", 0)
+            self.uniform_decode_query_len = 1 + self.num_spec_tokens
+            # 2) padded-spec async copy infra for the fast path
+            if self.use_async_scheduling and self.num_spec_tokens:
+                if self.valid_sampled_token_count_event is None:
+                    self.valid_sampled_token_count_event = torch.cuda.Event()
+                if self.valid_sampled_token_count_copy_stream is None:
+                    self.valid_sampled_token_count_copy_stream = torch.cuda.Stream()
+
             if get_pp_group().is_last_rank:
                 if self.speculative_config.method in ("arctic", "mlp_speculator"):
                     self.drafter = ArcticProposer(self.vllm_config)
@@ -173,6 +186,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             and self.use_async_scheduling
             and common_attn_metadata is not None
         )
+
+        print("177: sampled_token_ids:", sampled_token_ids)
 
         if used_async_path:
             # --- Arctic GPU fast path (pre-bookkeeping) ---
@@ -429,6 +444,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     def sample_tokens(
         self, grammar_output: "GrammarOutput | None"
     ) -> Union[ModelRunnerOutput, AsyncGPUModelRunnerOutput, IntermediateTensors]:
+        print("GPUModelRunnerPatch: sample_tokens called")
         kv_connector_output = self.kv_connector_output
         self.kv_connector_output = None
 
@@ -469,6 +485,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         with record_function_or_nullcontext("gpu_model_runner: sample"):
             sampler_output = self._sample(logits, spec_decode_metadata)
 
+        print("475 sampler_output.sampled_token_ids:", sampler_output.sampled_token_ids)
+
         self.input_batch.prev_sampled_token_ids = None
 
         def propose_draft_token_ids(
@@ -486,19 +504,24 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                     spec_decode_metadata,
                     spec_decode_common_attn_metadata,
                 )
+                print("proposed draft token ids:", self._draft_token_ids)
 
         use_async_sched_for_arctic = (
             self.use_async_scheduling
             and self.speculative_config
             and self.speculative_config.method in ("arctic", "mlp_speculator")
         )
+        print("499 use_async_sched_for_arctic:", use_async_sched_for_arctic)
 
         # For arctic spec decoding, it can treat aribtrary input lengths
         input_fits_in_drafter = spec_decode_common_attn_metadata and True
         sampled_token_ids = sampler_output.sampled_token_ids
+        print("504: sampled_token_ids:", sampled_token_ids)
         if input_fits_in_drafter:
+            print("505 input fits in drafter, proposing draft token ids")
             propose_draft_token_ids(sampled_token_ids)
 
+        print("508: sampled_token_ids:", sampled_token_ids)
         with record_function_or_nullcontext("gpu_model_runner: bookkeep"):
             (
                 num_nans_in_logits,

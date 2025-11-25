@@ -209,39 +209,54 @@ class ArcticProposer:
         discard_request_indices: torch.Tensor,# [<=B] long, device
         num_discarded_requests: int,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        assert isinstance(sampled_token_ids, torch.Tensor)
-        assert self.backup_next_token_ids is not None, "Call load_model() first."
-
-        device = sampled_token_ids.device
-        B = sampled_token_ids.size(0)
-
-        self.backup_next_token_ids.np[:B] = np.array(
+        num_reqs = gpu_input_batch.num_reqs
+        self.backup_next_token_ids.np[:num_reqs] = np.array(
             [
                 requests[gpu_input_batch.req_ids[i]].get_token_id(
-                    int(common_attn_metadata.seq_lens_cpu[i].item())
+                    common_attn_metadata.seq_lens_cpu[i].item()
                 )
-                for i in range(B)
-            ],
-            dtype=np.int32,
+                for i in range(num_reqs)
+            ]
         )
-        self.backup_next_token_ids.copy_to_gpu(B)
+        self.backup_next_token_ids.copy_to_gpu(num_reqs)
 
-        valid_grid = sampled_token_ids.clone()
-        if num_discarded_requests:
-            valid_grid.index_fill_(0, discard_request_indices[:num_discarded_requests], -1)
+        # Mask out the sampled tokens indices that should not be sampled.
+        discard_sampled_tokens_req_indices = discard_request_indices[
+            :num_discarded_requests
+        ]
 
-        valid_mask = (valid_grid != -1) & (valid_grid < gpu_input_batch.vocab_size)
+        valid_sampled_token_ids_gpu = sampled_token_ids.clone()
+        valid_sampled_token_ids_gpu.index_fill_(
+            0, discard_sampled_tokens_req_indices, -1
+        )
 
-        valid_counts = valid_mask.sum(dim=1).to(torch.int64)        
-        last_idx = torch.clamp(valid_counts - 1, min=0)          
-        last_tok = valid_grid.gather(1, last_idx.view(-1, 1)).squeeze(1) 
+        # Generate a mask for all valid tokens within those requests
+        valid_mask = (valid_sampled_token_ids_gpu != -1) & (
+            valid_sampled_token_ids_gpu < gpu_input_batch.vocab_size
+        )
 
-        backup_gpu = self.backup_next_token_ids.gpu[:B]
-        if backup_gpu.dtype != last_tok.dtype:
-            backup_gpu = backup_gpu.to(last_tok.dtype)
+        # Count the number of valid tokens in each request
+        valid_sampled_tokens_count = valid_mask.sum(dim=1)
 
-        next_token_ids = torch.where(valid_counts > 0, last_tok, backup_gpu)  
-        return next_token_ids, valid_counts
+        # Get the rightmost valid index per row
+        last_valid_indices = valid_sampled_tokens_count - 1
+        last_valid_indices_safe = torch.clamp(last_valid_indices, min=0)
+
+        # Get last valid token from each row
+        # (assume undefined state where there is no valid token)
+        selected_tokens = torch.gather(
+            valid_sampled_token_ids_gpu, 1, last_valid_indices_safe.unsqueeze(1)
+        ).squeeze(1)
+
+        # Use last token if valid, pre-computed backup if not
+        batch_size = valid_sampled_token_ids_gpu.shape[0]
+        next_token_ids = torch.where(
+            last_valid_indices != -1,
+            selected_tokens,
+            self.backup_next_token_ids.gpu[:batch_size],
+        )
+
+        return next_token_ids, valid_sampled_tokens_count
 
 
 class SuffixProposer:
