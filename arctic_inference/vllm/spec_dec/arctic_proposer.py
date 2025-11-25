@@ -161,13 +161,17 @@ class ArcticProposer:
         valid_mask = (sampled_token_ids != -1)
         gen_lens = valid_mask.sum(dim=1).to(dtype=torch.int64)
 
-        hidden_states_idx = offsets + gen_lens
+        last_valid = torch.clamp(gen_lens - 1, min=0)
+        hidden_states_idx = offsets + last_valid
 
         print("hidden_states_idx:", hidden_states_idx)
+        print("sample_hidden_states.shape:", sample_hidden_states.shape)
         
         previous_hidden_states = sample_hidden_states.index_select(
             dim=0, index=hidden_states_idx
         )
+
+        print("previous_hidden_states.shape:", previous_hidden_states.shape)
   
         assert previous_hidden_states.size(-1) == self.input_hidden_dim, (
             f"hidden_states dim {previous_hidden_states.size(-1)} != speculator expected {self.input_hidden_dim}. "
