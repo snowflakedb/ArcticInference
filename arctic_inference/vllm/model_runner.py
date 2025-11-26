@@ -199,7 +199,6 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                     self.num_discarded_requests,
                 )
             )
-
             self._copy_valid_sampled_token_count(
                 next_token_ids, valid_sampled_tokens_count
             )
