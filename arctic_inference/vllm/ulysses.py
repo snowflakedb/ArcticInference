@@ -46,11 +46,20 @@ from arctic_inference.patching import ArcticPatch
 
 
 def apply_shift_parallel_patches():
+
+    
+    enable_data_parallel = bool(os.environ.get("ARCTIC_INFERENCE_ENABLE_DATA_PARALLEL"))
+    batch_size = os.environ.get("ARCTIC_INFERENCE_BATCH_SIZE")
+    batch_size = int(batch_size) if batch_size is not None else None
+
+    print(f"Applying Ulysses patches: enable_data_parallel={enable_data_parallel}, batch_size={batch_size}")
+
     UlyssesModelConfig.apply_patch()
     UlyssesParallelState.apply_patch()
     UlyssesWorkerProc.apply_patch()
     UlyssesMultiprocExecutor.apply_patch()
-    UlyssesAttention.apply_patch()
+    if not enable_data_parallel:
+        UlyssesAttention.apply_patch()
     UlyssesCudagraphDispatcher.apply_patch()
     UlyssesEngineCore.apply_patch()
     UlyssesScheduler.apply_patch()
@@ -64,12 +73,16 @@ class UlyssesModelConfig(ArcticPatch[ModelConfig]):
     def get_num_kv_heads(self: ModelConfig,
                          parallel_config: ParallelConfig) -> int:
         num_kv_heads = self._orig_get_num_kv_heads(parallel_config)
+        if bool(os.environ.get("ARCTIC_INFERENCE_ENABLE_DATA_PARALLEL")):
+            return num_kv_heads
         sp_size = parallel_config.ulysses_sequence_parallel_size
         return max(1, num_kv_heads // sp_size)
 
     def get_num_attention_heads(self: ModelConfig,
                                 parallel_config: ParallelConfig) -> int:
         num_heads = self._orig_get_num_attention_heads(parallel_config)
+        if bool(os.environ.get("ARCTIC_INFERENCE_ENABLE_DATA_PARALLEL")):
+            return num_heads
         sp_size = parallel_config.ulysses_sequence_parallel_size
         return max(1, num_heads // sp_size)
 
@@ -455,7 +468,14 @@ class UlyssesScheduler(ArcticPatch[Scheduler]):
 
         scheduler_output = self._orig_schedule()
 
-        print(f"scheduler_output inside {scheduler_output.total_num_scheduled_tokens}")
+        print(f"scheduler_output inside scheduled_new_reqs: {len(scheduler_output.scheduled_new_reqs)}\n")
+        for i in range(len(scheduler_output.scheduled_new_reqs)):
+            req = scheduler_output.scheduled_new_reqs[i]
+            print(f"  req {i}: {req.req_id}: {len(req.prompt_token_ids)} tokens blocks {len(req.block_ids[0])} num_computed_tokens {req.num_computed_tokens}\n")
+        print(
+        f"num_scheduled_tokens: {len(scheduler_output.num_scheduled_tokens)}\n"
+        f"total_num_scheduled_tokens: {scheduler_output.total_num_scheduled_tokens}\n"
+        f"finished_req_ids: {len(scheduler_output.finished_req_ids)}\n")
     
         return scheduler_output
 

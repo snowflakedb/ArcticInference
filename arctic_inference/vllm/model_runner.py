@@ -17,6 +17,7 @@ import contextlib
 import copy
 import gc
 import time
+import os
 from typing import Any, Union, Optional, TYPE_CHECKING
 from itertools import tee
 
@@ -744,7 +745,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         self._orig_load_model(eep_scale_up)
 
-        if self.parallel_config.ulysses_sequence_parallel_size > 1:
+        enable_data_parallel = bool(os.environ.get("ARCTIC_INFERENCE_ENABLE_DATA_PARALLEL"))
+        if self.parallel_config.ulysses_sequence_parallel_size > 1 and not enable_data_parallel:
             self.monkeypatch_forward()
 
         if load_shift_model:
