@@ -73,7 +73,7 @@ class UlyssesModelConfig(ArcticPatch[ModelConfig]):
     def get_num_kv_heads(self: ModelConfig,
                          parallel_config: ParallelConfig) -> int:
         num_kv_heads = self._orig_get_num_kv_heads(parallel_config)
-        if bool(os.environ.get("ARCTIC_INFERENCE_ENABLE_DATA_PARALLEL")):
+        if os.environ.get("ARCTIC_INFERENCE_ENABLE_DATA_PARALLEL") is not None:
             return num_kv_heads
         sp_size = parallel_config.ulysses_sequence_parallel_size
         return max(1, num_kv_heads // sp_size)
@@ -81,7 +81,7 @@ class UlyssesModelConfig(ArcticPatch[ModelConfig]):
     def get_num_attention_heads(self: ModelConfig,
                                 parallel_config: ParallelConfig) -> int:
         num_heads = self._orig_get_num_attention_heads(parallel_config)
-        if bool(os.environ.get("ARCTIC_INFERENCE_ENABLE_DATA_PARALLEL")):
+        if os.environ.get("ARCTIC_INFERENCE_ENABLE_DATA_PARALLEL") is not None:
             return num_heads
         sp_size = parallel_config.ulysses_sequence_parallel_size
         return max(1, num_heads // sp_size)
