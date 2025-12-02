@@ -466,12 +466,20 @@ class UlyssesScheduler(ArcticPatch[Scheduler]):
 
     def schedule(self) -> SchedulerOutput:
 
+        batch = list()
+
+        print(f"waiting {len(self.waiting)} requests")
+        for req in self.waiting:
+            print(f"  waiting req {req.request_id}: {req.num_prompt_tokens} num_computed_tokens {req.num_computed_tokens} max_tokens {req.max_tokens}")
+        print(f"running {len(self.running)} requests")
+        for req in self.running:
+            print(f"  running req {req.request_id}: {req.num_prompt_tokens} num_computed_tokens {req.num_computed_tokens} max_tokens {req.max_tokens}")
         scheduler_output = self._orig_schedule()
 
         print(f"scheduler_output inside scheduled_new_reqs: {len(scheduler_output.scheduled_new_reqs)}\n")
         for i in range(len(scheduler_output.scheduled_new_reqs)):
             req = scheduler_output.scheduled_new_reqs[i]
-            print(f"  req {i}: {req.req_id}: {len(req.prompt_token_ids)} tokens blocks {len(req.block_ids[0])} num_computed_tokens {req.num_computed_tokens}\n")
+            print(f"  req {i}: {req.req_id}: {len(req.prompt_token_ids)} tokens blocks {len(req.block_ids[0])} num_computed_tokens {req.num_computed_tokens} max_tokens {req.sampling_params.max_tokens}")
         print(
         f"num_scheduled_tokens: {len(scheduler_output.num_scheduled_tokens)}\n"
         f"total_num_scheduled_tokens: {scheduler_output.total_num_scheduled_tokens}\n"

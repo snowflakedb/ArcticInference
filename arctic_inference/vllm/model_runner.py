@@ -227,6 +227,15 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         scheduler_output: "SchedulerOutput",
         intermediate_tensors: Optional[IntermediateTensors] = None,
     ) -> Union[ModelRunnerOutput, IntermediateTensors]:
+
+        torch.cuda.synchronize()
+        WORLD = parallel_state.get_world_group()
+        WORLD.barrier()
+        for i in range(torch.distributed.get_world_size()):
+            if i == torch.distributed.get_rank():
+                print(f"ModelRunner execute_model started on rank {i}")
+            WORLD.barrier()
+
         self._update_states(scheduler_output)
         if not scheduler_output.total_num_scheduled_tokens:
             if not has_kv_transfer_group():
