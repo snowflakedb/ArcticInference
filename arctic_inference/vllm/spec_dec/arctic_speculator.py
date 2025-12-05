@@ -37,9 +37,8 @@ from arctic_inference.py_custom_ops import (try_load_torch_library,
                                             speculator_ln, sum_lstm)
 
 SQRT2 = 2**0.5
-# USE_CUSTOM_OP = try_load_torch_library() # do it in a lazy way otherwise terminate called after throwing an instance of 'std::length_error'
-#  what():  vector::reserve
-USE_CUSTOM_OP = False
+# make sure to build the custom op using same torch version
+USE_CUSTOM_OP = try_load_torch_library()
 
 
 def padding_size(size: int) -> int:
@@ -632,6 +631,7 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
         if not vllm_config.model_config.enforce_eager:
             self.cuda_graph_mode = True
             self.cuda_graphs = {}
+
 
     def _prepare_cuda_graph_ios(
         self,
