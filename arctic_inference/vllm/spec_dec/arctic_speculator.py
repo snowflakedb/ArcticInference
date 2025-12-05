@@ -26,6 +26,7 @@ from vllm.v1.outputs import SamplerOutput
 
 from arctic_inference.vllm.spec_dec.fp8 import (Fp8ConfigWithEmbedding,
                                                 OriginalFp8LinearMethod)
+from arctic_inference.vllm.spec_dec.w4a8 import W4A8LmHeadMethod 
 from arctic_inference.vllm.spec_dec.vocab_parallel_embedding import (
     SpeculatorTPInit,
     ParallelLMHead,
@@ -454,9 +455,13 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
         self.tie_lstm_embs = config.tie_lstm_embs
         self.scale_input = config.scale_input
         self.quantize_lm_head = True
+        self.use_w4a8_lm_head = True
 
-        quant_config = Fp8ConfigWithEmbedding(
-        ) if self.quantize_lm_head else None
+        quant_config = (
+            Fp8ConfigWithEmbedding()
+            if (self.quantize_lm_head and not self.use_w4a8_lm_head)
+            else None
+        )
         self.method = getattr(config, "method", "sum_rnn")
 
         self.activation = nn.GELU()
@@ -472,15 +477,27 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
             self.head = nn.ModuleList([head] * self.max_speculative_tokens)
 
             if self.quantize_lm_head:
-                qhead = ParallelLMHead(
-                    self.vocab_size,
-                    self.inner_dim[-1],
-                    bias=False,
-                    quant_config=quant_config,
-                    skip_quantization=False,
-                )
-                qhead.quant_method = OriginalFp8LinearMethod(
-                    quant_config=quant_config)
+                if self.use_w4a8_lm_head:
+                    qhead = ParallelLMHead(
+                        self.vocab_size,
+                        self.inner_dim[-1],
+                        bias=False,
+                        quant_config=None,
+                        skip_quantization=True,
+                    )
+                    qhead.quant_method = W4A8LmHeadMethod()
+                else:
+                    qhead = ParallelLMHead(
+                        self.vocab_size,
+                        self.inner_dim[-1],
+                        bias=False,
+                        quant_config=quant_config,
+                        skip_quantization=False,
+                    )
+                    qhead.quant_method = OriginalFp8LinearMethod(
+                        quant_config=quant_config
+                    )
+
                 self.qhead = nn.ModuleList([qhead] *
                                            self.max_speculative_tokens)
         else:
