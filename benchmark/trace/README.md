@@ -1,6 +1,6 @@
 The patch allows running datasets in the following form:
 ```jsonl
-{"timestamp": <ms>, "input_length": <tokens>, "output_length": <tokens>}
+{"timestamp": 15, "input_length": 1000, "output_length": 128}
 ```
 where each line corresponds to a request with random prompt to be sent at t = timestam.
 
