@@ -1,6 +1,6 @@
 
-model="/data-fast/Qwen/Qwen3-30B-A3B-Instruct-2507-FP8"
-dataset=/home/yak/toolagent_trace.jsonl
+model="/data-fast/RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic"
+dataset=example_trace.jsonl
 
 vllm bench serve --model $model --trace-dataset-path $dataset
 
