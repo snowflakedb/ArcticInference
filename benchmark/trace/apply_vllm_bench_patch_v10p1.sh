@@ -61,7 +61,7 @@ patch "$SERVE_PY" << 'EOF'
 < 
 <     print(f"get_request_trace")
 < 
-<     prev_ts = input_requests[0].trace_timestamp
+<     prev_ts = 0
 <     for i in range(len(input_requests)):
 <         request = input_requests[i]
 <         curr_ts = request.trace_timestamp
