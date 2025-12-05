@@ -40,6 +40,11 @@ class W4A8LmHeadMethod:
     @torch.inference_mode()
     def _prepare_once(self, lm_head: torch.nn.Module) -> None:
         """Quantize and pack lm_head.weight only once, after weights are loaded."""
+        if torch.cuda.is_current_stream_capturing():
+            raise RuntimeError(
+                "W4A8LmHeadMethod._prepare_once() called during CUDA graph capture. "
+                "Call quant_method.prepare(lm_head) before enabling graph capture."
+            )
         if hasattr(lm_head, "w4a8_w_q"):
             return  # already prepared
 

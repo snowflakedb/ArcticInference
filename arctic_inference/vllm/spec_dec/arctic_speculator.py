@@ -896,47 +896,39 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
                 for i in range(num_predict_tokens):
                     self.static_cuda_buffers["next_tokens"][i][:padded_size] = torch.zeros(
                         (padded_size, 1), dtype=torch.long, device=device)
+                # Warm up the w4a8 path.
+                self.generate_token_ids(
+                    padded_size,
+                    num_predict_tokens,
+                    static_last_tokens,
+                    static_hidden_states,
+                    static_next_tokens,
+                    cell_states=static_cell_states if self.method == "sum_lstm" else None,
+                )
+                torch.cuda.synchronize(device=device)
                 with graph_capture(device=device) as capture_context:
                     g = torch.cuda.CUDAGraph()
                     with torch.cuda.graph(g, stream=capture_context.stream):
-                        if self.method == "sum_lstm":
-                            self.generate_token_ids(
-                                padded_size,
-                                num_predict_tokens,
-                                static_last_tokens,
-                                static_hidden_states,
-                                static_next_tokens,
-                                cell_states=static_cell_states,
-                            )
-                        else:
-                            self.generate_token_ids(
-                                padded_size,
-                                num_predict_tokens,
-                                static_last_tokens,
-                                static_hidden_states,
-                                static_next_tokens,
-                            )
+                        self.generate_token_ids(
+                            padded_size,
+                            num_predict_tokens,
+                            static_last_tokens,
+                            static_hidden_states,
+                            static_next_tokens,
+                            cell_states=static_cell_states if self.method == "sum_lstm" else None,
+                        )
                 self.cuda_graphs[cg_key] = g
             else:
                 g.replay()
         else:
-            if self.method == "sum_lstm":
-                self.generate_token_ids(
-                    batch_size,
-                    num_predict_tokens,
-                    static_last_tokens,
-                    static_hidden_states,
-                    static_next_tokens,
-                    cell_states=static_cell_states,
-                )
-            else:
-                self.generate_token_ids(
-                    batch_size,
-                    num_predict_tokens,
-                    static_last_tokens,
-                    static_hidden_states,
-                    static_next_tokens,
-                )
+            self.generate_token_ids(
+                padded_size,
+                num_predict_tokens,
+                static_last_tokens,
+                static_hidden_states,
+                static_next_tokens,
+                cell_states=static_cell_states if self.method == "sum_lstm" else None,
+            )
 
         next_tokens = []
         for i in range(num_predict_tokens):
