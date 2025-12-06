@@ -16,11 +16,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Hashable, KeysView, List, Optional, Sequence
+from typing import Dict, Hashable, KeysView, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from arctic_inference.suffix_decoding._C import SuffixTree, Draft
+from arctic_inference.suffix_decoding._C import SuffixTree, Draft, batch_extend, batch_speculate_dual, batch_speculate_dual_ndarray, batch_extend_packed_ndarray
 
 
 @dataclass
@@ -55,12 +55,12 @@ class SuffixDecodingDraft:
             match_len=draft.match_len,
         )
 
-
 class SuffixDecodingCache:
     
     def __init__(self,
                  max_tree_depth: int = 64,
-                 max_cached_requests: int = -1):
+                 max_cached_requests: int = -1,
+                 flush_threshold: int = 256):
         """
         Initialize the SuffixDecodingCache.
 
@@ -75,17 +75,22 @@ class SuffixDecodingCache:
 
         self._max_tree_depth = max_tree_depth
         self._max_cached_requests = max_cached_requests
+        self._flush_threshold = flush_threshold
 
         # Global suffix tree caches previous responses in a single tree.
         self._global_tree = SuffixTree(max_tree_depth)
+        self._pending_updates: dict[int, list[int]] = {}
 
         # Local suffix trees cache prompts for each active request separately.
         self._local_trees = {}
+        
+        # Batch local tree updates to reduce nanobind calls
+        self._pending_local_updates: dict[Hashable, list[int]] = {}
 
         # Maps between Python request ID and int32_t sequence ID. Tracks all
         # request IDs that are in the global tree.
-        self._req_to_seq_id = {}
-        self._seq_to_req_id = {}
+        self._req_to_seq_id: Dict[Hashable, int] = {}
+        self._seq_to_req_id: Dict[int, Hashable] = {}
 
         # Unused sequence ID to assign to a new request ID.
         self._next_seq_id = 0
@@ -175,6 +180,14 @@ class SuffixDecodingCache:
         """
         if req_id not in self._local_trees:
             raise ValueError(f"Request '{req_id}' is not active")
+
+        # Note (nav): flush() clears the entire _pending_local_updates dict, so we need
+        # to check and flush before attempting to delete
+        had_pending = req_id in self._pending_local_updates
+        if had_pending and self._pending_local_updates[req_id]:
+            self.flush()
+        elif had_pending:
+            del self._pending_local_updates[req_id]
         del self._local_trees[req_id]
 
     def add_active_response(
@@ -198,21 +211,82 @@ class SuffixDecodingCache:
         if req_id not in self._local_trees:
             raise ValueError(f"Request '{req_id}' is not active")
 
+        # Convert to list for batching
         if isinstance(token_ids, np.ndarray):
-            # If input is a numpy array, use the zero-copy ndarray overload.
             self._validate_ndarray(token_ids)
-            extend_func = SuffixTree.extend_ndarray
+            token_list = token_ids.tolist()
         else:
-            extend_func = SuffixTree.extend
+            token_list = list(token_ids)
+        
+        # Batch local tree updates
+        local_buf = self._pending_local_updates.get(req_id)
+        if local_buf is None:
+            self._pending_local_updates[req_id] = token_list
+        else:
+            local_buf.extend(token_list)
 
-        # Update the local tree for the active request.
-        extend_func(self._local_trees[req_id], 0, token_ids)
-
-        # Also update the response if the request is in the global cache (it
-        # may be evicted from the global cache before the request is stopped).
+        # Track global tree updates
         if req_id in self._req_to_seq_id:
             seq_id = self._req_to_seq_id[req_id]
-            extend_func(self._global_tree, seq_id, token_ids)
+            buf = self._pending_updates.get(seq_id)
+            if buf is None:
+                self._pending_updates[seq_id] = token_list.copy()
+                buf = self._pending_updates[seq_id]
+            else:
+                buf.extend(token_list)
+            if len(buf) >= self._flush_threshold:
+                self.flush()
+
+
+    def flush(self):
+        """Apply all staged updates with a single native call."""
+
+        if self._pending_local_updates:
+            local_batch: list[tuple[SuffixTree, int, list[int]]] = []
+            for req_id, toks in list(self._pending_local_updates.items()):
+                if toks and req_id in self._local_trees:
+                    local_batch.append((self._local_trees[req_id], 0, toks))
+            if local_batch:
+                batch_extend(local_batch)
+            self._pending_local_updates.clear()
+        
+        # Flush global tree updates (packed zero-copy path)
+        if self._pending_updates:
+            seq_ids_list: list[int] = []
+            offsets_list: list[int] = []
+            lengths_list: list[int] = []
+            total_len = 0
+            for seq, toks in self._pending_updates.items():
+                if toks:
+                    seq_ids_list.append(int(seq))
+                    offsets_list.append(total_len)
+                    lengths_list.append(len(toks))
+                    total_len += len(toks)
+
+            if total_len > 0:
+                tokens_concat = np.empty(total_len, dtype=np.int32)
+                pos = 0
+                for seq, toks in self._pending_updates.items():
+                    if not toks:
+                        continue
+                    n = len(toks)
+                    tokens_concat[pos:pos + n] = np.asarray(toks, dtype=np.int32)
+                    pos += n
+
+                seq_ids_arr = np.asarray(seq_ids_list, dtype=np.int32)
+                offsets_arr = np.asarray(offsets_list, dtype=np.int32)
+                lengths_arr = np.asarray(lengths_list, dtype=np.int32)
+
+                # Single call for all the updates into the global tree
+                batch_extend_packed_ndarray(
+                    self._global_tree,
+                    seq_ids_arr,
+                    offsets_arr,
+                    lengths_arr,
+                    tokens_concat,
+                )
+
+            self._pending_updates.clear()
 
     def evict_cached_response(self, req_id: Hashable):
         """
@@ -308,6 +382,106 @@ class SuffixDecodingCache:
         draft = draft1 if draft1.score >= draft2.score else draft2
 
         return SuffixDecodingDraft.from_native(draft)
+
+    def speculate_batch(
+        self,
+        req_ids: List[Hashable],
+        contexts: List[np.ndarray | Sequence[int]],
+        max_spec_tokens: Optional[int] = None,
+        max_spec_factor: float = 1.0,
+        max_spec_offset: float = 0.0,
+        min_token_prob: float = 0.1,
+        use_tree_spec: bool = False,
+    ) -> List[SuffixDecodingDraft]:
+        """
+        Batch speculate for multiple requests in a single native call.
+        
+        Args:
+            req_ids: List of request identifiers.
+            contexts: List of token sequences to match and speculate from.
+            max_spec_tokens: Maximum number of tokens to speculate per request.
+            max_spec_factor: Factor that limits speculation based on match length.
+            max_spec_offset: Offset that limits speculation based on match length.
+            min_token_prob: Minimum estimated probability threshold for draft tokens.
+            use_tree_spec: If True, uses tree-based speculation.
+        
+        Returns:
+            List of speculation results, one per request.
+        """
+        
+        if max_spec_tokens is None:
+            max_spec_tokens = self.max_tree_depth
+        
+        # Ensure local updates are flushed before speculating
+        if self._pending_local_updates:
+            self.flush()
+        
+        # Fast path: calling batch_speculate_dual_ndarray if token seqs are ndarray
+        all_ndarray = all(isinstance(ctx, np.ndarray) for _, ctx in zip(req_ids, contexts) 
+                         if _ in self._local_trees)
+        
+        # Build dual-tree batch parameters
+        dual_batch = []
+        valid_indices = []
+        max_depth = self._max_tree_depth
+        
+        if all_ndarray:
+            for idx, (req_id, context) in enumerate(zip(req_ids, contexts)):
+                if req_id not in self._local_trees:
+                    continue
+                
+                if len(context) > max_depth:
+                    context = context[-max_depth:]
+                
+                dual_batch.append((
+                    self._local_trees[req_id],
+                    self._global_tree,
+                    context,
+                    max_spec_tokens,
+                    max_spec_factor,
+                    max_spec_offset,
+                    min_token_prob,
+                    use_tree_spec,
+                ))
+                valid_indices.append(idx)
+            
+            if not dual_batch:
+                return [SuffixDecodingDraft() for _ in req_ids]
+
+            drafts = batch_speculate_dual_ndarray(dual_batch)
+        else:
+            for idx, (req_id, context) in enumerate(zip(req_ids, contexts)):
+                if req_id not in self._local_trees:
+                    continue
+                if isinstance(context, np.ndarray):
+                    context = context.tolist()
+                else:
+                    context = list(context)
+                
+                if len(context) > max_depth:
+                    context = context[-max_depth:]
+                
+                dual_batch.append((
+                    self._local_trees[req_id],
+                    self._global_tree,
+                    context,
+                    max_spec_tokens,
+                    max_spec_factor,
+                    max_spec_offset,
+                    min_token_prob,
+                    use_tree_spec,
+                ))
+                valid_indices.append(idx)
+            
+            if not dual_batch:
+                return [SuffixDecodingDraft() for _ in req_ids]
+            
+            drafts = batch_speculate_dual(dual_batch)
+        
+        results = [SuffixDecodingDraft() for _ in req_ids]
+        for i, draft in enumerate(drafts):
+            results[valid_indices[i]] = SuffixDecodingDraft.from_native(draft)
+        return results
 
     def _generate_seq_id(self, req_id: Hashable) -> int:
         # Find the next available seq_id not used by an active request.
