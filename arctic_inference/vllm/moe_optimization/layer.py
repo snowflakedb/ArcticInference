@@ -1,7 +1,15 @@
 from vllm.model_executor.layers.fused_moe import FusedMoE
 from vllm.model_executor.custom_op import CustomOp
 
-class AI_FusedMoE(FusedMoE):
+from arctic_inference.patching import ArcticPatch
+from arctic_inference.vllm.moe_optimization.fused_experts import fused_experts_impl as AI_fused_experts_impl
+from vllm.model_executor.layers.fused_moe import fused_experts_impl as original_fused_experts_impl
+
+def apply_moe_optimization_patches():
+    AI_FusedMoE.apply_patch()
+    original_fused_experts_impl = AI_fused_experts_impl
+    
+class AI_FusedMoE(ArcticPatch[FusedMoE]):
     def __init__(
         
         self,
