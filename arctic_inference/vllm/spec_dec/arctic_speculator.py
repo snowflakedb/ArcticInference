@@ -455,7 +455,7 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
         self.tie_lstm_embs = config.tie_lstm_embs
         self.scale_input = config.scale_input
         self.quantize_lm_head = True
-        self.use_w4a8_lm_head = True
+        self.use_w4a8_lm_head = False
 
         quant_config = (
             Fp8ConfigWithEmbedding()
