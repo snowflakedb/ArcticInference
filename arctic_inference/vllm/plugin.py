@@ -23,8 +23,6 @@ from arctic_inference.utils import get_compatible_vllm_version
 
 def arctic_inference_plugin():
     if not envs.ARCTIC_INFERENCE_ENABLED:
-        print("\x1b[35;1mArctic Inference plugin is disabled. To enable, set "
-              "ARCTIC_INFERENCE_ENABLED=1.\x1b[0m", file=sys.stderr)
         return
 
     if not envs.ARCTIC_INFERENCE_SKIP_VERSION_CHECK:

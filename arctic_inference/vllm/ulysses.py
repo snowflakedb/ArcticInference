@@ -95,15 +95,6 @@ class UlyssesParallelState(ArcticPatch[parallel_state]):
 
     _SP = None
     _SP_TP = None
-    _SP_AA = None
-    _SP_AG = None
-    # Rationale for SP_AA and SP_AG groups:
-    # When num_kv_heads > SP, the kv heads are distributed and replicated as in TP.
-    # To implement the logic, the distributed kv heads are exchanged with a local
-    # all-to-all within SP_AA group followed by an local all-gather within SP_AG
-    # group. The SP_AA and SP_AG groups partitions the SP group into two orthogonal
-    # sub-groups and will not be initialized if max(1, num_kv_heads / TP) < SP.
-    # See the figure in PR #126 https://github.com/snowflakedb/ArcticInference/pull/126
 
     def initialize_model_parallel(
         tensor_model_parallel_size: int = 1,
@@ -221,37 +212,6 @@ class UlyssesParallelState(ArcticPatch[parallel_state]):
 
         # check if SP requires kv replication
         num_kv_heads = config.model_config._orig_get_num_kv_heads(config.parallel_config)
-        if num_kv_heads < sequence_parallel_size:
-
-            # divide SP group into two orthogonal sub-groups:
-            sp_aa_size = num_kv_heads
-            sp_ag_size = sequence_parallel_size // num_kv_heads
-            all_ranks_ = torch.arange(world_size).reshape(
-            -1, data_parallel_size, pipeline_model_parallel_size,
-            sp_aa_size, sp_ag_size, tensor_model_parallel_size)
-
-            group_ranks = all_ranks_.transpose(3, 5).reshape(
-                -1, sp_aa_size).unbind(0)
-            group_ranks = [x.tolist() for x in group_ranks]
-            SP_AA_group_ranks = group_ranks
-            # SP_AA group is used for all-to-all communication of kv heads
-            _SP_AA = init_model_parallel_group(group_ranks,
-                                            get_world_group().local_rank,
-                                            backend,
-                                            group_name="sp_aa")
-            
-            group_ranks = all_ranks_.transpose(4, 5).reshape(
-                -1, sp_ag_size).unbind(0)
-            group_ranks = [x.tolist() for x in group_ranks]
-            SP_AG_group_ranks = group_ranks
-            # SP_AG group is used for all-gather communication of kv heads
-            _SP_AG = init_model_parallel_group(group_ranks,
-                                            get_world_group().local_rank,
-                                            backend,
-                                            group_name="sp_ag")
-
-            parallel_state._SP_AA = _SP_AA
-            parallel_state._SP_AG = _SP_AG
 
         if get_world_group().local_rank == 0:
             parallel_state.logger.info(
@@ -264,8 +224,7 @@ class UlyssesParallelState(ArcticPatch[parallel_state]):
                     f"  SP_TP {_SP_TP.world_size} ranks {SP_TP_group_ranks}")
             if num_kv_heads < sequence_parallel_size:
                 parallel_state.logger.info(
-                    f"  SP_AA {parallel_state._SP_AA.world_size} ranks {SP_AA_group_ranks}\n"
-                    f"  SP_AG {parallel_state._SP_AG.world_size} ranks {SP_AG_group_ranks}\n")
+                    f"  KV cache is replicated by factor {sequence_parallel_size // num_kv_heads}\n")
 
     @contextmanager
     def graph_capture(device: torch.device):
@@ -292,19 +251,13 @@ class UlyssesParallelState(ArcticPatch[parallel_state]):
 class UlyssesWorkerProc(ArcticPatch[WorkerProc]):
 
     def destroy_model_parallel(self):
-        from vllm.distributed.parallel_state import _SP, _SP_TP, _SP_AA, _SP_AG
+        from vllm.distributed.parallel_state import _SP, _SP_TP
         if _SP:
             _SP.destroy()
         _SP = None
         if _SP_TP:
             _SP_TP.destroy()
         _SP_TP = None
-        if _SP_AA:
-            _SP_AA.destroy()
-        _SP_AA = None
-        if _SP_AG:
-            _SP_AG.destroy()
-        _SP_AG = None
 
     def shutdown(self):
         self.rpc_broadcast_mq = None
@@ -423,17 +376,8 @@ class UlyssesAttention(ArcticPatch[Attention]):
             num_kv_heads = kwargs["num_kv_heads"]
             self.is_kv_replicated = True if num_kv_heads < self.sp_size else False
             if self.is_kv_replicated:
+                self.replication_factor = self.sp_size // num_kv_heads
                 num_kv_heads = 1
-                assert parallel_state._SP_AA is not None and parallel_state._SP_AG is not None, (
-                    "UlyssesAttention requires SP_AA and SP_AG groups to be initialized.")
-                self.sp_aa_device_group = parallel_state._SP_AA.device_group
-                self.sp_ag_device_group = parallel_state._SP_AG.device_group
-                self.sp_aa_size = parallel_state._SP_AA.world_size
-                self.sp_ag_size = parallel_state._SP_AG.world_size
-                # this reorders the all-gathered sequence
-                self.order = [j * self.sp_aa_size + i 
-                              for i in range(self.sp_aa_size) 
-                              for j in range(self.sp_ag_size)]
             else:
                 num_kv_heads //= self.sp_size
             kwargs["num_kv_heads"] = num_kv_heads
@@ -444,52 +388,29 @@ class UlyssesAttention(ArcticPatch[Attention]):
         if self.sp_size == 1 or is_shift_parallel_mode():
             return self._orig_forward(query, key, value, **kwargs)
 
+        # prepare
+        q = query.view(-1, self.sp_size, self.num_heads * self.head_size)
         if self.is_kv_replicated:
-            # Ulysses all-to-all 1/2 (query)
-            q = query.view(-1,
-                           self.sp_size, self.num_heads * self.head_size).transpose(
-                               0, 1).reshape(-1,
-                                             self.num_heads * self.head_size)
-            q_ = torch.empty_like(q)
-            torch.distributed.all_to_all_single(q_, q, group=self.sp_device_group)
-            # Ulysses pack (key, value)
-            kv = torch.cat((key.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size),
-                            value.view(-1, self.sp_aa_size, self.num_kv_heads * self.head_size)),
-                           dim=-1).transpose(0, 1).reshape(
-                               -1, 2 * self.num_kv_heads * self.head_size)
-            # Ulysses all-to-all (key, value)
-            kv_part = torch.empty_like(kv)
-            torch.distributed.all_to_all_single(kv_part, kv, group=self.sp_aa_device_group)
-            # Ulysses all-gather (key, value)
-            kv_ = torch.empty(q_.shape[0],
-                              2 * self.num_kv_heads * self.head_size,
-                              dtype=query.dtype,
-                              device=query.device)
-            torch.distributed.all_gather_into_tensor(kv_,
-                                                     kv_part,
-                                                     group=self.sp_ag_device_group)
-            # reorder
-            kv_chunk = kv_.chunk(self.sp_size)
-            kv_ordered = torch.cat([kv_chunk[i] for i in self.order])
-            # unpack (key, value)
-            k_, v_ = kv_ordered.split([self.num_kv_heads * self.head_size] * 2, dim=-1)
+            k = key.view(-1, self.sp_size // self.replication_factor, self.head_size).repeat_interleave(self.replication_factor, dim=1)
+            v = value.view(-1, self.sp_size // self.replication_factor, self.head_size).repeat_interleave(self.replication_factor, dim=1)
         else:
-            # pack
-            qkv = (torch.cat(
-                (query.view(-1, self.sp_size, self.num_heads * self.head_size),
-                key.view(-1, self.sp_size, self.num_kv_heads * self.head_size),
-                value.view(-1, self.sp_size, self.num_kv_heads * self.head_size)),
-                dim=-1)
-                .transpose(0, 1)
-                .reshape(-1, (self.num_heads + 2 * self.num_kv_heads) * self.head_size))
-            # Ulysses all-to-all 1/2
-            qkv_ = torch.empty_like(qkv)
-            torch.distributed.all_to_all_single(qkv_, qkv, group=self.sp_device_group)
-            # unpack
-            q_, k_, v_ = qkv_.split([
-                self.num_heads * self.head_size, self.num_kv_heads *
-                self.head_size, self.num_kv_heads * self.head_size
-            ], dim=-1)
+            k = key.view(-1, self.sp_size, self.num_kv_heads * self.head_size)
+            v = value.view(-1, self.sp_size, self.num_kv_heads * self.head_size)
+
+        # pack
+        qkv = torch.cat((q, k, v), dim=-1).transpose(0, 1).reshape(
+            -1, (self.num_heads + 2 * self.num_kv_heads) * self.head_size)
+        
+        # Ulysses all-to-all 1/2
+        qkv_ = torch.empty_like(qkv)
+        torch.distributed.all_to_all_single(qkv_, qkv, group=self.sp_device_group)
+
+        # unpack
+        q_, k_, v_ = qkv_.split([
+            self.num_heads * self.head_size, 
+            self.num_kv_heads * self.head_size, 
+            self.num_kv_heads * self.head_size
+        ], dim=-1)
 
         # original attention
         c_ = self._orig_forward(q_, k_, v_, **kwargs)
