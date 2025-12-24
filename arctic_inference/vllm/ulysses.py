@@ -513,11 +513,28 @@ class UlyssesCudagraphDispatcher(ArcticPatch[CudagraphDispatcher]):
 
         self._orig_initialize_cudagraph_keys(cudagraph_mode, uniform_decode_query_len)
 
-        # Ulysses specific keys
+        # Ulysses specific keys for mixed prefill/decode mode
         if cudagraph_mode.mixed_mode() != CUDAGraphMode.NONE:
             sp_size = parallel_state._SP.world_size
             for bs in self.compilation_config.cudagraph_capture_sizes:
                 self.add_cudagraph_key(
                     cudagraph_mode.mixed_mode(),
                     BatchDescriptor(num_tokens=bs * sp_size, uniform_decode=False))
+
+        # Ulyssses specific keys for full decode mode
+        if cudagraph_mode.decode_mode() == CUDAGraphMode.FULL \
+            and cudagraph_mode.separate_routine():
+            max_num_tokens = uniform_decode_query_len * \
+                self.vllm_config.scheduler_config.max_num_seqs
+            cudagraph_capture_sizes_for_decode = [
+                x for x in self.compilation_config.cudagraph_capture_sizes
+                if x <= max_num_tokens and x >= uniform_decode_query_len
+            ]
+            for bs in cudagraph_capture_sizes_for_decode:
+                self.add_cudagraph_key(
+                    CUDAGraphMode.FULL,
+                    BatchDescriptor(num_tokens=bs * sp_size, uniform_decode=True))
+        self.keys_initialized = True
+
+
 
