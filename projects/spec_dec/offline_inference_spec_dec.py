@@ -17,7 +17,7 @@ import vllm
 from vllm import LLM, SamplingParams
 
 import os
-os.environ["VLLM_USE_V1"] = "1"
+os.environ["ARCTIC_INFERENCE_ENABLED"] = "1"
 
 vllm.plugins.load_general_plugins()
 

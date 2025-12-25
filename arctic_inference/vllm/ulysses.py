@@ -31,7 +31,7 @@ from vllm.distributed.parallel_state import (init_model_parallel_group,
                                              destroy_distributed_environment)
 from vllm.v1.executor.multiproc_executor import (
     set_multiprocessing_worker_envs)
-from vllm.utils import get_distributed_init_method, get_open_port, get_loopback_ip
+from vllm.utils.network_utils import get_distributed_init_method, get_open_port, get_loopback_ip
 from vllm.v1.executor.abstract import FailureCallback
 from vllm.v1.executor.multiproc_executor import (MultiprocExecutor, WorkerProc,
                                                  UnreadyWorkerProcHandle)

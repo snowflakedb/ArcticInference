@@ -13,9 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
+from pydantic.dataclasses import dataclass
 import logging
 
+import vllm
 from vllm.config import ParallelConfig, SpeculativeConfig, VllmConfig
 from vllm.transformers_utils.configs.mlp_speculator import MLPSpeculatorConfig
 
@@ -55,6 +56,7 @@ class ArcticParallelConfig(ParallelConfig):
 @dataclass
 class ArcticSpeculativeConfig(SpeculativeConfig):
 
+    method: str | None = None
     enable_suffix_decoding: bool = False
     suffix_cache_max_depth: int = 64
     suffix_speculative_tokens: int = 0
@@ -113,6 +115,11 @@ class SpeculativeConfigPatch(ArcticPatch[SpeculativeConfig]):
 class VllmConfigPatch(ArcticPatch[VllmConfig]):
 
     _orig_str = VllmConfig.__str__
+    _orig_post_init = VllmConfig.__post_init__
+
+    from typing import Literal
+    OldEagleModelTypes = vllm.config.speculative.EagleModelTypes
+    NewEagleModelTypes = Literal["arctic", OldEagleModelTypes]
 
     def __str__(self, *args, **kwargs):
         string = self._orig_str(*args, **kwargs)
@@ -120,6 +127,24 @@ class VllmConfigPatch(ArcticPatch[VllmConfig]):
         string += f", enable_shift_parallel={self.parallel_config.enable_shift_parallel}"
         string += f", shift_parallel_threshold={self.parallel_config.shift_parallel_threshold}"
         return string
+
+    def __post_init__(self, *args, **kwargs):
+        # if self.speculative_config is not None:
+        #     if self.speculative_config.method not in get_args(EagleModelTypes):
+        #         raise ValueError(
+        #             "Currently, async scheduling is only supported "
+        #             "with EAGLE/MTP kind of speculative decoding"
+        #         )
+        import sys
+        from typing import Literal
+        target_module = sys.modules[VllmConfig.__module__]
+        original_types = getattr(target_module, "EagleModelTypes")
+        NewEagleModelTypes = Literal["mlp_speculator", original_types]
+        setattr(target_module, "EagleModelTypes", NewEagleModelTypes)
+        try:
+            self._orig_post_init(*args, **kwargs)
+        finally:
+            setattr(target_module, "EagleModelTypes", original_types)
 
 
 class MLPSpeculatorConfigPatch(ArcticPatch[MLPSpeculatorConfig]):
