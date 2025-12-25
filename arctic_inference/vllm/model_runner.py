@@ -237,7 +237,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 model_output = output
             return model_output
 
-        self.model.forward = ulysses_forward
+        self.get_model().forward = ulysses_forward
 
     @torch.inference_mode()
     def _dummy_run(
