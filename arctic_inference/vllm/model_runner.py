@@ -27,7 +27,7 @@ import vllm.distributed.parallel_state as parallel_state
 import vllm.envs as envs
 from vllm.compilation.counter import compilation_counter
 from vllm.compilation.monitor import set_cudagraph_capturing_enabled
-from vllm.config import CUDAGraphMode, CompilationLevel, VllmConfig
+from vllm.config import CUDAGraphMode, VllmConfig
 from vllm.distributed.kv_transfer import (get_kv_transfer_group,
                                           has_kv_transfer_group)
 from vllm.distributed.parallel_state import (get_pp_group, get_tp_group,
@@ -35,7 +35,7 @@ from vllm.distributed.parallel_state import (get_pp_group, get_tp_group,
 from vllm.forward_context import BatchDescriptor, set_forward_context
 from vllm.model_executor.model_loader import get_model
 from vllm.sequence import IntermediateTensors
-from vllm.utils import round_up, cdiv
+from vllm.utils.math_utils import round_up, cdiv
 from vllm.v1.attention.backends.utils import CommonAttentionMetadata
 from vllm.v1.kv_cache_interface import KVCacheConfig
 from vllm.v1.outputs import (EMPTY_MODEL_RUNNER_OUTPUT, ModelRunnerOutput)

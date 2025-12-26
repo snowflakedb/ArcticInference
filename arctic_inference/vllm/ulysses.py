@@ -99,17 +99,19 @@ class UlyssesParallelState(ArcticPatch[parallel_state]):
     def initialize_model_parallel(
         tensor_model_parallel_size: int = 1,
         pipeline_model_parallel_size: int = 1,
+        prefill_context_model_parallel_size: int = 1,
         decode_context_model_parallel_size: Optional[int] = 1,
         backend: Optional[str] = None,
     ) -> None:
-        
-        from vllm.distributed.parallel_state import _DP, _EP, _PP, _TP
-        # Get world size and rank. Ensure some consistencies.
+
+        from vllm.distributed.parallel_state import _DP, _EP, _PP, _TP, _DCP, _PCP
+
         assert torch.distributed.is_initialized()
         world_size: int = torch.distributed.get_world_size()
         rank = torch.distributed.get_rank()
         backend = backend or torch.distributed.get_backend(
-            get_world_group().device_group)
+            get_world_group().device_group
+        )
 
         data_parallel_size = 1
         from vllm.config import get_current_vllm_config
@@ -117,114 +119,180 @@ class UlyssesParallelState(ArcticPatch[parallel_state]):
         if config is not None:
             data_parallel_size = config.parallel_config.data_parallel_size
 
-        sequence_parallel_size = \
-            config.parallel_config.ulysses_sequence_parallel_size
+        sequence_parallel_size = config.parallel_config.ulysses_sequence_parallel_size
 
+        # vLLM types allow None, but group building needs an int
+        if decode_context_model_parallel_size is None:
+            # treat "no DCP" as DCP==TP (common interpretation)
+            decode_context_model_parallel_size = tensor_model_parallel_size
+
+        # Layout order (extended from vLLM's): ExternalDP x DP x PP x PCP x SP x TP
         all_ranks = torch.arange(world_size).reshape(
-            -1, data_parallel_size, pipeline_model_parallel_size,
-            sequence_parallel_size, tensor_model_parallel_size)  # noqa
+            -1,
+            data_parallel_size,
+            pipeline_model_parallel_size,
+            prefill_context_model_parallel_size,
+            sequence_parallel_size,
+            tensor_model_parallel_size,
+        )
 
-        # Build the tensor model-parallel groups.
-        assert _TP is None, ("tensor model parallel group is already initialized")
+        assert _TP is None, "tensor model parallel group is already initialized"
         group_ranks = all_ranks.view(-1, tensor_model_parallel_size).unbind(0)
         group_ranks = [x.tolist() for x in group_ranks]
         TP_group_ranks = group_ranks
-        # message queue broadcaster is only used in tensor model parallel group
-        _TP = init_model_parallel_group(group_ranks,
-                                        get_world_group().local_rank,
-                                        backend,
-                                        use_message_queue_broadcaster=True,
-                                        group_name="tp")
+        _TP = init_model_parallel_group(
+            group_ranks,
+            get_world_group().local_rank,
+            backend,
+            use_message_queue_broadcaster=True,
+            group_name="tp",
+        )
 
-        # Build the pipeline model-parallel groups.
-        assert _PP is None, (
-            "pipeline model parallel group is already initialized")
-        group_ranks = all_ranks.transpose(2, 4).reshape(
-            -1, pipeline_model_parallel_size).unbind(0)
+        assert _DCP is None, "decode context model parallel group is already initialized"
+        group_ranks = all_ranks.reshape(-1, decode_context_model_parallel_size).unbind(0)
+        group_ranks = [x.tolist() for x in group_ranks]
+        DCP_group_ranks = group_ranks
+        _DCP = init_model_parallel_group(
+            group_ranks,
+            get_world_group().local_rank,
+            backend,
+            use_message_queue_broadcaster=True,
+            group_name="dcp",
+        )
+
+        assert _PCP is None, "prefill context parallel group is already initialized"
+        group_ranks = (
+            all_ranks.transpose(3, 5) 
+            .reshape(-1, prefill_context_model_parallel_size)
+            .unbind(0)
+        )
+        group_ranks = [x.tolist() for x in group_ranks]
+        PCP_group_ranks = group_ranks
+        _PCP = init_model_parallel_group(
+            group_ranks,
+            get_world_group().local_rank,
+            backend,
+            group_name="pcp",
+        )
+
+        assert _PP is None, "pipeline model parallel group is already initialized"
+        group_ranks = (
+            all_ranks.transpose(2, 5)  
+            .reshape(-1, pipeline_model_parallel_size)
+            .unbind(0)
+        )
         group_ranks = [x.tolist() for x in group_ranks]
         PP_group_ranks = group_ranks
-        _PP = init_model_parallel_group(group_ranks,
-                                        get_world_group().local_rank,
-                                        backend,
-                                        group_name="pp")
+        _PP = init_model_parallel_group(
+            group_ranks,
+            get_world_group().local_rank,
+            backend,
+            group_name="pp",
+        )
 
-        assert _DP is None, ("data parallel group is already initialized")
-        group_ranks = all_ranks.transpose(1,
-                                          4).reshape(-1,
-                                                     data_parallel_size).unbind(0)
+        assert _DP is None, "data parallel group is already initialized"
+        group_ranks = (
+            all_ranks.transpose(1, 5) 
+            .reshape(-1, data_parallel_size)
+            .unbind(0)
+        )
         group_ranks = [x.tolist() for x in group_ranks]
         DP_group_ranks = group_ranks
-        _DP = init_model_parallel_group(group_ranks,
-                                        get_world_group().local_rank,
-                                        backend,
-                                        group_name="dp")
+        _DP = init_model_parallel_group(
+            group_ranks,
+            get_world_group().local_rank,
+            backend,
+            group_name="dp",
+        )
 
-        assert _EP is None, ("expert parallel group is already initialized")
-        group_ranks = all_ranks.transpose(1, 3).reshape(
-            -1, data_parallel_size * tensor_model_parallel_size).unbind(0)
+        assert _EP is None, "expert parallel group is already initialized"
+        group_ranks = (
+            all_ranks.permute(0, 4, 2, 1, 3, 5)  # ExternalDP, SP, PP, DP, PCP, TP
+            .reshape(-1, data_parallel_size * prefill_context_model_parallel_size * tensor_model_parallel_size)
+            .unbind(0)
+        )
         group_ranks = [x.tolist() for x in group_ranks]
         EP_group_ranks = group_ranks
-        _EP = init_model_parallel_group(group_ranks,
-                                        get_world_group().local_rank,
-                                        backend,
-                                        group_name="ep")
+        _EP = init_model_parallel_group(
+            group_ranks,
+            get_world_group().local_rank,
+            backend,
+            group_name="ep",
+        )
 
-        # Build the sequence parallel groups.
-        assert parallel_state._SP is None, (
-            "sequence parallel group is already initialized")
-        group_ranks = all_ranks.transpose(3, 4).reshape(
-            -1, sequence_parallel_size).unbind(0)
+        assert parallel_state._SP is None, "sequence parallel group is already initialized"
+        group_ranks = (
+            all_ranks.transpose(4, 5)
+            .reshape(-1, sequence_parallel_size)
+            .unbind(0)
+        )
         group_ranks = [x.tolist() for x in group_ranks]
         SP_group_ranks = group_ranks
-        _SP = init_model_parallel_group(group_ranks,
-                                        get_world_group().local_rank,
-                                        backend,
-                                        group_name="sp")
+        _SP = init_model_parallel_group(
+            group_ranks,
+            get_world_group().local_rank,
+            backend,
+            group_name="sp",
+        )
 
-        # Build full-TP groups for ShiftParallel
-        shift_parallel_size = (tensor_model_parallel_size *
-                               sequence_parallel_size)
-        assert parallel_state._SP_TP is None, (
-            "full-TP group is already initialized")
-        # transpose(3, 4) for obtaining the correct attn head order
-        group_ranks = all_ranks.transpose(3, 4).reshape(
-            -1, shift_parallel_size).unbind(0)
+        shift_parallel_size = tensor_model_parallel_size * sequence_parallel_size
+        assert parallel_state._SP_TP is None, "full-TP group is already initialized"
+        group_ranks = (
+            all_ranks.transpose(4, 5)  # keep same head-order trick as your old transpose(3,4)
+            .reshape(-1, shift_parallel_size)
+            .unbind(0)
+        )
         group_ranks = [x.tolist() for x in group_ranks]
         SP_TP_group_ranks = group_ranks
-        _SP_TP = init_model_parallel_group(group_ranks,
-                                           get_world_group().local_rank,
-                                           backend,
-                                           group_name="sp_tp")
+        _SP_TP = init_model_parallel_group(
+            group_ranks,
+            get_world_group().local_rank,
+            backend,
+            group_name="sp_tp",
+        )
 
         parallel_state.logger.info(
             "rank %s in world size %s is assigned as DP rank %s, PP rank %s, "
-            "TP rank %s, EP rank %s, SP rank %s, SP_TP rank %s", rank,
-            world_size, _DP.rank_in_group, _PP.rank_in_group,
-            _TP.rank_in_group, _EP.rank_in_group, _SP.rank_in_group,
-            _SP_TP.rank_in_group)
+            "PCP rank %s, TP rank %s, DCP rank %s, EP rank %s, SP rank %s, SP_TP rank %s",
+            rank,
+            world_size,
+            _DP.rank_in_group,
+            _PP.rank_in_group,
+            _PCP.rank_in_group,
+            _TP.rank_in_group,
+            _DCP.rank_in_group,
+            _EP.rank_in_group,
+            _SP.rank_in_group,
+            _SP_TP.rank_in_group,
+        )
 
         parallel_state._TP = _TP
+        parallel_state._DCP = _DCP
+        parallel_state._PCP = _PCP
         parallel_state._PP = _PP
-        parallel_state._SP = _SP
-        parallel_state._SP_TP = _SP_TP
         parallel_state._DP = _DP
         parallel_state._EP = _EP
-
-        # check if SP requires kv replication
-        num_kv_heads = config.model_config._orig_get_num_kv_heads(config.parallel_config)
+        parallel_state._SP = _SP
+        parallel_state._SP_TP = _SP_TP
 
         if get_world_group().local_rank == 0:
             parallel_state.logger.info(
-                    f"UlyssesParallelState initialized:\n"
-                    f"  PP {_PP.world_size} ranks {PP_group_ranks}\n"
-                    f"  TP {_TP.world_size} ranks {TP_group_ranks}\n"
-                    f"  SP {_SP.world_size} ranks {SP_group_ranks}\n"
-                    f"  DP {_DP.world_size} ranks {DP_group_ranks}\n"
-                    f"  EP {_EP.world_size} ranks {EP_group_ranks}\n"
-                    f"  SP_TP {_SP_TP.world_size} ranks {SP_TP_group_ranks}")
-            if num_kv_heads < sequence_parallel_size:
-                parallel_state.logger.info(
-                    f"  KV cache is replicated by factor {sequence_parallel_size // num_kv_heads}\n")
+                "UlyssesParallelState initialized:\n"
+                f"  PP {_PP.world_size} ranks {PP_group_ranks}\n"
+                f"  TP {_TP.world_size} ranks {TP_group_ranks}\n"
+                f"  DCP {_DCP.world_size} ranks {DCP_group_ranks}\n"
+                f"  PCP {_PCP.world_size} ranks {PCP_group_ranks}\n"
+                f"  SP {_SP.world_size} ranks {SP_group_ranks}\n"
+                f"  DP {_DP.world_size} ranks {DP_group_ranks}\n"
+                f"  EP {_EP.world_size} ranks {EP_group_ranks}\n"
+                f"  SP_TP {_SP_TP.world_size} ranks {SP_TP_group_ranks}"
+            )
+
+        num_kv_heads = config.model_config._orig_get_num_kv_heads(config.parallel_config)
+        if get_world_group().local_rank == 0 and num_kv_heads < sequence_parallel_size:
+            parallel_state.logger.info(
+                f"KV cache is replicated by factor {sequence_parallel_size // num_kv_heads}"
+            )
 
     @contextmanager
     def graph_capture(device: torch.device):
@@ -309,7 +377,7 @@ class UlyssesMultiprocExecutor(ArcticPatch[MultiprocExecutor]):
 
         # Create workers
         unready_workers: list[UnreadyWorkerProcHandle] = []
-        from vllm.utils import get_mp_context
+        from vllm.utils.system_utils import get_mp_context
         context = get_mp_context()
         shared_worker_lock = context.Lock()
         success = False
