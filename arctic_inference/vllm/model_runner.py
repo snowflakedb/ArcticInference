@@ -1106,7 +1106,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             forward_context = self.vllm_config.compilation_config.static_forward_context
 
             try:
-                from vllm.model_executor.layers.attention import Attention
+                from vllm.attention import Attention
                 for mod in self.shift_model.modules():
                     if isinstance(mod, Attention):
                         if hasattr(mod, "layer_name"):
