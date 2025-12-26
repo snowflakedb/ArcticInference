@@ -1040,39 +1040,54 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         Capture CUDA graphs for both base (SP) and shift (TP) variants, splitting
         shapes by threshold so both models have required graphs captured.
         """
+        # make sure it is a valid mode
         assert cudagraph_runtime_mode != CUDAGraphMode.NONE and \
             cudagraph_runtime_mode in [CUDAGraphMode.FULL, CUDAGraphMode.PIECEWISE]
 
         sp_size = parallel_state._SP.world_size
         tp_size = parallel_state._TP.world_size
 
+        # capture shapes for the base model
         compilation_cases_base = [
             min(shape * sp_size, self.max_num_tokens)
             for shape in compilation_cases
-            if (shape * sp_size) > self.shift_parallel_threshold
+            if shape * sp_size > self.shift_parallel_threshold
         ]
+        # filter again for FULL mode
+        if cudagraph_runtime_mode == CUDAGraphMode.FULL:
+            compilation_cases_base = [shape in compilation_cases if
+                                      shape <= self.scheduler_config.max_num_seqs]
 
         if is_global_first_rank():
-            logger.info(f"base model (SP={sp_size}, TP={tp_size}) shapes {compilation_cases_base}")
+            logger.info(f"base model (SP={sp_size}, TP={tp_size}) shapes {compilation_cases_base}, cudagraph mode {cudagraph_runtime_mode}")
 
+        # capture the base model graphs
         if compilation_cases_base:
             self._orig_capture_cudagraphs(
                 compilation_cases_base, cudagraph_runtime_mode, uniform_decode
             )
 
         if getattr(self, "shift_model", None) is not None:
+
+            # capture shapes for the shift model
             compilation_cases_shift = [
                 shape for shape in compilation_cases
                 if shape <= self.shift_parallel_threshold
                 or "SwiftKV" in self.model.__class__.__name__
             ]
+            # filter again for FULL mode
+            if cudagraph_runtime_mode == CUDAGraphMode.FULL:
+                compilation_cases_shift = [shape in compilation_cases_shift if
+                                           shape * sp_size <= self.scheduler_config.max_num_seqs]
+
             if is_global_first_rank():
-                logger.info(f"shift model (SPxTP={sp_size * tp_size}) shapes {compilation_cases_shift}")
+                logger.info(f"shift model (SPxTP={sp_size * tp_size}) shapes {compilation_cases_shift}, cudagraph mode {cudagraph_runtime_mode}")
 
             if compilation_cases_shift:
                 orig_model, self.model = self.model, self.shift_model
                 try:
                     with set_shift_parallel_mode(True):
+                        # capture the shift model graphs
                         self._orig_capture_cudagraphs(
                             compilation_cases_shift, cudagraph_runtime_mode, uniform_decode
                         )
