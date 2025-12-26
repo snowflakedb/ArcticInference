@@ -1055,7 +1055,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         ]
         # filter again for FULL mode
         if cudagraph_runtime_mode == CUDAGraphMode.FULL:
-            compilation_cases_base = [shape in compilation_cases if
+            compilation_cases_base = [shape for shape in compilation_cases if
                                       shape <= self.scheduler_config.max_num_seqs]
 
         if is_global_first_rank():
@@ -1077,7 +1077,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             ]
             # filter again for FULL mode
             if cudagraph_runtime_mode == CUDAGraphMode.FULL:
-                compilation_cases_shift = [shape in compilation_cases_shift if
+                compilation_cases_shift = [shape for shape in compilation_cases_shift if
                                            shape * sp_size <= self.scheduler_config.max_num_seqs]
 
             if is_global_first_rank():
