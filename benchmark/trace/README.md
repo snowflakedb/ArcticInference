@@ -1,4 +1,4 @@
-The patch allows running datasets in the following form:
+The patch allows running datasets with the following json format:
 ```jsonl
 {"timestamp": 15, "input_length": 1000, "output_length": 128}
 ...
