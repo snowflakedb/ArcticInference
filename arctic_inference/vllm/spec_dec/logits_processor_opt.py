@@ -44,8 +44,7 @@ class LogitsProcessorOpt(nn.Module):
         self.soft_cap = soft_cap
         # Whether to use gather or all-gather to gather the logits.
 
-        self.use_gather = not current_platform.is_tpu(
-        ) and not envs.VLLM_USE_V1
+        self.use_gather = False
 
         self.skip_last_gather = skip_last_gather
 
