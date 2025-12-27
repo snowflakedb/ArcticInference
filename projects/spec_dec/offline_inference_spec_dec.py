@@ -33,6 +33,8 @@ llm = LLM(
         "enable_suffix_decoding": True,
         "disable_by_batch_size": 64,
     },
+    #enforce_eager=True,
+    #async_scheduling=True,
     seed=0,
 )
 

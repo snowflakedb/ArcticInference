@@ -586,6 +586,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         return results
 
+
     @torch.inference_mode
     def sample_tokens(
         self, grammar_output: "GrammarOutput | None"
@@ -617,6 +618,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             sample_hidden_states,
             aux_hidden_states,
             ec_connector_output,
+            cudagraph_stats,  # Fix: Unpack cudagraph_stats
         ) = self.execute_model_state
         # Clear ephemeral state.
         self.execute_model_state = None
@@ -654,7 +656,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             and self.speculative_config.method in ("arctic", "mlp_speculator")
         )
 
-        # For arctic spec decoding, it can treat aribtrary input lengths
+        # For arctic spec decoding, it can treat arbitrary input lengths
         input_fits_in_drafter = spec_decode_common_attn_metadata and True
         sampled_token_ids = sampler_output.sampled_token_ids
         if use_async_sched_for_arctic:
@@ -701,6 +703,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 if self.supports_mm_inputs
                 else None,
                 num_nans_in_logits=num_nans_in_logits,
+                cudagraph_stats=cudagraph_stats,  # Fix: Pass cudagraph_stats to output
             )
 
         if not self.use_async_scheduling:
@@ -727,6 +730,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             )
 
         return async_output
+
 
     def load_model(self, eep_scale_up: bool = False) -> None:
         load_shift_model = (
@@ -761,7 +765,33 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             self.shift_model = None
             self.shift_parallel_threshold = 0
 
-    def _capture_cudagraphs(self, compilation_cases: list[int],
+    from vllm.forward_context import BatchDescriptor
+    def _case_bs(self, case) -> int:
+        # vLLM can pass ints, tuples, or sometimes BatchDescriptor-like objects
+        if isinstance(case, int):
+            return case
+        if isinstance(case, BatchDescriptor):
+            return int(case.num_tokens)
+        if isinstance(case, tuple):
+            return int(case[0])
+        # last resort
+        return int(getattr(case, "num_tokens"))
+
+    def _with_bs(self, case, new_bs: int):
+        if isinstance(case, tuple):
+            return (new_bs, *case[1:])
+        if isinstance(case, BatchDescriptor):
+            # Best-effort reconstruction; adjust if your BatchDescriptor signature differs.
+            return BatchDescriptor(
+                num_tokens=new_bs,
+                num_reqs=case.num_reqs,
+                uniform=case.uniform,
+                has_lora=case.has_lora,
+            )
+        return new_bs
+
+
+    def _capture_cudagraphs(self, compilation_cases,
                             cudagraph_runtime_mode: CUDAGraphMode,
                             uniform_decode: bool):
         """
@@ -774,28 +804,39 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         sp_size = parallel_state._SP.world_size
         tp_size = parallel_state._TP.world_size
 
-        compilation_cases_base = [
-            min(shape * sp_size, self.max_num_tokens)
-            for shape in compilation_cases
-            if (shape * sp_size) > self.shift_parallel_threshold
-        ]
+        # Base model (SP): scale only the batch-size field.
+        compilation_cases_base = []
+        for case in compilation_cases:
+            bs = self._case_bs(case)
+            scaled_bs = min(bs * sp_size, self.max_num_tokens)
+            if scaled_bs > int(getattr(self, "shift_parallel_threshold", 0)):
+                compilation_cases_base.append(self._with_bs(case, scaled_bs))
 
         if is_global_first_rank():
-            logger.info(f"base model (SP={sp_size}, TP={tp_size}) shapes {compilation_cases_base}")
+            logger.info(
+                "base model (SP=%s, TP=%s) shapes %s",
+                sp_size, tp_size, [ self._case_bs(c) for c in compilation_cases_base ]
+            )
 
         if compilation_cases_base:
             self._orig_capture_cudagraphs(
                 compilation_cases_base, cudagraph_runtime_mode, uniform_decode
             )
 
+        # Shift model (SP*TP but configured as TP-only variant in your routing):
         if getattr(self, "shift_model", None) is not None:
-            compilation_cases_shift = [
-                shape for shape in compilation_cases
-                if shape <= self.shift_parallel_threshold
-                or "SwiftKV" in self.model.__class__.__name__
-            ]
+            compilation_cases_shift = []
+            for case in compilation_cases:
+                bs = self._case_bs(case)
+                if (bs <= int(getattr(self, "shift_parallel_threshold", 0))
+                        or "SwiftKV" in self.model.__class__.__name__):
+                    compilation_cases_shift.append(case)
+
             if is_global_first_rank():
-                logger.info(f"shift model (SPxTP={sp_size * tp_size}) shapes {compilation_cases_shift}")
+                logger.info(
+                    "shift model (SPxTP=%s) shapes %s",
+                    sp_size * tp_size, [ self._case_bs(c) for c in compilation_cases_shift ]
+                )
 
             if compilation_cases_shift:
                 orig_model, self.model = self.model, self.shift_model
