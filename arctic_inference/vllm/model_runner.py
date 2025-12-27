@@ -347,8 +347,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                     sampled_token_ids,
                     self.requests,
                     self.input_batch,
-                    self.discard_request_indices.gpu,
-                    self.num_discarded_requests,
+                    self.discard_request_mask.gpu,
                 )
             )
             self._copy_valid_sampled_token_count(
