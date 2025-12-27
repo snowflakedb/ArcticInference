@@ -369,6 +369,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         suffix_spec_token_ids = None
         new_sampled_token_ids = sampled_token_ids.copy()
+
+        if self._suffix_cache is not None and isinstance(new_sampled_token_ids, list):
+            self._update_suffix_cache(new_sampled_token_ids)
+            
         if self._suffix_cache is not None:
             results = self.propose_suffix_draft_token_ids(new_sampled_token_ids)
             suffix_spec_token_ids = []
