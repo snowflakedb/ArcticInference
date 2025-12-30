@@ -29,7 +29,7 @@ from vllm.distributed.parallel_state import (init_model_parallel_group,
                                              get_world_group,
                                              destroy_model_parallel,
                                              destroy_distributed_environment)
-from vllm.executor.multiproc_worker_utils import (
+from vllm.v1.executor.multiproc_executor import (
     set_multiprocessing_worker_envs)
 from vllm.utils import get_distributed_init_method, get_open_port, get_loopback_ip
 from vllm.v1.executor.abstract import FailureCallback
@@ -99,6 +99,7 @@ class UlyssesParallelState(ArcticPatch[parallel_state]):
     def initialize_model_parallel(
         tensor_model_parallel_size: int = 1,
         pipeline_model_parallel_size: int = 1,
+        decode_context_model_parallel_size: Optional[int] = 1,
         backend: Optional[str] = None,
     ) -> None:
         
@@ -290,7 +291,7 @@ class UlyssesMultiprocExecutor(ArcticPatch[MultiprocExecutor]):
             f"_size ({sp_parallel_size}).")
 
         # Set multiprocessing envs that are common to V0 and V1
-        set_multiprocessing_worker_envs(self.parallel_config)
+        set_multiprocessing_worker_envs()
 
         # Multiprocessing-based executor does not support multi-node setting.
         # Since it only works for single node, we can use the loopback address
@@ -308,6 +309,9 @@ class UlyssesMultiprocExecutor(ArcticPatch[MultiprocExecutor]):
 
         # Create workers
         unready_workers: list[UnreadyWorkerProcHandle] = []
+        from vllm.utils import get_mp_context
+        context = get_mp_context()
+        shared_worker_lock = context.Lock()
         success = False
         try:
             for rank in range(self.world_size):
@@ -318,6 +322,7 @@ class UlyssesMultiprocExecutor(ArcticPatch[MultiprocExecutor]):
                         rank=rank,
                         distributed_init_method=distributed_init_method,
                         input_shm_handle=scheduler_output_handle,
+                        shared_worker_lock=shared_worker_lock,
                     ))
 
             # Workers must be created before wait_for_ready to avoid
@@ -429,10 +434,28 @@ class UlyssesCudagraphDispatcher(ArcticPatch[CudagraphDispatcher]):
 
         self._orig_initialize_cudagraph_keys(cudagraph_mode, uniform_decode_query_len)
 
-        # Ulysses specific keys
+        # Ulysses specific keys for mixed prefill/decode mode
         if cudagraph_mode.mixed_mode() != CUDAGraphMode.NONE:
             sp_size = parallel_state._SP.world_size
             for bs in self.compilation_config.cudagraph_capture_sizes:
                 self.add_cudagraph_key(
                     cudagraph_mode.mixed_mode(),
                     BatchDescriptor(num_tokens=bs * sp_size, uniform_decode=False))
+
+        # Ulyssses specific keys for full decode mode
+        if cudagraph_mode.decode_mode() == CUDAGraphMode.FULL \
+            and cudagraph_mode.separate_routine():
+            max_num_tokens = uniform_decode_query_len * \
+                self.vllm_config.scheduler_config.max_num_seqs
+            cudagraph_capture_sizes_for_decode = [
+                x for x in self.compilation_config.cudagraph_capture_sizes
+                if x <= max_num_tokens and x >= uniform_decode_query_len
+            ]
+            for bs in cudagraph_capture_sizes_for_decode:
+                self.add_cudagraph_key(
+                    CUDAGraphMode.FULL,
+                    BatchDescriptor(num_tokens=bs * sp_size, uniform_decode=True))
+        self.keys_initialized = True
+
+
+

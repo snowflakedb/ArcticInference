@@ -121,15 +121,7 @@ class ArcticProposer:
                 f"hidden_states shape mismatch: {sample_hidden_states.shape[-1]} != {self.input_hidden_dim}. \
                 Please make sure spec model is trained using the same base model."
         
-        # if isinstance(sampled_token_ids, list):
-        #     # Pad the list of lists to create a uniform tensor
-        #     max_len = max(len(x) for x in sampled_token_ids) if sampled_token_ids else 0
-        #     if max_len == 0:
-        #         return sample_hidden_states
-        #     padded_ids = [l + [-1] * (max_len - len(l)) for l in sampled_token_ids]
-        #     sampled_token_ids = torch.tensor(padded_ids,
-        #                                  device=sample_hidden_states.device)
-
+        # TODO(Ye): fuse into a single kernel
         max_gen_len = sampled_token_ids.shape[-1]
         if max_gen_len == 1:
             return sample_hidden_states
@@ -164,3 +156,14 @@ class ArcticProposer:
         )
 
         return next_tokens.cpu().numpy()
+
+
+class SuffixProposer:
+    def __init__(self):
+        pass
+
+    def load_model(
+        self,
+        model: None,
+    ):
+        pass

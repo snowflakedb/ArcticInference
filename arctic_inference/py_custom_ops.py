@@ -88,3 +88,31 @@ def reshape_and_cache_flash_fp4(
     torch.ops.arctic_inference.reshape_and_cache_flash_fp4(
         keys, values, key_cache, value_cache, slot_mapping, kv_cache_dtype,
         k_scale, v_scale, key_cache_scales, value_cache_scales)
+
+
+def speculator_ln(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor,
+    eps: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    return torch.ops.arctic_inference.speculator_ln_cuda(
+        input, weight, bias, eps)
+
+
+def sum_lstm(
+    states_4d: torch.Tensor,
+    z4_4d: torch.Tensor,
+    prev_cell_d: torch.Tensor,
+    w_cell: torch.Tensor | None,
+    b_cell: torch.Tensor | None,
+    w_state: torch.Tensor | None,
+    b_state: torch.Tensor | None,
+    alpha: float,
+    eps_cell: float,
+    eps_state: float,
+    use_fast_gelu: bool,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return torch.ops.arctic_inference.sum_lstm_cuda(
+        states_4d, z4_4d, prev_cell_d, w_cell, b_cell, w_state, b_state, alpha,
+        eps_cell, eps_state, use_fast_gelu)
