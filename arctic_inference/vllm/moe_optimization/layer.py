@@ -13,7 +13,7 @@ from collections.abc import Callable, Iterable
 from vllm.utils.torch_utils import direct_register_custom_op, is_torch_equal_or_newer
 from torch.library import Library
 from vllm.platforms import current_platform
-
+from vllm.model_executor.layers.fused_moe.config import FUSED_MOE_UNQUANTIZED_CONFIG
 
 def outplace_fused_experts(
     hidden_states: torch.Tensor,
@@ -187,29 +187,29 @@ def apply_moe_optimization_patches():
     dispatch_key = current_platform.dispatch_key
     vllm_lib = Library("vllm", "FRAGMENT")  # noqa
 
-    # direct_register_custom_op(
-    #     op_name="outplace_fused_experts",
-    #     op_func=outplace_fused_experts,
-    #     fake_impl=outplace_fused_experts_fake,
-    #     tags=(
-    #         ()
-    #         if is_torch_equal_or_newer("2.7.0")
-    #         else (torch.Tag.needs_fixed_stride_order,)
-    #     ),
-    # )
+    direct_register_custom_op(
+        op_name="outplace_fused_experts_api",
+        op_func=outplace_fused_experts,
+        fake_impl=outplace_fused_experts_fake,
+        tags=(
+            ()
+            if is_torch_equal_or_newer("2.7.0")
+            else (torch.Tag.needs_fixed_stride_order,)
+        ),
+    )
     # vllm_lib.impl("outplace_fused_experts", outplace_fused_experts, dispatch_key=dispatch_key)
     
-    # direct_register_custom_op(
-    #     op_name="inplace_fused_experts",
-    #     op_func=inplace_fused_experts,
-    #     mutates_args=["hidden_states"],
-    #     fake_impl=inplace_fused_experts_fake,
-    #     tags=(
-    #         ()
-    #         if is_torch_equal_or_newer("2.7.0")
-    #         else (torch.Tag.needs_fixed_stride_order,)
-    #     ),
-    # )
+    direct_register_custom_op(
+        op_name="inplace_fused_experts_api",
+        op_func=inplace_fused_experts,
+        mutates_args=["hidden_states"],
+        fake_impl=inplace_fused_experts_fake,
+        tags=(
+            ()
+            if is_torch_equal_or_newer("2.7.0")
+            else (torch.Tag.needs_fixed_stride_order,)
+        ),
+    )
     # vllm_lib.impl("inplace_fused_experts", inplace_fused_experts, dispatch_key=dispatch_key)
 
     
@@ -258,7 +258,7 @@ class AI_FusedMoE(ArcticPatch[FusedMoE]):
         # Hereafter, `expert_id` is local physical id
 
         # compressed-tensors checkpoints with packed weights are stored flipped
-        # TODO (mgoin): check self.quant_method.quant_config.quant_format
+        # TODO (mgoin): check self.quant_method.self.moe_quant_config.quant_format
         # against known CompressionFormat enum values that have this quality
         if self.quant_method.__class__.__name__ in (
             "CompressedTensorsWNA16MarlinMoEMethod",
@@ -483,7 +483,7 @@ class AI_FusedMoE(ArcticPatch[FusedMoE]):
         loaded_weight: torch.Tensor,
         tp_rank: int,
         load_full: bool = False,
-        block_size: int = 128,
+        block_size: int = 64,
     ):
         # Index the loaded weight for tp sharding.
         # gate_up_proj: "MergedColumnParallel", so tp sharding on output_dim
@@ -500,10 +500,82 @@ class AI_FusedMoE(ArcticPatch[FusedMoE]):
         # w1, gate_proj: Load into first logical weight of w13.
         expert_data_split = torch.split(expert_data, 2 * block_size, dim=shard_dim)
         if shard_id == "w1":
-            expert_data_split = tuple([edp[::2] for edp in expert_data_split])
+            expert_data_split = tuple([edp[:block_size] for edp in expert_data_split])
         # w3, up_proj: Load into second logical weight of w13.
         else:
             assert shard_id == "w3"
-            expert_data_split = tuple([edp[1::2] for edp in expert_data_split])
+            expert_data_split = tuple([edp[block_size:] for edp in expert_data_split])
         for ew, lw in zip(expert_data_split, loaded_weight_split):
             ew.copy_(lw)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        router_logits: torch.Tensor,
+    ) -> torch.Tensor:
+
+        zero_expert_num = getattr(self, "zero_expert_num", 0)
+        zero_expert_type = getattr(self, "zero_expert_type", None)
+
+        select_result = FusedMoE.select_experts(
+            hidden_states=hidden_states,
+            router_logits=router_logits,
+            use_grouped_topk=self.use_grouped_topk,
+            top_k=self.top_k,
+            renormalize=self.renormalize,
+            topk_group=self.topk_group,
+            num_expert_group=self.num_expert_group,
+            custom_routing_function=self.custom_routing_function,
+            scoring_func=self.scoring_func,
+            routed_scaling_factor=self.routed_scaling_factor,
+            e_score_correction_bias=self.e_score_correction_bias,
+            enable_eplb=self.enable_eplb,
+            expert_map=self.expert_map,
+            expert_load_view=self.expert_load_view,
+            logical_to_physical_map=self.logical_to_physical_map,
+            logical_replica_count=self.logical_replica_count,
+            global_num_experts=self.global_num_experts,
+            zero_expert_num=zero_expert_num,
+            zero_expert_type=zero_expert_type,
+            num_fused_shared_experts=self.num_fused_shared_experts,
+        )
+
+        topk_weights, topk_ids, zero_expert_result = select_result
+
+        if self.moe_quant_config is None:
+            self.moe_quant_config = FUSED_MOE_UNQUANTIZED_CONFIG
+
+        torch.ops.vllm.inplace_fused_experts_api(
+                hidden_states=hidden_states,
+                w1=self.w13_weight,
+                w2=self.w2_weight,
+                topk_weights=topk_weights,
+                topk_ids=topk_ids,
+                activation=self.activation,
+                global_num_experts=self.global_num_experts,
+                apply_router_weight_on_input=self.apply_router_weight_on_input,
+                use_fp8_w8a8=self.moe_quant_config.use_fp8_w8a8,
+                use_int8_w8a8=self.moe_quant_config.use_int8_w8a8,
+                use_int8_w8a16=self.moe_quant_config.use_int8_w8a16,
+                use_int4_w4a16=self.moe_quant_config.use_int4_w4a16,
+                ocp_mx_scheme=self.moe_quant_config.ocp_mx_scheme,
+                per_channel_quant=self.moe_quant_config.per_act_token_quant,
+                expert_map=self.expert_map,
+                w1_scale=self.moe_quant_config.w1_scale,
+                w2_scale=self.moe_quant_config.w2_scale,
+                w1_zp=self.moe_quant_config.w1_zp,
+                w2_zp=self.moe_quant_config.w2_zp,
+                a1_scale=self.moe_quant_config.a1_scale,
+                a2_scale=self.moe_quant_config.a2_scale,
+                block_shape=self.moe_quant_config.block_shape,
+                w1_bias=self.moe_quant_config.w1_bias,
+                w2_bias=self.moe_quant_config.w2_bias,
+            )
+        result = hidden_states
+        if zero_expert_num != 0 and zero_expert_type is not None:
+            assert not isinstance(result, tuple), (
+                "Shared + zero experts are mutually exclusive not yet supported"
+            )
+            return result, zero_expert_result
+        else:
+            return result
