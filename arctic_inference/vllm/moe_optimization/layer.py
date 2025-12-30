@@ -4,7 +4,7 @@ from vllm.model_executor.custom_op import CustomOp
 
 from arctic_inference.patching import ArcticPatch
 from arctic_inference.vllm.moe_optimization.fused_experts import fused_experts_impl as AI_fused_experts_impl
-from vllm.model_executor.layers.fused_moe import fused_experts_impl as original_fused_experts_impl
+#from vllm.model_executor.layers.fused_moe import fused_experts_impl as original_fused_experts_impl
 
 from vllm.model_executor.layers.quantization.base_config import (
     QuantizationConfig,

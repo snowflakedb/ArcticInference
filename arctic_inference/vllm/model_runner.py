@@ -438,22 +438,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     def sample_tokens(
         self, grammar_output: "GrammarOutput | None"
     ) -> Union[ModelRunnerOutput, AsyncGPUModelRunnerOutput, IntermediateTensors]:
-        kv_connector_output = self.kv_connector_output
-        self.kv_connector_output = None
-
         if self.execute_model_state is None:
-            # Nothing to do (PP non-final rank case), output isn't used.
-            if not kv_connector_output:
-                return None  # noqa
-
-            # In case of PP with kv transfer, we need to pass through the
-            # kv_connector_output
-            if kv_connector_output.is_empty():
-                return EMPTY_MODEL_RUNNER_OUTPUT
-
-            output = copy(EMPTY_MODEL_RUNNER_OUTPUT)
-            output.kv_connector_output = kv_connector_output
-            return output
+            return None
 
         # Unpack ephemeral state.
         (
@@ -464,6 +450,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             hidden_states,
             sample_hidden_states,
             aux_hidden_states,
+            kv_connector_output,
             ec_connector_output,
         ) = self.execute_model_state
         # Clear ephemeral state.
