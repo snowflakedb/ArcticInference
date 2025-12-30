@@ -495,16 +495,16 @@ class AI_FusedMoE(ArcticPatch[FusedMoE]):
             loaded_weight = loaded_weight.narrow(
                 shard_dim, shard_size * tp_rank, shard_size
             )
-        loaded_weight_split = torch.split(loaded_weight, block_size, dim=shard_dim)
+        loaded_weight_split = torch.split(loaded_weight, block_size // 2, dim=shard_dim)
         # Narrow parameter and load.
         # w1, gate_proj: Load into first logical weight of w13.
-        expert_data_split = torch.split(expert_data, 2 * block_size, dim=shard_dim)
+        expert_data_split = torch.split(expert_data, block_size, dim=shard_dim)
         if shard_id == "w1":
-            expert_data_split = tuple([edp[:block_size] for edp in expert_data_split])
+            expert_data_split = tuple([edp[:block_size // 2] for edp in expert_data_split])
         # w3, up_proj: Load into second logical weight of w13.
         else:
             assert shard_id == "w3"
-            expert_data_split = tuple([edp[block_size:] for edp in expert_data_split])
+            expert_data_split = tuple([edp[block_size // 2:] for edp in expert_data_split])
         for ew, lw in zip(expert_data_split, loaded_weight_split):
             ew.copy_(lw)
 
