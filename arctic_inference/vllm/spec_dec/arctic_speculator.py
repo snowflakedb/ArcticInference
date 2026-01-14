@@ -127,7 +127,8 @@ class ArcticMLPSpeculator(nn.Module, SpeculatorTPInit):
         self.tie_weights = config.tie_weights
         self.scale_input = config.scale_input
 
-        self.quantize_lm_head = os.getenv("ARCTICINFERENCE_FP16_SPEC", "0") != "1"
+        major, _ = torch.cuda.get_device_capability()
+        self.quantize_lm_head = major >= 9
 
         quant_config = Fp8ConfigWithEmbedding(
         ) if self.quantize_lm_head else None
@@ -435,7 +436,9 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
         self.tie_weights = config.tie_weights
         self.tie_lstm_embs = config.tie_lstm_embs
         self.scale_input = config.scale_input
-        self.quantize_lm_head = os.getenv("ARCTICINFERENCE_FP16_SPEC", "0") != "1"
+        
+        major, _ = torch.cuda.get_device_capability()
+        self.quantize_lm_head = major >= 9
 
         quant_config = Fp8ConfigWithEmbedding(
         ) if self.quantize_lm_head else None
