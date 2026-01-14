@@ -16,6 +16,7 @@
 import collections
 import math
 from typing import Iterable, List, Tuple
+import os
 
 import torch
 import torch.nn as nn
@@ -126,7 +127,7 @@ class ArcticMLPSpeculator(nn.Module, SpeculatorTPInit):
         self.tie_weights = config.tie_weights
         self.scale_input = config.scale_input
 
-        self.quantize_lm_head = True
+        self.quantize_lm_head = os.getenv("ARCTICINFERENCE_FP16_SPEC", "0") != "1"
 
         quant_config = Fp8ConfigWithEmbedding(
         ) if self.quantize_lm_head else None
@@ -434,7 +435,7 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
         self.tie_weights = config.tie_weights
         self.tie_lstm_embs = config.tie_lstm_embs
         self.scale_input = config.scale_input
-        self.quantize_lm_head = True
+        self.quantize_lm_head = os.getenv("ARCTICINFERENCE_FP16_SPEC", "0") != "1"
 
         quant_config = Fp8ConfigWithEmbedding(
         ) if self.quantize_lm_head else None
