@@ -16,6 +16,7 @@
 import collections
 import math
 from typing import Iterable, List, Tuple
+import os
 
 import torch
 import torch.nn as nn
@@ -126,7 +127,8 @@ class ArcticMLPSpeculator(nn.Module, SpeculatorTPInit):
         self.tie_weights = config.tie_weights
         self.scale_input = config.scale_input
 
-        self.quantize_lm_head = True
+        major, _ = torch.cuda.get_device_capability()
+        self.quantize_lm_head = major >= 9
 
         quant_config = Fp8ConfigWithEmbedding(
         ) if self.quantize_lm_head else None
@@ -315,6 +317,7 @@ class ArcticMLPSpeculator(nn.Module, SpeculatorTPInit):
                 argidx = torch.argmax(vals, -1).reshape(batch_size, -1)
                 last_tokens = torch.gather(indices, -1, argidx)
 
+            last_tokens.clamp_(0, self.vocab_size - 1)
             if next_tokens_tensors[head_index] == None:
                 next_tokens_tensors[head_index] = last_tokens
             else:
@@ -433,7 +436,9 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
         self.tie_weights = config.tie_weights
         self.tie_lstm_embs = config.tie_lstm_embs
         self.scale_input = config.scale_input
-        self.quantize_lm_head = True
+        
+        major, _ = torch.cuda.get_device_capability()
+        self.quantize_lm_head = major >= 9
 
         quant_config = Fp8ConfigWithEmbedding(
         ) if self.quantize_lm_head else None
@@ -712,6 +717,7 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
         next_tokens_tensors: List[torch.Tensor],
         cell_states: torch.Tensor = None,
     ) -> torch.Tensor:
+        last_tokens.clamp_(0, self.vocab_size - 1)
         for head_index in range(num_predict_tokens):
             if self.method == "sum_lstm":
                 states, cell_states = self.generate_states(
@@ -817,6 +823,9 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
 
             if g is None:
                 device = torch.cuda.current_device()
+                for i in range(num_predict_tokens):
+                    self.static_cuda_buffers["next_tokens"][i][:padded_size] = torch.zeros(
+                        (padded_size, 1), dtype=torch.long, device=device)
                 with graph_capture(device=device) as capture_context:
                     g = torch.cuda.CUDAGraph()
                     with torch.cuda.graph(g, stream=capture_context.stream):
