@@ -1,5 +1,9 @@
 
-## Installation
+## Reproducibility
+
+This page is on reproducibility of the [Shift Parallelism](https://arxiv.org/pdf/2509.16495) paper. Please see the Artifact Appendix.
+
+## Instructions
 
 ### Step 1: Making vLLM work
 
