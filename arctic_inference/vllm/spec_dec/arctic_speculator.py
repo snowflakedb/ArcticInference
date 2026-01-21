@@ -292,6 +292,7 @@ class ArcticMLPSpeculator(nn.Module, SpeculatorTPInit):
         previous_hidden_states: torch.Tensor,
         next_tokens_tensors: List[torch.Tensor],
     ) -> torch.Tensor:
+        last_tokens.clamp_(0, self.vocab_size - 1)
         for head_index in range(num_predict_tokens):
             states = self.generate_states(last_tokens, previous_hidden_states,
                                           head_index)
@@ -749,6 +750,7 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
                 argidx = torch.argmax(vals, -1).reshape(batch_size, -1)
                 last_tokens = torch.gather(indices, -1, argidx)
 
+            last_tokens.clamp_(0, self.vocab_size - 1)
             if next_tokens_tensors[head_index] == None:
                 next_tokens_tensors[head_index] = last_tokens
             else:
