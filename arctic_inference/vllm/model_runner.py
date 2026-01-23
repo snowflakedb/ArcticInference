@@ -27,7 +27,7 @@ import vllm.distributed.parallel_state as parallel_state
 import vllm.envs as envs
 from vllm.compilation.counter import compilation_counter
 from vllm.compilation.monitor import set_cudagraph_capturing_enabled
-from vllm.config import CUDAGraphMode, CompilationLevel, VllmConfig
+from vllm.config import CUDAGraphMode, VllmConfig
 from vllm.distributed.kv_transfer import (get_kv_transfer_group,
                                           has_kv_transfer_group)
 from vllm.distributed.parallel_state import (get_pp_group, get_tp_group,
@@ -35,7 +35,7 @@ from vllm.distributed.parallel_state import (get_pp_group, get_tp_group,
 from vllm.forward_context import BatchDescriptor, set_forward_context
 from vllm.model_executor.model_loader import get_model
 from vllm.sequence import IntermediateTensors
-from vllm.utils import round_up, cdiv
+from vllm.utils.math_utils import round_up, cdiv
 from vllm.v1.attention.backends.utils import CommonAttentionMetadata
 from vllm.v1.kv_cache_interface import KVCacheConfig
 from vllm.v1.outputs import (EMPTY_MODEL_RUNNER_OUTPUT, ModelRunnerOutput)
@@ -48,6 +48,7 @@ from vllm.v1.worker.gpu_model_runner import (
     logger,
     AsyncGPUModelRunnerOutput,
 )
+from vllm.v1.structured_output.utils import apply_grammar_bitmask
 
 if TYPE_CHECKING:
     from vllm.v1.core.sched.output import SchedulerOutput
@@ -113,6 +114,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     _orig_propose_draft_token_ids = GPUModelRunner.propose_draft_token_ids
     _orig_dummy_run = GPUModelRunner._dummy_run
     _orig_init = GPUModelRunner.__init__
+    _orig_build_attention_metadata = GPUModelRunner._build_attention_metadata
+    _orig_execute_model = GPUModelRunner.execute_model
+    _orig_pad_for_sequence_parallelism = GPUModelRunner._pad_for_sequence_parallelism
 
     def __init__(
         self,
@@ -131,6 +135,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         else:
             self.use_ulysses = False
 
+        # Intercept Arctic/suffix/mlp_speculator configs so we can manage drafter lifecycle.
         if (vllm_config.speculative_config is not None and
                 vllm_config.speculative_config.method in ("arctic", "suffix", "mlp_speculator")):
             arctic_speculative_config = vllm_config.speculative_config
@@ -139,11 +144,21 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             arctic_speculative_config = None
 
         self._orig_init(vllm_config, device)
-        
-        self._suffix_cache = None
+
+        self._suffix_cache: Optional[SuffixDecodingCache] = None
         if arctic_speculative_config is not None:
             self.vllm_config.speculative_config = arctic_speculative_config
             self.speculative_config = arctic_speculative_config
+
+            self.num_spec_tokens = getattr(self.speculative_config,
+                                           "num_speculative_tokens", 0)
+            self.uniform_decode_query_len = 1 + self.num_spec_tokens
+
+            if self.use_async_scheduling and self.num_spec_tokens:
+                if self.valid_sampled_token_count_event is None:
+                    self.valid_sampled_token_count_event = torch.cuda.Event()
+                if self.valid_sampled_token_count_copy_stream is None:
+                    self.valid_sampled_token_count_copy_stream = torch.cuda.Stream()
 
             if get_pp_group().is_last_rank:
                 if self.speculative_config.method in ("arctic", "mlp_speculator"):
@@ -153,7 +168,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                                      f"{self.speculative_config.method}")
                 else:
                     self.drafter = SuffixProposer()
-                self.rejection_sampler = RejectionSampler()
+                self.rejection_sampler = RejectionSampler(self.sampler)
 
         if (self.speculative_config is not None and
                 self.speculative_config.enable_suffix_decoding):
@@ -167,7 +182,50 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 max_tree_depth=spec_cfg.suffix_cache_max_depth,
                 max_cached_requests=spec_cfg.suffix_cache_max_requests
             )
-            
+
+
+    def _build_attention_metadata(self, *args, **kwargs):
+        attn_metadata, spec_decode_common_attn_metadata = \
+            self._orig_build_attention_metadata(*args, **kwargs)
+
+        logits_indices = kwargs.get("logits_indices", None)
+        if logits_indices is not None:
+            if isinstance(attn_metadata, list):
+                for ub in attn_metadata:
+                    for meta in ub.values():
+                        meta.swiftkv_logits_indices = logits_indices
+            else:
+                for meta in attn_metadata.values():
+                    meta.swiftkv_logits_indices = logits_indices
+
+        return attn_metadata, spec_decode_common_attn_metadata
+
+
+    def _pad_for_sequence_parallelism(self, num_scheduled_tokens: int) -> int:
+        use_shift_model = (
+            getattr(self, "use_ulysses", False)
+            and getattr(self, "shift_model", None) is not None
+            and num_scheduled_tokens <= int(getattr(self, "shift_parallel_threshold", 0))
+        )
+
+        if getattr(self, "use_ulysses", False) and not use_shift_model:
+            sp_size = self.parallel_config.ulysses_sequence_parallel_size
+            num_input_tokens = round_up(num_scheduled_tokens, sp_size)
+
+            if (
+                self.compilation_config.cudagraph_mode != CUDAGraphMode.NONE
+                and hasattr(self, "cudagraph_batch_sizes")
+                and self.cudagraph_batch_sizes
+                and (num_input_tokens // sp_size) <= self.cudagraph_batch_sizes[-1]
+            ):
+                num_input_tokens = (
+                    self.vllm_config.pad_for_cudagraph(num_input_tokens // sp_size) * sp_size
+                )
+
+            return num_input_tokens
+
+        return self._orig_pad_for_sequence_parallelism(num_scheduled_tokens)
+
 
     def profile_run(self) -> None:
         self._orig_profile_run()
@@ -179,27 +237,6 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             finally:
                 self.model = orig_model
 
-    def _prepare_inputs(self, *args, **kwargs):
-        """
-        Forward to upstream _prepare_inputs, then add SwiftKV-specific metadata.
-        """
-        (attn_metadata, logits_indices, spec_decode_metadata,
-         num_scheduled_tokens_np, spec_decode_common_attn_metadata,
-         max_query_len, ubatch_slices, num_tokens_after_padding) = (
-            self._orig_prepare_inputs(*args, **kwargs)
-        )
-
-        if isinstance(attn_metadata, list):
-            for ubatch_attn_metadata in attn_metadata:
-                for meta in ubatch_attn_metadata.values():
-                    meta.swiftkv_logits_indices = logits_indices
-        else:
-            for meta in attn_metadata.values():
-                meta.swiftkv_logits_indices = logits_indices
-
-        return (attn_metadata, logits_indices, spec_decode_metadata,
-                num_scheduled_tokens_np, spec_decode_common_attn_metadata,
-                max_query_len, ubatch_slices, num_tokens_after_padding)
 
     def monkeypatch_forward(self: GPUModelRunner):
         """
@@ -554,244 +591,36 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     ) -> Union[
         ModelRunnerOutput, AsyncGPUModelRunnerOutput, IntermediateTensors
     ]:
-        """
-        This override preserves the upstream execution order but:
-          - wraps input prep with the async fence (fixes hangs),
-          - returns AsyncGPUModelRunnerOutput when async scheduling is enabled,
-          - routes forward() to shift_model when under the threshold,
-          - computes logits with the same model used for forward().
-        """
-        with self.synchronize_input_prep():
-            self._update_states(scheduler_output)
-
-            if not scheduler_output.total_num_scheduled_tokens:
-                if not has_kv_transfer_group():
-                    return EMPTY_MODEL_RUNNER_OUTPUT
-                return self.kv_connector_no_forward(scheduler_output,
-                                                    self.vllm_config)
-
-            (attn_metadata, logits_indices, spec_decode_metadata,
-             num_scheduled_tokens_np, spec_decode_common_attn_metadata,
-             max_query_len, ubatch_slices, num_tokens_after_padding) = (
-                self._prepare_inputs(scheduler_output)
-            )
-
-        num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
+        num_scheduled_tokens = getattr(scheduler_output, "total_num_scheduled_tokens", None)
+        if num_scheduled_tokens is None:
+            try:
+                num_scheduled_tokens = int(
+                    sum(scheduler_output.num_scheduled_tokens.values()) 
+                )
+            except Exception:
+                num_scheduled_tokens = 0
 
         use_shift_model = (
             getattr(self, "use_ulysses", False)
             and getattr(self, "shift_model", None) is not None
-            and num_scheduled_tokens <= self.shift_parallel_threshold
+            and num_scheduled_tokens <= int(getattr(self, "shift_parallel_threshold", 0))
         )
 
-        if self.use_ulysses and not use_shift_model:
-            sp_size = self.parallel_config.ulysses_sequence_parallel_size
-            num_input_tokens = round_up(num_scheduled_tokens, sp_size)
-            if (self.compilation_config.cudagraph_mode != CUDAGraphMode.NONE
-                    and num_input_tokens // sp_size <= self.cudagraph_batch_sizes[-1]):
-                num_input_tokens = (
-                    self.vllm_config.pad_for_cudagraph(num_input_tokens // sp_size) * sp_size
-                )
-        elif (self.compilation_config.cudagraph_mode != CUDAGraphMode.NONE
-              and num_scheduled_tokens <= self.cudagraph_batch_sizes[-1]):
-            num_input_tokens = self.vllm_config.pad_for_cudagraph(
-                num_scheduled_tokens
-            )
-        else:
-            tp_size = self.vllm_config.parallel_config.tensor_parallel_size
-            if (self.compilation_config.pass_config.enable_sequence_parallelism
-                    and tp_size > 1):
-                num_input_tokens = round_up(num_scheduled_tokens, tp_size)
-            else:
-                num_input_tokens = num_scheduled_tokens
+        if not use_shift_model:
+            return self._orig_execute_model(scheduler_output, intermediate_tensors) 
 
-        num_pad, num_tokens_across_dp = self.get_dp_padding(num_input_tokens)
-        num_input_tokens += num_pad
-
-        if self.supports_mm_inputs:
-            self._execute_mm_encoder(scheduler_output)
-            mm_embeds = self._gather_mm_embeddings(scheduler_output)
-        else:
-            mm_embeds = []
-
-        if self.supports_mm_inputs and get_pp_group().is_first_rank:
-            inputs_embeds_scheduled = self.model.get_input_embeddings(
-                input_ids=self.input_ids.gpu[:num_scheduled_tokens],
-                multimodal_embeddings=mm_embeds or None,
-            )
-            self.inputs_embeds.gpu[:num_scheduled_tokens].copy_(
-                inputs_embeds_scheduled
-            )
-            input_ids = None
-            inputs_embeds = self.inputs_embeds.gpu[:num_input_tokens]
-            model_kwargs = {
-                **self._init_model_kwargs(num_scheduled_tokens),
-                **self._extract_mm_kwargs(scheduler_output),
-            }
-        else:
-            input_ids = self.input_ids.gpu[:num_input_tokens]
-            inputs_embeds = None
-            model_kwargs = self._init_model_kwargs(num_input_tokens)
-
-        if (self.model_config.is_encoder_decoder
-                and scheduler_output.scheduled_encoder_inputs):
-            encoder_inputs = self._extract_encoder_inputs(scheduler_output)
-            model_kwargs.update(encoder_inputs)
-
-        if self.uses_mrope:
-            positions = self.mrope_positions.gpu[:, :num_input_tokens]
-        else:
-            positions = self.positions.gpu[:num_input_tokens]
-
-        if get_pp_group().is_first_rank:
-            intermediate_tensors = None
-        else:
-            intermediate_tensors = self.sync_and_slice_intermediate_tensors(
-                num_input_tokens, intermediate_tensors, True
-            )
-
-        uniform_decode = (
-            max_query_len == self.uniform_decode_query_len
-            and num_scheduled_tokens == self.input_batch.num_reqs * max_query_len
-        )
-        batch_descriptor = BatchDescriptor(
-            num_tokens=num_input_tokens, uniform_decode=uniform_decode
-        )
-        cudagraph_runtime_mode, batch_descriptor = \
-            self.cudagraph_dispatcher.dispatch(batch_descriptor)
-
-        if ubatch_slices is not None:
-            num_input_tokens = ubatch_slices[0].num_tokens
-
-        with set_forward_context(
-            attn_metadata,
-            self.vllm_config,
-            num_tokens=num_input_tokens,
-            num_tokens_across_dp=num_tokens_across_dp,
-            cudagraph_runtime_mode=cudagraph_runtime_mode,
-            batch_descriptor=batch_descriptor,
-            ubatch_slices=ubatch_slices,
-        ), self.maybe_get_kv_connector_output(scheduler_output) as kv_connector_output:
-            model = self.shift_model if use_shift_model else self.model
-            with set_shift_parallel_mode(use_shift_model):
-                model_output = model(
-                    input_ids=input_ids,
-                    positions=positions,
-                    intermediate_tensors=intermediate_tensors,
-                    inputs_embeds=inputs_embeds,
-                    **model_kwargs,
-                )
-
-        if self.use_aux_hidden_state_outputs:
-            hidden_states, aux_hidden_states = model_output
-        else:
-            hidden_states = model_output
-            aux_hidden_states = None
-
-        broadcast_pp_output = (
-            self.parallel_config.distributed_executor_backend == "external_launcher"
-            and len(get_pp_group().ranks) > 0
-        )
-
-        if not get_pp_group().is_last_rank:
-            assert isinstance(hidden_states, IntermediateTensors)
-            if not broadcast_pp_output:
-                hidden_states.kv_connector_output = kv_connector_output
-                return hidden_states
-            get_pp_group().send_tensor_dict(
-                hidden_states.tensors,
-                all_gather_group=get_tp_group(),
-            )
-            logits = None
-        else:
-            if self.input_batch.pooling_params:
-                output = self._pool(
-                    hidden_states, num_scheduled_tokens, num_scheduled_tokens_np
-                )
-                output.kv_connector_output = kv_connector_output
-                return output
-
-            sample_hidden_states = hidden_states[logits_indices]
-            with set_shift_parallel_mode(False):
-                logits = self.model.compute_logits(sample_hidden_states)
-
-        if broadcast_pp_output:
-            model_output_broadcast_data = {}
-            if logits is not None:
-                model_output_broadcast_data["logits"] = logits.contiguous()
-            model_output_broadcast_data = get_pp_group().broadcast_tensor_dict(
-                model_output_broadcast_data, src=len(get_pp_group().ranks) - 1
-            )
-            assert model_output_broadcast_data is not None
-            logits = model_output_broadcast_data["logits"]
-
-        if scheduler_output.grammar_bitmask is not None:
-            from vllm.v1.structured_output.utils import apply_grammar_bitmask
-            apply_grammar_bitmask(scheduler_output, self.input_batch,
-                                  logits, self.device)
-
-        with record_function_or_nullcontext("Sample"):
-            sampler_output = self._sample(logits, spec_decode_metadata)
-
-        with record_function_or_nullcontext("Bookkeep"):
-            (
-                num_nans_in_logits,
-                logprobs_lists,
-                valid_sampled_token_ids,
-                prompt_logprobs_dict,
-                req_ids_output_copy,
-                req_id_to_index_output_copy,
-                invalid_req_indices,
-            ) = self._bookkeeping_sync(
-                scheduler_output, sampler_output, logits, hidden_states, num_scheduled_tokens
-            )
-
-        if self._suffix_cache is not None:
-            self._update_suffix_cache(valid_sampled_token_ids)
-
-        sampling_metadata = self.input_batch.sampling_metadata
-
-        if not self.speculative_config:
-            self._draft_token_ids = None
-        else:
-            assert spec_decode_common_attn_metadata is not None
-            self._draft_token_ids = self.propose_draft_token_ids(
-                scheduler_output,
-                valid_sampled_token_ids,
-                sampler_output.sampled_token_ids,
-                sampling_metadata,
-                hidden_states,
-                hidden_states[logits_indices], 
-                aux_hidden_states,
-                spec_decode_metadata,
-                spec_decode_common_attn_metadata,
-            )
-
-        self.eplb_step()
-
-        output = ModelRunnerOutput(
-            req_ids=req_ids_output_copy,
-            req_id_to_index=req_id_to_index_output_copy,
-            sampled_token_ids=valid_sampled_token_ids,
-            logprobs=logprobs_lists,
-            prompt_logprobs_dict=prompt_logprobs_dict,
-            pooler_output=[],
-        )
-
-        if self.use_async_scheduling:
-            return AsyncGPUModelRunnerOutput(
-                model_runner_output=output,
-                sampled_token_ids=sampler_output.sampled_token_ids,
-                invalid_req_indices=invalid_req_indices,
-                async_output_copy_stream=self.async_output_copy_stream,
-            )
-        return output
+        orig_model = self.model
+        try:
+            self.model = self.shift_model
+            with set_shift_parallel_mode(True):
+                return self._orig_execute_model(scheduler_output, intermediate_tensors) 
+        finally:
+            self.model = orig_model
 
     def propose_draft_token_ids(
         self,
         scheduler_output: "SchedulerOutput",
-        sampled_token_ids: list[list[int]],
-        original_sampled_token_ids: Union[np.ndarray, torch.Tensor],
+        sampled_token_ids: Union[list[list[int]], torch.Tensor],
         sampling_metadata: SamplingMetadata,
         hidden_states: torch.Tensor,
         sample_hidden_states: torch.Tensor,
@@ -806,9 +635,51 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         )
         if disable_spec_decode:
             return [[] for _ in sampled_token_ids]
+        
+        spec_token_ids: Optional[list[list[int]]] = None
+        
+        used_async_path = (
+            self.speculative_config.method in ("arctic", "mlp_speculator")
+            and self._suffix_cache is None
+            and isinstance(sampled_token_ids, torch.Tensor)
+            and self.use_async_scheduling
+            and common_attn_metadata is not None
+        )
+
+        if used_async_path:
+            # --- Arctic GPU fast path (pre-bookkeeping) ---
+            next_token_ids, valid_sampled_tokens_count = (
+                self.drafter.prepare_next_token_ids_padded(
+                    common_attn_metadata,
+                    sampled_token_ids,
+                    self.requests,
+                    self.input_batch,
+                    self.discard_request_mask.gpu,
+                )
+            )
+            self._copy_valid_sampled_token_count(
+                next_token_ids, valid_sampled_tokens_count
+            )
+
+            target_hidden_states = self.drafter.prepare_hidden_states(
+                sample_hidden_states=sample_hidden_states,
+                sampled_token_ids=sampled_token_ids,
+                spec_decode_metadata=spec_decode_metadata,
+            )
+
+            spec_token_ids = self.propose_arctic_draft_from_next_tokens(
+                next_token_ids=next_token_ids,
+                previous_hidden_states=target_hidden_states,
+            ) 
+
+            return spec_token_ids       
 
         suffix_spec_token_ids = None
         new_sampled_token_ids = sampled_token_ids.copy()
+
+        if self._suffix_cache is not None and isinstance(new_sampled_token_ids, list):
+            self._update_suffix_cache(new_sampled_token_ids)
+            
         if self._suffix_cache is not None:
             results = self.propose_suffix_draft_token_ids(new_sampled_token_ids)
             suffix_spec_token_ids = []
@@ -821,21 +692,20 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 else:
                     suffix_spec_token_ids.append([])
 
-        spec_token_ids = None
         if self.speculative_config.method == "suffix":
             pass
         elif self.speculative_config.method in ("arctic", "mlp_speculator"):
             assert isinstance(self.drafter, ArcticProposer)
-            if isinstance(original_sampled_token_ids, np.ndarray):
-                original_sampled_token_ids_tensor = torch.from_numpy(
-                    original_sampled_token_ids
+            if isinstance(sampled_token_ids, np.ndarray):
+                sampled_token_ids_tensor = torch.from_numpy(
+                    sampled_token_ids
                 ).to(self.device)
             else:
-                original_sampled_token_ids_tensor = original_sampled_token_ids
+                sampled_token_ids_tensor = sampled_token_ids
 
             previous_hidden_states = self.drafter.prepare_hidden_states(
                 sample_hidden_states=sample_hidden_states,
-                sampled_token_ids=original_sampled_token_ids_tensor,
+                sampled_token_ids=sampled_token_ids_tensor,
                 spec_decode_metadata=spec_decode_metadata,
             )
             spec_token_ids = self.propose_arctic_draft_token_ids(
@@ -865,20 +735,46 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         return spec_token_ids
 
+    def propose_arctic_draft_from_next_tokens(
+        self,
+        next_token_ids: torch.Tensor,                 # [B] device
+        previous_hidden_states: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        """
+        Fast pre-bookkeeping Arctic path:
+        - next_token_ids are computed on device (no CPU sync)
+        - produce a torch tensor stacked on dim 1
+
+        TODO: handle corner cases like max length reached
+        """
+        assert isinstance(self.drafter, ArcticProposer)
+
+        max_spec_tokens = self.speculative_config.num_speculative_tokens
+
+        drafter_output = self.drafter.propose(
+            context_token_ids=next_token_ids,                 
+            previous_hidden_states=previous_hidden_states,    
+            num_predict_tokens=max_spec_tokens,
+        )
+
+        # [batch_size, num_speculative_tokens]
+        return drafter_output
+
     def propose_arctic_draft_token_ids(
         self,
         scheduler_output: "SchedulerOutput",
         sampled_token_ids: list[list[int]],
         previous_hidden_states: Optional[torch.Tensor] = None,
     ) -> list[list[int]]:
-        last_tokens = []
+        last_tokens: list[Optional[int]] = []
         max_spec_tokens = self.speculative_config.num_speculative_tokens
         for i, sampled_ids in enumerate(sampled_token_ids):
             num_sampled_ids = len(sampled_ids)
 
             if num_sampled_ids == 0:
                 if self.speculative_config.enable_suffix_decoding:
-                    return [[]] * len(sampled_token_ids)
+                    # Avoid aliased inner lists
+                    return [[] for _ in range(len(sampled_token_ids))]
                 req_id = self.input_batch.req_ids[i]
                 req_state = self.requests[req_id]
                 seq_len = (req_state.num_computed_tokens +
@@ -928,7 +824,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         )
 
         draft_token_ids_list = drafter_output.tolist()
-        final_draft_token_ids = []
+        final_draft_token_ids: list[list[int]] = []
         draft_iter = iter(draft_token_ids_list)
         for t in last_tokens:
             if t is not None:
@@ -1000,6 +896,152 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         return results
 
+
+    @torch.inference_mode
+    def sample_tokens(
+        self, grammar_output: "GrammarOutput | None"
+    ) -> Union[ModelRunnerOutput, AsyncGPUModelRunnerOutput, IntermediateTensors]:
+        kv_connector_output = self.kv_connector_output
+        self.kv_connector_output = None
+
+        if self.execute_model_state is None:
+            # Nothing to do (PP non-final rank case), output isn't used.
+            if not kv_connector_output:
+                return None  # noqa
+
+            # In case of PP with kv transfer, we need to pass through the
+            # kv_connector_output
+            if kv_connector_output.is_empty():
+                return EMPTY_MODEL_RUNNER_OUTPUT
+
+            output = copy(EMPTY_MODEL_RUNNER_OUTPUT)
+            output.kv_connector_output = kv_connector_output
+            return output
+
+        # Unpack ephemeral state.
+        (
+            scheduler_output,
+            logits,
+            spec_decode_metadata,
+            spec_decode_common_attn_metadata,
+            hidden_states,
+            sample_hidden_states,
+            aux_hidden_states,
+            ec_connector_output,
+            cudagraph_stats,  # Fix: Unpack cudagraph_stats
+        ) = self.execute_model_state
+        # Clear ephemeral state.
+        self.execute_model_state = None
+
+        # Apply structured output bitmasks if present.
+        if grammar_output is not None:
+            apply_grammar_bitmask(
+                scheduler_output, grammar_output, self.input_batch, logits
+            )
+
+        with record_function_or_nullcontext("gpu_model_runner: sample"):
+            sampler_output = self._sample(logits, spec_decode_metadata)
+
+        self.input_batch.prev_sampled_token_ids = None
+
+        def propose_draft_token_ids(
+            sampled_token_ids: torch.Tensor | list[np.ndarray],
+        ) -> None:
+            assert spec_decode_common_attn_metadata is not None
+            with record_function_or_nullcontext("gpu_model_runner: draft"):
+                self._draft_token_ids = self.propose_draft_token_ids(
+                    scheduler_output,
+                    sampled_token_ids,
+                    self.input_batch.sampling_metadata,
+                    hidden_states,
+                    sample_hidden_states,
+                    aux_hidden_states,
+                    spec_decode_metadata,
+                    spec_decode_common_attn_metadata,
+                )
+
+        use_async_sched_for_arctic = (
+            self.use_async_scheduling
+            and self.speculative_config
+            and self.speculative_config.method in ("arctic", "mlp_speculator")
+        )
+
+        # For arctic spec decoding, it can treat arbitrary input lengths
+        input_fits_in_drafter = spec_decode_common_attn_metadata and True
+        sampled_token_ids = sampler_output.sampled_token_ids
+        if use_async_sched_for_arctic:
+            if input_fits_in_drafter:
+                propose_draft_token_ids(sampled_token_ids)
+
+        with record_function_or_nullcontext("gpu_model_runner: bookkeep"):
+            (
+                num_nans_in_logits,
+                logprobs_lists,
+                valid_sampled_token_ids,
+                prompt_logprobs_dict,
+                req_ids_output_copy,
+                req_id_to_index_output_copy,
+                invalid_req_indices,
+            ) = self._bookkeeping_sync(
+                scheduler_output,
+                sampler_output,
+                logits,
+                hidden_states,
+                scheduler_output.total_num_scheduled_tokens,
+                spec_decode_metadata,
+            )
+
+        if (
+            self.speculative_config
+            and not use_async_sched_for_arctic
+            and input_fits_in_drafter
+        ):
+            propose_draft_token_ids(valid_sampled_token_ids)
+
+        with record_function_or_nullcontext("gpu_model_runner: eplb"):
+            self.eplb_step()
+        with record_function_or_nullcontext("gpu_model_runner: ModelRunnerOutput"):
+            output = ModelRunnerOutput(
+                req_ids=req_ids_output_copy,
+                req_id_to_index=req_id_to_index_output_copy,
+                sampled_token_ids=valid_sampled_token_ids,
+                logprobs=logprobs_lists,
+                prompt_logprobs_dict=prompt_logprobs_dict,
+                pooler_output=[],
+                kv_connector_output=kv_connector_output,
+                ec_connector_output=ec_connector_output
+                if self.supports_mm_inputs
+                else None,
+                num_nans_in_logits=num_nans_in_logits,
+                cudagraph_stats=cudagraph_stats,  # Fix: Pass cudagraph_stats to output
+            )
+
+        if not self.use_async_scheduling:
+            return output
+        with record_function_or_nullcontext(
+            "gpu_model_runner: AsyncGPUModelRunnerOutput"
+        ):
+            async_output = AsyncGPUModelRunnerOutput(
+                model_runner_output=output,
+                sampled_token_ids=sampler_output.sampled_token_ids,
+                logprobs_tensors=sampler_output.logprobs_tensors,
+                invalid_req_indices=invalid_req_indices,
+                async_output_copy_stream=self.async_output_copy_stream,
+                vocab_size=self.input_batch.vocab_size,
+            )
+        with record_function_or_nullcontext(
+            "gpu_model_runner: set_async_sampled_token_ids"
+        ):
+            # Save ref of sampled_token_ids CPU tensor if the batch contains
+            # any requests with sampling params that require output ids.
+            self.input_batch.set_async_sampled_token_ids(
+                async_output.sampled_token_ids_cpu,
+                async_output.async_copy_ready_event,
+            )
+
+        return async_output
+
+
     def load_model(self, eep_scale_up: bool = False) -> None:
         load_shift_model = (
             self.vllm_config.parallel_config.enable_shift_parallel
@@ -1033,62 +1075,83 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             self.shift_model = None
             self.shift_parallel_threshold = 0
 
-    def _capture_cudagraphs(self, compilation_cases: list[int],
+    from vllm.forward_context import BatchDescriptor
+    def _case_bs(self, case) -> int:
+        # vLLM can pass ints, tuples, or sometimes BatchDescriptor-like objects
+        if isinstance(case, int):
+            return case
+        if isinstance(case, BatchDescriptor):
+            return int(case.num_tokens)
+        if isinstance(case, tuple):
+            return int(case[0])
+        # last resort
+        return int(getattr(case, "num_tokens"))
+
+    def _with_bs(self, case, new_bs: int):
+        if isinstance(case, tuple):
+            return (new_bs, *case[1:])
+        if isinstance(case, BatchDescriptor):
+            # Best-effort reconstruction; adjust if your BatchDescriptor signature differs.
+            return BatchDescriptor(
+                num_tokens=new_bs,
+                num_reqs=case.num_reqs,
+                uniform=case.uniform,
+                has_lora=case.has_lora,
+            )
+        return new_bs
+
+
+    def _capture_cudagraphs(self, compilation_cases,
                             cudagraph_runtime_mode: CUDAGraphMode,
                             uniform_decode: bool):
         """
         Capture CUDA graphs for both base (SP) and shift (TP) variants, splitting
         shapes by threshold so both models have required graphs captured.
         """
-        # make sure it is a valid mode
         assert cudagraph_runtime_mode != CUDAGraphMode.NONE and \
             cudagraph_runtime_mode in [CUDAGraphMode.FULL, CUDAGraphMode.PIECEWISE]
 
         sp_size = parallel_state._SP.world_size
         tp_size = parallel_state._TP.world_size
 
-        # capture shapes for the base model
-        compilation_cases_base = [
-            min(shape * sp_size, self.max_num_tokens)
-            for shape in compilation_cases
-            if shape * sp_size > self.shift_parallel_threshold
-        ]
-        # filter again for FULL mode
-        if cudagraph_runtime_mode == CUDAGraphMode.FULL:
-            compilation_cases_base = [shape for shape in compilation_cases_base if
-                                      shape <= self.scheduler_config.max_num_seqs]
+        # Base model (SP): scale only the batch-size field.
+        compilation_cases_base = []
+        for case in compilation_cases:
+            bs = self._case_bs(case)
+            scaled_bs = min(bs * sp_size, self.max_num_tokens)
+            if scaled_bs > int(getattr(self, "shift_parallel_threshold", 0)):
+                compilation_cases_base.append(self._with_bs(case, scaled_bs))
 
         if is_global_first_rank():
-            logger.info(f"base model (SP={sp_size}, TP={tp_size}) shapes {compilation_cases_base}, cudagraph mode {cudagraph_runtime_mode}")
+            logger.info(
+                "base model (SP=%s, TP=%s) shapes %s",
+                sp_size, tp_size, [ self._case_bs(c) for c in compilation_cases_base ]
+            )
 
-        # capture the base model graphs
         if compilation_cases_base:
             self._orig_capture_cudagraphs(
                 compilation_cases_base, cudagraph_runtime_mode, uniform_decode
             )
 
+        # Shift model (SP*TP but configured as TP-only variant in your routing):
         if getattr(self, "shift_model", None) is not None:
-
-            # capture shapes for the shift model
-            compilation_cases_shift = [
-                shape for shape in compilation_cases
-                if shape <= self.shift_parallel_threshold
-                or "SwiftKV" in self.model.__class__.__name__
-            ]
-            # filter again for FULL mode
-            if cudagraph_runtime_mode == CUDAGraphMode.FULL:
-                compilation_cases_shift = [shape for shape in compilation_cases_shift if
-                                           shape <= self.scheduler_config.max_num_seqs]
+            compilation_cases_shift = []
+            for case in compilation_cases:
+                bs = self._case_bs(case)
+                if (bs <= int(getattr(self, "shift_parallel_threshold", 0))
+                        or "SwiftKV" in self.model.__class__.__name__):
+                    compilation_cases_shift.append(case)
 
             if is_global_first_rank():
-                logger.info(f"shift model (SPxTP={sp_size * tp_size}) shapes {compilation_cases_shift}, cudagraph mode {cudagraph_runtime_mode}")
+                logger.info(
+                    "shift model (SPxTP=%s) shapes %s",
+                    sp_size * tp_size, [ self._case_bs(c) for c in compilation_cases_shift ]
+                )
 
-            # capture the shift model graphs
             if compilation_cases_shift:
                 orig_model, self.model = self.model, self.shift_model
                 try:
                     with set_shift_parallel_mode(True):
-                        # capture the shift model graphs
                         self._orig_capture_cudagraphs(
                             compilation_cases_shift, cudagraph_runtime_mode, uniform_decode
                         )
@@ -1106,7 +1169,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             forward_context = self.vllm_config.compilation_config.static_forward_context
 
             try:
-                from vllm.attention import Attention
+                from vllm.model_executor.layers.attention import Attention
                 for mod in self.shift_model.modules():
                     if isinstance(mod, Attention):
                         if hasattr(mod, "layer_name"):

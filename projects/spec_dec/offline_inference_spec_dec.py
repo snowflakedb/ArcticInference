@@ -17,7 +17,8 @@ import vllm
 from vllm import LLM, SamplingParams
 
 import os
-os.environ["VLLM_USE_V1"] = "1"
+os.environ["ARCTIC_INFERENCE_ENABLED"] = "1"
+#os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
 
 vllm.plugins.load_general_plugins()
 
@@ -32,6 +33,8 @@ llm = LLM(
         "enable_suffix_decoding": True,
         "disable_by_batch_size": 64,
     },
+    #enforce_eager=True,
+    #async_scheduling=True,
     seed=0,
 )
 
