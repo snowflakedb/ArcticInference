@@ -1,8 +1,9 @@
-The patch allows running datasets in the following form:
+The patch allows running datasets with the following json format:
 ```jsonl
 {"timestamp": 15, "input_length": 1000, "output_length": 128}
+...
 ```
-where each line corresponds to a request with random prompt to be sent at 15 milliseconds from t = 0.
+where each line corresponds to a request with random prompt to be sent at the timestamp (in ms) from t = 0.
 
 The patch is applied as
 ```

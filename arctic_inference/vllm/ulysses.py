@@ -407,6 +407,9 @@ class UlyssesMultiprocExecutor(ArcticPatch[MultiprocExecutor]):
         context = get_mp_context()
         shared_worker_lock = context.Lock()
         unready_workers: list[UnreadyWorkerProcHandle] = []
+        from vllm.utils import get_mp_context
+        context = get_mp_context()
+        shared_worker_lock = context.Lock()
         success = False
         try:
             global_start_rank = (
