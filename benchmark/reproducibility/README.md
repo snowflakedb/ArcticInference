@@ -33,10 +33,11 @@ huggingface-cli download Qwen/Qwen3-32B-FP8 --local-dir Qwen/Qwen3-32B-FP8
 ```
 
 ### Step 2: Install ArcticInference
-
+Checkout to the right commit for v0.10.1.
 ```console
 git clone https://github.com/snowflakedb/ArcticInference.git
 cd ArcticInference
+git checkout d096fdf
 pip install .
 ```
 
