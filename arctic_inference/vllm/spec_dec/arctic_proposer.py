@@ -204,7 +204,7 @@ class ArcticProposer:
         return next_tokens
 
 
-    def prepare_next_token_ids_padded(
+    def prepare_next_token_ids_cpu(
         self,
         common_attn_metadata: CommonAttentionMetadata,
         sampled_token_ids: torch.Tensor,
@@ -213,7 +213,7 @@ class ArcticProposer:
         discard_request_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         from vllm.v1.spec_decode.eagle import EagleProposer
-        return EagleProposer.prepare_next_token_ids_padded(
+        return EagleProposer.prepare_next_token_ids_cpu(
             self,
             common_attn_metadata,
             sampled_token_ids,
