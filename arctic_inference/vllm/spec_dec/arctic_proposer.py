@@ -204,7 +204,6 @@ class ArcticProposer:
         return next_tokens
 
 
-    @torch.inference_mode()
     def prepare_next_token_ids_padded(
         self,
         common_attn_metadata: CommonAttentionMetadata,
@@ -213,31 +212,33 @@ class ArcticProposer:
         gpu_input_batch: InputBatch,
         discard_request_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        num_reqs = gpu_input_batch.num_reqs
-        self.backup_next_token_ids.np[:num_reqs] = np.array(
-            [
-                requests[gpu_input_batch.req_ids[i]].get_token_id(
-                    common_attn_metadata.seq_lens_cpu[i].item()
-                )
-                for i in range(num_reqs)
-            ],
-            dtype=np.int32,
-        )
-        self.backup_next_token_ids.copy_to_gpu(num_reqs)
-        backup_tokens_gpu = self.backup_next_token_ids.gpu
-
-        batch_size, num_tokens = sampled_token_ids.shape
-        device = sampled_token_ids.device
-
-        assert discard_request_mask.dtype == torch.bool
-        assert backup_tokens_gpu.dtype == torch.int32
-
-        next_token_ids = torch.empty((batch_size,), dtype=torch.int32, device=device)
-        valid_sampled_tokens_count = torch.empty(
-            (batch_size,), dtype=torch.int32, device=device
+        from vllm.v1.spec_decode.eagle import EagleProposer
+        return EagleProposer.prepare_next_token_ids_padded(
+            self,
+            common_attn_metadata,
+            sampled_token_ids,
+            requests,
+            gpu_input_batch,
+            discard_request_mask,
         )
 
-        return next_token_ids, valid_sampled_tokens_count
+    def prepare_next_token_ids_padded(
+        self,
+        common_attn_metadata: CommonAttentionMetadata,
+        sampled_token_ids: torch.Tensor,
+        requests: dict[str, CachedRequestState],
+        gpu_input_batch: InputBatch,
+        discard_request_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        from vllm.v1.spec_decode.eagle import EagleProposer
+        return EagleProposer.prepare_next_token_ids_padded(
+            self,
+            common_attn_metadata,
+            sampled_token_ids,
+            requests,
+            gpu_input_batch,
+            discard_request_mask,
+        )
 
 
 class SuffixProposer:

@@ -18,7 +18,7 @@ from vllm import LLM, SamplingParams
 
 import os
 os.environ["ARCTIC_INFERENCE_ENABLED"] = "1"
-#os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "4,5"
 
 vllm.plugins.load_general_plugins()
 
@@ -33,8 +33,8 @@ llm = LLM(
         "enable_suffix_decoding": True,
         "disable_by_batch_size": 64,
     },
-    #enforce_eager=True,
-    #async_scheduling=True,
+    enforce_eager=False,
+    async_scheduling=True,
     seed=0,
 )
 

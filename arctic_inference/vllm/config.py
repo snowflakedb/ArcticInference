@@ -82,21 +82,18 @@ class SpeculativeConfigPatch(ArcticPatch[SpeculativeConfig]):
     _orig_post_init = SpeculativeConfig.__post_init__
 
     def __new__(cls, *args, **kwargs):
-        # Override __new__ to return an ArcticSpeculativeConfig instead of a
-        # SpeculativeConfig when creating a new instance of the class.
         if cls is SpeculativeConfig:
             return ArcticSpeculativeConfig.__new__(ArcticSpeculativeConfig,
                                                    *args, **kwargs)
         return super(SpeculativeConfig, cls).__new__(cls)
 
     def __post_init__(self):
-        use_suffix = (self.method
-                      == "suffix") or (self.method is None
-                                       and self.enable_suffix_decoding)
-        use_hybrid = (self.method == "arctic"
-                      and self.enable_suffix_decoding)
-        if (use_suffix or self.method == "arctic") and \
-            self.disable_by_batch_size is None:
+        is_arctic_method = self.method in ("arctic", "mlp_speculator")
+        use_suffix = (self.method == "suffix") or (self.method is None 
+                                                   and self.enable_suffix_decoding)
+        use_hybrid = (self.method == "arctic" and self.enable_suffix_decoding)
+
+        if (use_suffix or is_arctic_method) and self.disable_by_batch_size is None:
             logger.info("Defaulting disable_by_batch_size to 64")
             self.disable_by_batch_size = 64
 
@@ -108,6 +105,20 @@ class SpeculativeConfigPatch(ArcticPatch[SpeculativeConfig]):
             self.enable_suffix_decoding = True
             self.num_speculative_tokens = self.suffix_cache_max_depth
             self._verify_args()
+            return 
+
+        if is_arctic_method:
+            actual_draft_model = getattr(self, "draft_model", None)
+            
+            self.draft_model = None 
+            
+            try:
+                self._orig_post_init()
+            finally:
+                self.draft_model = actual_draft_model
+            
+            if self.num_speculative_tokens == 0:
+                self.num_speculative_tokens = getattr(self, "num_lookahead_slots", 1)
         else:
             self._orig_post_init()
 
@@ -154,3 +165,16 @@ class MLPSpeculatorConfigPatch(ArcticPatch[MLPSpeculatorConfig]):
     def __init__(self, *args, **kwargs):
         self.base_model_arch = kwargs.pop("base_model_arch", "")
         self._orig_init(*args, **kwargs)
+
+        # Inject dummy attributes required by vLLM's ModelArchConfigConvertor
+        # The convertor tries to calculate head_size = hidden_size // num_attention_heads
+        if not hasattr(self, "num_attention_heads"):
+            self.num_attention_heads = 1
+        
+        if not hasattr(self, "hidden_size"):
+            # Fallback to n_embd if present, otherwise default to a safe dummy value
+            self.hidden_size = getattr(self, "n_embd", 1024)
+
+        # Ensure hidden_size is an integer to prevent TypeError during division
+        if hasattr(self, "hidden_size"):
+            self.hidden_size = int(self.hidden_size)

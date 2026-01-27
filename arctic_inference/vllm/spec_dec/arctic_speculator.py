@@ -440,11 +440,24 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
         self.n_predict = config.n_predict
         self.vocab_size = config.vocab_size
         self.input_hidden_dim = config.input_hidden_dim
-        config.inner_dim = [int(i) for i in config.inner_dim.split(".")]
+
+        def _parse_dim(value):
+            """Helper to normalize dimension config into a list of ints."""
+            if isinstance(value, str):
+                return [int(i) for i in value.split(".")]
+            elif isinstance(value, int):
+                return [value]
+            elif isinstance(value, list):
+                return [int(i) for i in value]
+            return value
+
+        config.inner_dim = _parse_dim(config.inner_dim)
         self.inner_dim = config.inner_dim
-        config.emb_dim = [int(i) for i in config.emb_dim.split(".")]
-        self.emb_dim = config.emb_dim
-        config.proj_dim = [int(i) for i in config.proj_dim.split(".")]
+
+        config.emb_dim = _parse_dim(config.emb_dim)
+        self.emb_dim = config.emb_dim 
+
+        config.proj_dim = _parse_dim(config.proj_dim)
         self.proj_dim = config.proj_dim
 
         self.max_speculative_tokens = config.num_lookahead_tokens

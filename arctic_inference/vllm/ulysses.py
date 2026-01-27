@@ -343,17 +343,6 @@ class UlyssesWorkerProc(ArcticPatch[WorkerProc]):
 class UlyssesMultiprocExecutor(ArcticPatch[MultiprocExecutor]):
 
     def _init_executor(self) -> None:
-
-        
-        assert (self.world_size ==
-                tensor_parallel_size * pp_parallel_size * sp_parallel_size), (
-            f"world_size ({self.world_size}) must be equal to the "
-            f"tensor_parallel_size ({tensor_parallel_size}) x pipeline"
-            f"_parallel_size ({pp_parallel_size}) x ulysses_sequence_parallel"
-            f"_size ({sp_parallel_size}).")
-
-
-    def _init_executor(self) -> None:
         # Call self.shutdown at exit to clean up
         # and ensure workers will be terminated.
         self._finalizer = weakref.finalize(self, self.shutdown)
@@ -403,13 +392,13 @@ class UlyssesMultiprocExecutor(ArcticPatch[MultiprocExecutor]):
                 connect_ip=self.parallel_config.master_addr,
             )
             scheduler_output_handle = self.rpc_broadcast_mq.export_handle()
+        
         # Create workers
+        # FIX: Removed duplicate initialization and local import that caused UnboundLocalError
         context = get_mp_context()
         shared_worker_lock = context.Lock()
         unready_workers: list[UnreadyWorkerProcHandle] = []
-        from vllm.utils import get_mp_context
-        context = get_mp_context()
-        shared_worker_lock = context.Lock()
+        
         success = False
         try:
             global_start_rank = (
