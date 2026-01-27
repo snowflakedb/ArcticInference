@@ -830,7 +830,6 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         propose_drafts_after_bookkeeping = False
         if use_async_sched_for_arctic:
             if input_fits_in_drafter:
-                print("input_fits_in_drafter=True and sampled_token_ids:", sampled_token_ids)
                 propose_draft_token_ids(sampled_token_ids)
 
         with record_function_or_nullcontext("gpu_model_runner: bookkeep"):
