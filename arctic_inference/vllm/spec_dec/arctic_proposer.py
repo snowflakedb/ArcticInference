@@ -203,24 +203,34 @@ class ArcticProposer:
         )
         return next_tokens
 
-
+    # Borrow from eagle
     def prepare_next_token_ids_cpu(
         self,
-        common_attn_metadata: CommonAttentionMetadata,
-        sampled_token_ids: torch.Tensor,
+        sampled_token_ids: list[list[int]],
         requests: dict[str, CachedRequestState],
         gpu_input_batch: InputBatch,
-        discard_request_mask: torch.Tensor,
+        num_scheduled_tokens: dict[str, int],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        from vllm.v1.spec_decode.eagle import EagleProposer
-        return EagleProposer.prepare_next_token_ids_cpu(
-            self,
-            common_attn_metadata,
-            sampled_token_ids,
-            requests,
-            gpu_input_batch,
-            discard_request_mask,
+        req_ids = gpu_input_batch.req_ids
+        next_token_ids: list[int] = []
+        for i, token_ids in enumerate(sampled_token_ids):
+            if token_ids:
+                # Common case.
+                next_token_id = token_ids[-1]
+            else:
+                # Partial prefill (rare case).
+                # Get the next token id from the request state.
+                req_id = req_ids[i]
+                req_state = requests[req_id]
+                seq_len = req_state.num_computed_tokens + num_scheduled_tokens[req_id]
+                next_token_id = req_state.get_token_id(seq_len)
+            next_token_ids.append(next_token_id)
+        print("self.device:", self.device)
+        next_token_ids = torch.tensor(
+            next_token_ids, dtype=torch.int32, device=self.device
         )
+        return next_token_ids
+
 
     def prepare_next_token_ids_padded(
         self,
@@ -230,15 +240,50 @@ class ArcticProposer:
         gpu_input_batch: InputBatch,
         discard_request_mask: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        from vllm.v1.spec_decode.eagle import EagleProposer
-        return EagleProposer.prepare_next_token_ids_padded(
-            self,
-            common_attn_metadata,
-            sampled_token_ids,
-            requests,
-            gpu_input_batch,
-            discard_request_mask,
+        from vllm.triton_utils import triton
+        from vllm.v1.spec_decode.utils import eagle_prepare_next_token_padded_kernel
+        
+        num_reqs = gpu_input_batch.num_reqs
+        self.backup_next_token_ids.np[:num_reqs] = np.array(
+            [
+                requests[gpu_input_batch.req_ids[i]].get_token_id(
+                    common_attn_metadata.seq_lens_cpu[i].item()
+                )
+                for i in range(num_reqs)
+            ],
+            dtype=np.int32,
         )
+        self.backup_next_token_ids.copy_to_gpu(num_reqs)
+        backup_tokens_gpu = self.backup_next_token_ids.gpu
+
+        batch_size, num_tokens = sampled_token_ids.shape
+        device = sampled_token_ids.device
+
+        assert discard_request_mask.dtype == torch.bool
+        assert backup_tokens_gpu.dtype == torch.int32
+
+        next_token_ids = torch.empty(batch_size, dtype=torch.int32, device=device)
+        valid_sampled_tokens_count = next_token_ids.new_empty(batch_size)
+
+        # Kernel grid: one program per request (row)
+        grid = (batch_size,)
+
+        # Find the next power of 2 for block sizes
+        BLOCK_SIZE_TOKENS = triton.next_power_of_2(num_tokens)
+        eagle_prepare_next_token_padded_kernel[grid](
+            sampled_token_ids,
+            discard_request_mask,
+            backup_tokens_gpu,
+            next_token_ids,
+            valid_sampled_tokens_count,
+            gpu_input_batch.vocab_size,
+            num_tokens,
+            batch_size,
+            sampled_token_ids.stride(0),
+            BLOCK_SIZE_TOKENS=BLOCK_SIZE_TOKENS,
+        )
+
+        return next_token_ids, valid_sampled_tokens_count
 
 
 class SuffixProposer:
