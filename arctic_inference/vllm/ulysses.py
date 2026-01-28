@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from collections import deque
 from collections.abc import Callable
 from typing import Optional, Any
+from itertools import product
 
 import torch
 import vllm.distributed.parallel_state as parallel_state

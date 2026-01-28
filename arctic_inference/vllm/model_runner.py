@@ -121,13 +121,14 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     ):
         if vllm_config.parallel_config.ulysses_sequence_parallel_size > 1:
             self.use_ulysses = True
-            pass_config = vllm_config.compilation_config.pass_config
-            if pass_config.enable_sequence_parallelism:
-                raise ValueError(
-                    "Ulysses sequence parallelism is incompatible with native "
-                    "sequence parallelism. Set enable_sequence_parallelism "
-                    "to False in the pass config to use Ulysses."
-                )
+            # pass_config = vllm_config.compilation_config.pass_config
+            # print(f"pass_config: {pass_config}")
+            # if pass_config.enable_sequence_parallelism:
+            #     raise ValueError(
+            #         "Ulysses sequence parallelism is incompatible with native "
+            #         "sequence parallelism. Set enable_sequence_parallelism "
+            #         "to False in the pass config to use Ulysses."
+            #     )
         else:
             self.use_ulysses = False
 
@@ -276,7 +277,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 output = model_forward(*args, **kwargs)
 
             if output.size(0) == N_ulysses:
-                model_output = torch.empty((N, self.hidden_size),
+                model_output = torch.empty((N, output.shape[1]),
                                            dtype=output.dtype,
                                            device=output.device)
                 torch.distributed.all_gather_into_tensor(model_output,
