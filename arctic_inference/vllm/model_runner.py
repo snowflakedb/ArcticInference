@@ -121,14 +121,13 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     ):
         if vllm_config.parallel_config.ulysses_sequence_parallel_size > 1:
             self.use_ulysses = True
-            # pass_config = vllm_config.compilation_config.pass_config
-            # print(f"pass_config: {pass_config}")
-            # if pass_config.enable_sequence_parallelism:
-            #     raise ValueError(
-            #         "Ulysses sequence parallelism is incompatible with native "
-            #         "sequence parallelism. Set enable_sequence_parallelism "
-            #         "to False in the pass config to use Ulysses."
-            #     )
+            pass_config = vllm_config.compilation_config.pass_config
+            if pass_config.enable_sp:
+                raise ValueError(
+                    "Ulysses sequence parallelism is incompatible with native "
+                    "sequence parallelism. Set enable_sequence_parallelism "
+                    "to False in the pass config to use Ulysses."
+                )
         else:
             self.use_ulysses = False
 
@@ -215,32 +214,6 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         return attn_metadata, spec_decode_common_attn_metadata
 
 
-    def _pad_for_sequence_parallelism(self, num_scheduled_tokens: int) -> int:
-        use_shift_model = (
-            getattr(self, "use_ulysses", False)
-            and getattr(self, "shift_model", None) is not None
-            and num_scheduled_tokens <= int(getattr(self, "shift_parallel_threshold", 0))
-        )
-
-        if getattr(self, "use_ulysses", False) and not use_shift_model:
-            sp_size = self.parallel_config.ulysses_sequence_parallel_size
-            num_input_tokens = round_up(num_scheduled_tokens, sp_size)
-
-            if (
-                self.compilation_config.cudagraph_mode != CUDAGraphMode.NONE
-                and hasattr(self, "cudagraph_batch_sizes")
-                and self.cudagraph_batch_sizes
-                and (num_input_tokens // sp_size) <= self.cudagraph_batch_sizes[-1]
-            ):
-                num_input_tokens = (
-                    self.vllm_config.pad_for_cudagraph(num_input_tokens // sp_size) * sp_size
-                )
-
-            return num_input_tokens
-
-        return self._orig_pad_for_sequence_parallelism(num_scheduled_tokens)
-
-
     def profile_run(self) -> None:
         self._orig_profile_run()
         if getattr(self, "shift_model", None) is not None:
@@ -270,6 +243,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             N_ulysses = N // sp_size
             N_offset = N_ulysses * sp_rank
 
+            if torch.distributed.get_rank() == 0:
+                print(f"N {N}, N_ulysses {N_ulysses}")
+
             kwargs[input_key] = input_tensor[N_offset:N_offset + N_ulysses]
             kwargs['positions'] = positions[N_offset:N_offset + N_ulysses]
 
@@ -294,7 +270,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     def _dummy_run(
         self,
         num_tokens: int,
-        cudagraph_runtime_mode: Optional[CUDAGraphMode] = None,
+        cudagraph_runtime_mode: CUDAGraphMode | None = None,
         force_attention: bool = False,
         uniform_decode: bool = False,
         allow_microbatching: bool = True,
@@ -333,6 +309,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         num_scheduled_tokens = np.array(num_scheduled_tokens_list, dtype=np.int32)
         num_tokens_unpadded = int(num_scheduled_tokens.sum())
         num_sampled_tokens = np.ones(num_reqs, dtype=np.int32)
+
+        if torch.distributed.get_rank() == 0:
+            print(f"num_tokens_unpadded: {num_tokens_unpadded}, num_reqs: {num_reqs}")
 
         _cg_mode, batch_desc, should_ubatch, num_tokens_across_dp, _ = (
             self._determine_batch_execution_and_padding(
@@ -943,6 +922,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             self.shift_model = None
             self.shift_parallel_threshold = 0
 
+
     from vllm.forward_context import BatchDescriptor
     def _case_bs(self, case) -> int:
         # vLLM can pass ints, tuples, or sometimes BatchDescriptor-like objects
@@ -969,9 +949,12 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         return new_bs
 
 
-    def _capture_cudagraphs(self, compilation_cases,
-                            cudagraph_runtime_mode: CUDAGraphMode,
-                            uniform_decode: bool):
+    def _capture_cudagraphs(
+        self,
+        compilation_cases: list[tuple[int, bool]],
+        cudagraph_runtime_mode: CUDAGraphMode,
+        uniform_decode: bool,
+    ):
         """
         Capture CUDA graphs for both base (SP) and shift (TP) variants, splitting
         shapes by threshold so both models have required graphs captured.
@@ -981,6 +964,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         sp_size = parallel_state._SP.world_size
         tp_size = parallel_state._TP.world_size
+
+        # if torch.distributed.get_rank() == 0:
+        #     print(f"compilation_cases: {compilation_cases}")
 
         # Base model (SP): scale only the batch-size field.
         compilation_cases_base = []

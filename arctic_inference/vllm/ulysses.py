@@ -16,17 +16,18 @@
 import threading
 import weakref
 from contextlib import contextmanager
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, Future
 from collections import deque
 from collections.abc import Callable
-from typing import Optional, Any
+from typing import Optional, Any, cast
 from itertools import product
+import time
 
 import torch
 import vllm.distributed.parallel_state as parallel_state
 import vllm.envs as envs
 from vllm.attention.layer import Attention
-from vllm.config import ModelConfig, ParallelConfig, CUDAGraphMode
+from vllm.config import ModelConfig, ParallelConfig, CUDAGraphMode, VllmConfig
 from vllm.distributed.device_communicators.shm_broadcast import MessageQueue
 from vllm.distributed.parallel_state import (init_model_parallel_group,
                                              get_world_group,
@@ -44,10 +45,15 @@ from vllm.distributed.kv_transfer.kv_connector.utils import KVOutputAggregator
 from vllm.model_executor.layers.fused_moe import FusedMoE
 from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
 from vllm.forward_context import BatchDescriptor
+from vllm.config.compilation import CompilationConfig
+from vllm.v1.engine.core import EngineCore, EngineCoreOutputs
+from vllm.v1.outputs import ModelRunnerOutput
 
 
 from arctic_inference.patching import ArcticPatch
 
+# global variable to hack compilation config
+_ulysses_sp_size = 1
 
 def apply_shift_parallel_patches():
     UlyssesModelConfig.apply_patch()
@@ -56,6 +62,9 @@ def apply_shift_parallel_patches():
     UlyssesMultiprocExecutor.apply_patch()
     UlyssesAttention.apply_patch()
     UlyssesCudagraphDispatcher.apply_patch()
+    UlyssesCompilationConfig.apply_patch()
+    UlyssesVllmConfig.apply_patch()
+    UlyssesEngineCore.apply_patch()
 
 
 class UlyssesModelConfig(ArcticPatch[ModelConfig]):
@@ -538,48 +547,239 @@ class UlyssesCudagraphDispatcher(ArcticPatch[CudagraphDispatcher]):
                                   uniform_decode_query_len: int):
         self._orig_initialize_cudagraph_keys(cudagraph_mode, uniform_decode_query_len)
 
-        sp_group = getattr(parallel_state, "_SP", None)
-        sp_size = sp_group.world_size if sp_group is not None else 1
-        if sp_size <= 1:
-            return
+        # sp_group = getattr(parallel_state, "_SP", None)
+        # sp_size = sp_group.world_size if sp_group is not None else 1
+        # if sp_size <= 1:
+        #     return
 
-        if self.vllm_config.lora_config:
-            if self.compilation_config.cudagraph_specialize_lora:
-                lora_cases = [True, False]
-            else:
-                lora_cases = [True]
-        else:
-            lora_cases = [False]
+        # if self.vllm_config.lora_config:
+        #     if self.compilation_config.cudagraph_specialize_lora:
+        #         lora_cases = [True, False]
+        #     else:
+        #         lora_cases = [True]
+        # else:
+        #     lora_cases = [False]
 
-        if cudagraph_mode.mixed_mode() != CUDAGraphMode.NONE:
-            for bs, has_lora in product(
-                self.compilation_config.cudagraph_capture_sizes, lora_cases
-            ):
-                bd = self._create_padded_batch_descriptor(
-                    num_tokens=bs * sp_size,
-                    uniform_decode=False,
-                    has_lora=has_lora,
-                ).relax_for_mixed_batch_cudagraphs()
+        # if cudagraph_mode.mixed_mode() != CUDAGraphMode.NONE:
+        #     for bs, has_lora in product(
+        #         self.compilation_config.cudagraph_capture_sizes, lora_cases
+        #     ):
+        #         bd = self._create_padded_batch_descriptor(
+        #             num_tokens=bs, #  * sp_size,
+        #             uniform_decode=False,
+        #             has_lora=has_lora,
+        #         ).relax_for_mixed_batch_cudagraphs()
 
-                self.add_cudagraph_key(cudagraph_mode.mixed_mode(), bd)
+        #         self.add_cudagraph_key(cudagraph_mode.mixed_mode(), bd)
 
-        if (cudagraph_mode.decode_mode() == CUDAGraphMode.FULL
-                and cudagraph_mode.separate_routine()):
-            max_num_tokens = (
-                uniform_decode_query_len
-                * self.vllm_config.scheduler_config.max_num_seqs
+        # if (cudagraph_mode.decode_mode() == CUDAGraphMode.FULL
+        #         and cudagraph_mode.separate_routine()):
+        #     max_num_tokens = (
+        #         uniform_decode_query_len
+        #         * self.vllm_config.scheduler_config.max_num_seqs
+        #     )
+        #     cudagraph_capture_sizes_for_decode = [
+        #         x for x in self.compilation_config.cudagraph_capture_sizes
+        #         if uniform_decode_query_len <= x <= max_num_tokens
+        #     ]
+        #     for bs, has_lora in product(cudagraph_capture_sizes_for_decode, lora_cases):
+        #         bd = self._create_padded_batch_descriptor(
+        #             num_tokens=bs, #  * sp_size,
+        #             uniform_decode=True,
+        #             has_lora=has_lora,
+        #         )
+        #         self.add_cudagraph_key(CUDAGraphMode.FULL, bd)
+
+
+class UlyssesCompilationConfig(ArcticPatch[CompilationConfig]):
+
+    _orig_post_init_cudagraph_sizes = CompilationConfig.post_init_cudagraph_sizes
+
+    def post_init_cudagraph_sizes(self) -> None:
+
+        # print(f"Before post_init_cudagraph_sizes: max_cudagraph_capture_size={self.max_cudagraph_capture_size}, cudagraph_capture_sizes={self.cudagraph_capture_sizes}")
+
+        # Access the module-level variable set during engine config creation
+        sp_size = _ulysses_sp_size
+
+        # scale sizes by Ulysses sequence parallel size
+        self.max_cudagraph_capture_size *= sp_size
+        self.cudagraph_capture_sizes = [size * sp_size for size in self.cudagraph_capture_sizes]
+
+        # print(f"After scaling for SP size {sp_size}: max_cudagraph_capture_size={self.max_cudagraph_capture_size}, cudagraph_capture_sizes={self.cudagraph_capture_sizes}")
+
+        self._orig_post_init_cudagraph_sizes()
+
+        # revert back to original shapes
+        self.max_cudagraph_capture_size //= sp_size
+        self.cudagraph_capture_sizes = [size // sp_size for size in self.cudagraph_capture_sizes]
+
+        # print(f"self.bs_to_padded_graph_size {self.bs_to_padded_graph_size}")
+
+        # import traceback
+        # traceback.print_stack()
+
+class UlyssesVllmConfig(ArcticPatch[VllmConfig]):
+
+    def pad_for_cudagraph(self, batch_size: int) -> int:
+        # if batch_size > self.compilation_config.max_cudagraph_capture_size,
+        # it should raise an IndexError.
+        # the caller should make sure the batch_size is within the range,
+        # i.e., batch_size <= self.compilation_config.max_cudagraph_capture_size
+
+        # print(f"batch_size {batch_size}")
+        # print(f"len bs_to_padded_graph_size {len(self.compilation_config.bs_to_padded_graph_size)}")
+
+        if torch.distributed.get_rank() == 0:
+            print(
+                f"pad_for_cudagraph called with batch_size {batch_size}, "
+                f"max_cudraph_capture_size "
+                f"{self.compilation_config.max_cudagraph_capture_size}, "
+                f"len(self.compilation_config.bs_to_padded_graph_size): {len(self.compilation_config.bs_to_padded_graph_size)}"
             )
-            cudagraph_capture_sizes_for_decode = [
-                x for x in self.compilation_config.cudagraph_capture_sizes
-                if uniform_decode_query_len <= x <= max_num_tokens
-            ]
-            for bs, has_lora in product(cudagraph_capture_sizes_for_decode, lora_cases):
-                bd = self._create_padded_batch_descriptor(
-                    num_tokens=bs * sp_size,
-                    uniform_decode=True,
-                    has_lora=has_lora,
+
+        sp_size = _ulysses_sp_size
+
+        output = self.compilation_config.bs_to_padded_graph_size[batch_size]
+
+        if torch.distributed.get_rank() == 0:
+            print(
+                f"pad_for_cudagraph returning output {output} "
+                f"for input batch_size {batch_size} "
+                f"with SP size {sp_size}"
+            )
+            # import traceback
+            # traceback.print_stack()
+
+        return output
+
+
+class UlyssesEngineCore(ArcticPatch[EngineCore]):
+
+    iteration = 0
+
+    def step_with_batch_queue(
+        self,
+    ) -> tuple[dict[int, EngineCoreOutputs] | None, bool]:
+        """Schedule and execute batches with the batch queue.
+        Note that if nothing to output in this step, None is returned.
+
+        The execution flow is as follows:
+        1. Try to schedule a new batch if the batch queue is not full.
+        If a new batch is scheduled, directly return an empty engine core
+        output. In other words, fulfilling the batch queue has a higher priority
+        than getting model outputs.
+        2. If there is no new scheduled batch, meaning that the batch queue
+        is full or no other requests can be scheduled, we block until the first
+        batch in the job queue is finished.
+        3. Update the scheduler from the output.
+        """
+        batch_queue = self.batch_queue
+        assert batch_queue is not None
+
+        # Try to schedule a new batch if the batch queue is not full, but
+        # the scheduler may return an empty batch if all requests are scheduled.
+        # Note that this is not blocking.
+        assert len(batch_queue) < self.batch_queue_size
+
+        step_start_time = time.monotonic()
+
+        model_executed = False
+        deferred_scheduler_output = None
+        if self.scheduler.has_requests():
+            scheduler_output = self.scheduler.schedule()
+            exec_future = self.model_executor.execute_model(
+                scheduler_output, non_block=True
+            )
+            if not self.is_ec_producer:
+                model_executed = scheduler_output.total_num_scheduled_tokens > 0
+
+            if self.is_pooling_model or not model_executed:
+                # No sampling required (no requests scheduled).
+                future = cast(Future[ModelRunnerOutput], exec_future)
+            else:
+                if not scheduler_output.pending_structured_output_tokens:
+                    # We aren't waiting for any tokens, get any grammar output
+                    # and sample immediately.
+                    grammar_output = self.scheduler.get_grammar_bitmask(
+                        scheduler_output
+                    )
+                    future = self.model_executor.sample_tokens(
+                        grammar_output, non_block=True
+                    )
+                else:
+                    # We need to defer sampling until we have processed the model output
+                    # from the prior step.
+                    deferred_scheduler_output = scheduler_output
+
+            if not deferred_scheduler_output:
+                # Add this step's future to the queue.
+                batch_queue.appendleft((future, scheduler_output, exec_future))
+                if (
+                    model_executed
+                    and len(batch_queue) < self.batch_queue_size
+                    and not batch_queue[-1][0].done()
+                ):
+                    # Don't block on next worker response unless the queue is full
+                    # or there are no more requests to schedule.
+                    return None, True
+
+        elif not batch_queue:
+            # Queue is empty. We should not reach here since this method should
+            # only be called when the scheduler contains requests or the queue
+            # is non-empty.
+            return None, False
+
+        # Block until the next result is available.
+        future, scheduler_output, exec_model_fut = batch_queue.pop()
+        with (
+            self.log_error_detail(scheduler_output),
+            self.log_iteration_details(scheduler_output),
+        ):
+            model_output = future.result()
+            if model_output is None:
+                # None from sample_tokens() implies that the original execute_model()
+                # call failed - raise that exception.
+                exec_model_fut.result()
+                raise RuntimeError("unexpected error")
+
+        # Before processing the model output, process any aborts that happened
+        # during the model execution.
+        self._process_aborts_queue()
+        engine_core_outputs = self.scheduler.update_from_output(
+            scheduler_output, model_output
+        )
+
+        # NOTE(nick): We can either handle the deferred tasks here or save
+        # in a field and do it immediately once step_with_batch_queue is
+        # re-called. The latter slightly favors TTFT over TPOT/throughput.
+        if deferred_scheduler_output:
+            # If we are doing speculative decoding with structured output,
+            # we need to get the draft token ids from the prior step before
+            # we can compute the grammar bitmask for the deferred request.
+            if self.use_spec_decode:
+                draft_token_ids = self.model_executor.take_draft_token_ids()
+                assert draft_token_ids is not None
+                # Update the draft token ids in the scheduler output to
+                # filter out the invalid spec tokens, which will be padded
+                # with -1 and skipped by the grammar bitmask computation.
+                self.scheduler.update_draft_token_ids_in_output(
+                    draft_token_ids, deferred_scheduler_output
                 )
-                self.add_cudagraph_key(CUDAGraphMode.FULL, bd)
+            # We now have the tokens needed to compute the bitmask for the
+            # deferred request. Get the bitmask and call sample tokens.
+            grammar_output = self.scheduler.get_grammar_bitmask(
+                deferred_scheduler_output
+            )
+            future = self.model_executor.sample_tokens(grammar_output, non_block=True)
+            batch_queue.appendleft((future, deferred_scheduler_output, exec_future))
 
+        total_time_ms = (time.monotonic() - step_start_time) * 1000
 
+        running, waiting = self.scheduler.get_request_counts()
+        scheduled_tokens = scheduler_output.total_num_scheduled_tokens
+        concurrency = len(scheduler_output.num_scheduled_tokens.keys())
+        print(f"iteration {self.iteration}, running: {running}, waiting: {waiting}, scheduled tokens: {scheduled_tokens}, concurrency: {concurrency}, total_time_ms: {total_time_ms:.2f}")
+        self.iteration += 1
 
+        return engine_core_outputs, model_executed
