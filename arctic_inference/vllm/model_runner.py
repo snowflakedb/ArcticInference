@@ -112,7 +112,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     _orig_init = GPUModelRunner.__init__
     _orig_build_attention_metadata = GPUModelRunner._build_attention_metadata
     _orig_execute_model = GPUModelRunner.execute_model
-    _orig_pad_for_sequence_parallelism = GPUModelRunner._pad_for_sequence_parallelism
+    # _orig_pad_for_sequence_parallelism = GPUModelRunner._pad_for_sequence_parallelism
 
     def __init__(
         self,
@@ -212,6 +212,17 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                     meta.swiftkv_logits_indices = logits_indices
 
         return attn_metadata, spec_decode_common_attn_metadata
+
+    # set padding for SP here
+    def _pad_for_sequence_parallelism(self, num_scheduled_tokens: int) -> int:
+
+        sp_size = self.parallel_config.ulysses_sequence_parallel_size
+        num_input_tokens = round_up(num_scheduled_tokens, sp_size)
+
+        if torch.distributed.get_rank() == 0:
+            print(f"padding num_scheduled_tokens {num_scheduled_tokens} -> num_input_tokens {num_input_tokens}")
+
+        return num_input_tokens
 
 
     def profile_run(self) -> None:
@@ -976,16 +987,22 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             if scaled_bs > int(getattr(self, "shift_parallel_threshold", 0)):
                 compilation_cases_base.append(self._with_bs(case, scaled_bs))
 
+        compilation_cases_base = compilation_cases
+
         if is_global_first_rank():
             logger.info(
-                "base model (SP=%s, TP=%s) shapes %s",
-                sp_size, tp_size, [ self._case_bs(c) for c in compilation_cases_base ]
+                "base model (SP=%s, TP=%s) cudagraph mode %s shapes %s",
+                sp_size, tp_size, cudagraph_runtime_mode, [ self._case_bs(c) for c in compilation_cases_base ]
             )
+            print(f"compilation_cases_base: {compilation_cases_base}")
 
         if compilation_cases_base:
             self._orig_capture_cudagraphs(
                 compilation_cases_base, cudagraph_runtime_mode, uniform_decode
             )
+
+        if is_global_first_rank():
+            print(f"compilation_cases_base: {compilation_cases_base}")
 
         # Shift model (SP*TP but configured as TP-only variant in your routing):
         if getattr(self, "shift_model", None) is not None:

@@ -16,11 +16,10 @@
 import threading
 import weakref
 from contextlib import contextmanager
-from concurrent.futures import ThreadPoolExecutor, Future
+from concurrent.futures import Future
 from collections import deque
 from collections.abc import Callable
-from typing import Optional, Any, cast
-from itertools import product
+from typing import Optional, cast
 import time
 
 import torch
@@ -41,10 +40,7 @@ from vllm.v1.executor.abstract import FailureCallback
 from vllm.v1.executor.multiproc_executor import (MultiprocExecutor, WorkerProc,
                                                  UnreadyWorkerProcHandle,
                                                  FutureWrapper)
-from vllm.distributed.kv_transfer.kv_connector.utils import KVOutputAggregator
-from vllm.model_executor.layers.fused_moe import FusedMoE
 from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
-from vllm.forward_context import BatchDescriptor
 from vllm.config.compilation import CompilationConfig
 from vllm.v1.engine.core import EngineCore, EngineCoreOutputs
 from vllm.v1.outputs import ModelRunnerOutput
@@ -597,29 +593,106 @@ class UlyssesCompilationConfig(ArcticPatch[CompilationConfig]):
 
     def post_init_cudagraph_sizes(self) -> None:
 
-        # print(f"Before post_init_cudagraph_sizes: max_cudagraph_capture_size={self.max_cudagraph_capture_size}, cudagraph_capture_sizes={self.cudagraph_capture_sizes}")
+#         # print(f"Before post_init_cudagraph_sizes: max_cudagraph_capture_size={self.max_cudagraph_capture_size}, cudagraph_capture_sizes={self.cudagraph_capture_sizes}")
 
-        # Access the module-level variable set during engine config creation
-        sp_size = _ulysses_sp_size
+#         # Access the module-level variable set during engine config creation
+#         sp_size = _ulysses_sp_size
 
-        # scale sizes by Ulysses sequence parallel size
-        self.max_cudagraph_capture_size *= sp_size
-        self.cudagraph_capture_sizes = [size * sp_size for size in self.cudagraph_capture_sizes]
+#         # scale sizes by Ulysses sequence parallel size
+#         self.max_cudagraph_capture_size *= sp_size
+#         self.cudagraph_capture_sizes = [size * sp_size for size in self.cudagraph_capture_sizes]
 
-        # print(f"After scaling for SP size {sp_size}: max_cudagraph_capture_size={self.max_cudagraph_capture_size}, cudagraph_capture_sizes={self.cudagraph_capture_sizes}")
+#         # print(f"After scaling for SP size {sp_size}: max_cudagraph_capture_size={self.max_cudagraph_capture_size}, cudagraph_capture_sizes={self.cudagraph_capture_sizes}")
 
         self._orig_post_init_cudagraph_sizes()
 
-        # revert back to original shapes
-        self.max_cudagraph_capture_size //= sp_size
-        self.cudagraph_capture_sizes = [size // sp_size for size in self.cudagraph_capture_sizes]
+#         # revert back to original shapes
+#         self.max_cudagraph_capture_size //= sp_size
+#         self.cudagraph_capture_sizes = [size // sp_size for size in self.cudagraph_capture_sizes]
 
-        # print(f"self.bs_to_padded_graph_size {self.bs_to_padded_graph_size}")
+#         # print(f"self.bs_to_padded_graph_size {self.bs_to_padded_graph_size}")
 
-        # import traceback
-        # traceback.print_stack()
+#         # import traceback
+#         # traceback.print_stack()
 
 class UlyssesVllmConfig(ArcticPatch[VllmConfig]):
+
+    _orig_set_cudagraph_sizes = VllmConfig._set_cudagraph_sizes
+
+    def _set_cudagraph_sizes(self):
+
+        print(f"set cudagraph_sizes")
+        sp_size = _ulysses_sp_size
+
+        max_cudagraph_capture_size = self.compilation_config.max_cudagraph_capture_size
+        cudagraph_capture_sizes = self.compilation_config.cudagraph_capture_sizes
+
+        if cudagraph_capture_sizes is None:
+            if max_cudagraph_capture_size is None:
+                max_cudagraph_capture_size = 512
+            cudagraph_capture_sizes = [
+                    i for i in [1, 2, 4] if i <= max_cudagraph_capture_size
+                ]
+            if max_cudagraph_capture_size >= 8:
+                # Step size 8 for small batch sizes, up to 256(not included)
+                cudagraph_capture_sizes += list(
+                    range(8, min(max_cudagraph_capture_size + 1, 256), 8)
+                )
+            if max_cudagraph_capture_size >= 256:
+                # Step size 8 for small batch sizes, up to 512(not included)
+                cudagraph_capture_sizes += list(
+                    range(256, min(max_cudagraph_capture_size + 1, 512), 16)
+                )
+            if max_cudagraph_capture_size >= 512:
+                # Step size 64 for large batch sizes
+                cudagraph_capture_sizes += list(
+                    range(512, max_cudagraph_capture_size + 1, 32)
+                )
+            self.compilation_config.cudagraph_capture_sizes = [i * sp_size for i in cudagraph_capture_sizes]
+            self.compilation_config.max_cudagraph_capture_size = max_cudagraph_capture_size * sp_size
+
+        print(f"UlyssesVllmConfig: scaled max_cudagraph_capture_size to {self.compilation_config.max_cudagraph_capture_size}, cudagraph_capture_sizes to {self.compilation_config.cudagraph_capture_sizes}")
+
+        self._orig_set_cudagraph_sizes()
+
+    # def update_sizes_for_sequence_parallelism(self, possible_sizes: list) -> list:
+
+    #     sp_size = parallel_state._SP.world_size
+    #     if torch.distributed.get_rank() == 0:
+    #         print(f"Original possible_sizes: {possible_sizes}")
+    #         print(f"Ulysses SP size: {sp_size}")
+    # def _set_cudagraph_sizes(self):
+    #     if (
+    #         self.model_config is not None
+    #         and not self.model_config.enforce_eager
+    #         and self.compilation_config.cudagraph_mode != CUDAGraphMode.NONE
+    #     ):
+    #         max_cudagraph_capture_size = (
+    #             self.compilation_config.max_cudagraph_capture_size
+    #         )
+    #         if max_cudagraph_capture_size is not None:
+    #             max_cudagraph_capture_size *= parallel_state._SP.world_size
+    #         else:
+    #             max_cudagraph_capture_size = 512
+    #         max_num_tokens = self.scheduler_config.max_num_batched_tokens
+
+    #         max_cudagraph_capture_size = min(max_num_tokens, max_cudagraph_capture_size)
+
+    #         if torch.distribute.get_rank() == 0:
+    #             print(f"max_num_tokens: {max_num_tokens} max_cudagraph_capture_size: {max_cudagraph_capture_size}")
+    #             if self.compilation_config.cudagraph_capture_sizes:
+    #                 print(f"Original cudagraph_capture_sizes: {self.compilation_config.cudagraph_capture_sizes}")
+    #             else:
+    #                 print("Original cudagraph_capture_sizes: []")
+
+
+    #     else:
+    #         # no cudagraph in use
+    #         self.compilation_config.max_cudagraph_capture_size = 0
+    #         self.compilation_config.cudagraph_capture_sizes = []
+
+    #     # complete the remaining process.
+    #     self.compilation_config.post_init_cudagraph_sizes()
 
     def pad_for_cudagraph(self, batch_size: int) -> int:
         # if batch_size > self.compilation_config.max_cudagraph_capture_size,
@@ -648,8 +721,6 @@ class UlyssesVllmConfig(ArcticPatch[VllmConfig]):
                 f"for input batch_size {batch_size} "
                 f"with SP size {sp_size}"
             )
-            # import traceback
-            # traceback.print_stack()
 
         return output
 
