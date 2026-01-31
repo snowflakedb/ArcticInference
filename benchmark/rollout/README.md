@@ -3,7 +3,7 @@ This patch extencds SamplingParams to specify the length of each sequence when n
 
 The patch is applied as `source patch_sampling.sh`.
 
-As a result, you can specify `max_tokens_n` in sampling params and set `ignore_eos` so that each sequence generates exactly specified number of tokens.
+As a result, you can specify `max_tokens_n` as a list in sampling params and set `ignore_eos` so that each sequence generates exactly specified number of tokens.
 
 ```
 # Sample prompts.
