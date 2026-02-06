@@ -67,8 +67,7 @@ class OriginalFp8LinearMethod(LinearMethodBase):
             self.use_marlin = False
 
         self.fp8_linear = Fp8LinearOp(
-            act_quant_static=False,
-            cutlass_fp8_supported=cutlass_fp8_supported())
+            act_quant_static=False)
 
     def create_weights(
         self,

@@ -588,7 +588,8 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
         self.cuda_graph_mode = False
 
         self.cuda_graph_max_batch_size = padding_size(
-            vllm_config.scheduler_config.max_num_seqs)
+            vllm_config.scheduler_config.max_num_seqs * 3)
+        print(f"MAX BATCH SIZE FOR CUDA GRAPHS: {self.cuda_graph_max_batch_size}")
         self.static_cuda_buffers = {
             "last_tokens":
             torch.empty(self.cuda_graph_max_batch_size, 1, dtype=torch.long),
