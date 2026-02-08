@@ -100,6 +100,8 @@ class ArcticProposer:
             model_config=draft_config_model_config,
             quant_config=draft_config_quant_config,
             parallel_config=draft_config_parallel_config,
+            scheduler_config=self.vllm_config.scheduler_config,
+            speculative_config=self.vllm_config.speculative_config,
             load_config=self.vllm_config.load_config,
             device_config=self.vllm_config.device_config,
         )

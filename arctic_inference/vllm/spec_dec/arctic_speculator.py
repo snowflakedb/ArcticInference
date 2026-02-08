@@ -248,8 +248,13 @@ class ArcticMLPSpeculator(nn.Module, SpeculatorTPInit):
         if not vllm_config.model_config.enforce_eager:
             self.cuda_graph_mode = True
             self.cuda_graphs = {}
-            self.cuda_graph_max_batch_size = padding_size(
-                vllm_config.scheduler_config.max_num_seqs)
+            spec_config = vllm_config.speculative_config
+            disable_by_batch_size = (
+                spec_config.disable_by_batch_size
+                if spec_config is not None and spec_config.disable_by_batch_size is not None
+                else vllm_config.scheduler_config.max_num_seqs
+            )
+            self.cuda_graph_max_batch_size = padding_size(disable_by_batch_size)
             self.static_cuda_buffers = {
                 "last_tokens":
                 torch.empty(self.cuda_graph_max_batch_size,
@@ -605,8 +610,13 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
         self.cuda_graph_max_batch_size = 0
         self.cuda_graph_mode = False
 
-        self.cuda_graph_max_batch_size = padding_size(
-            vllm_config.scheduler_config.max_num_seqs)
+        spec_config = vllm_config.speculative_config
+        disable_by_batch_size = (
+            spec_config.disable_by_batch_size
+            if spec_config is not None and spec_config.disable_by_batch_size is not None
+            else vllm_config.scheduler_config.max_num_seqs
+        )
+        self.cuda_graph_max_batch_size = padding_size(disable_by_batch_size)
         self.static_cuda_buffers = {
             "last_tokens":
             torch.empty(self.cuda_graph_max_batch_size, 1, dtype=torch.long),
