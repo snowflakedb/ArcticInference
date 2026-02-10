@@ -145,7 +145,9 @@ class ArcticProposer:
             sampled_token_ids = sampled_token_ids.to(sample_hidden_states.device, non_blocking=True)
 
         max_gen_len = sampled_token_ids.shape[-1]
-        if max_gen_len == 1:
+        num_requests = sampled_token_ids.shape[0]
+        if max_gen_len == 1 and sample_hidden_states.shape[0] == num_requests:
+            # Fast path: one row per request, no index-select needed.
             return sample_hidden_states
 
         assert spec_decode_metadata is not None
@@ -225,7 +227,6 @@ class ArcticProposer:
                 seq_len = req_state.num_computed_tokens + num_scheduled_tokens[req_id]
                 next_token_id = req_state.get_token_id(seq_len)
             next_token_ids.append(next_token_id)
-        print("self.device:", self.device)
         next_token_ids = torch.tensor(
             next_token_ids, dtype=torch.int32, device=self.device
         )

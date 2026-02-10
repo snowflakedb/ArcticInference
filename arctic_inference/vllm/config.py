@@ -103,7 +103,15 @@ class SpeculativeConfigPatch(ArcticPatch[SpeculativeConfig]):
         if use_suffix:
             self.method = "suffix"
             self.enable_suffix_decoding = True
-            self.num_speculative_tokens = self.suffix_cache_max_depth
+            # Use suffix_speculative_tokens if explicitly set, otherwise
+            # default to 16 (not suffix_cache_max_depth which can be very
+            # large and makes every step process 1+N tokens even when the
+            # suffix cache has no matches).
+            # NOTE: num_speculative_tokens defaults to None (not 0).
+            if self.suffix_speculative_tokens > 0:
+                self.num_speculative_tokens = self.suffix_speculative_tokens
+            elif self.num_speculative_tokens is None:
+                self.num_speculative_tokens = 16
             self._verify_args()
             return 
 
@@ -130,7 +138,7 @@ class VllmConfigPatch(ArcticPatch[VllmConfig]):
 
     from typing import Literal
     OldEagleModelTypes = vllm.config.speculative.EagleModelTypes
-    NewEagleModelTypes = Literal["arctic", OldEagleModelTypes]
+    NewEagleModelTypes = Literal["arctic", "suffix", OldEagleModelTypes]
 
     def __str__(self, *args, **kwargs):
         string = self._orig_str(*args, **kwargs)
@@ -150,7 +158,7 @@ class VllmConfigPatch(ArcticPatch[VllmConfig]):
         from typing import Literal
         target_module = sys.modules[VllmConfig.__module__]
         original_types = getattr(target_module, "EagleModelTypes")
-        NewEagleModelTypes = Literal["mlp_speculator", original_types]
+        NewEagleModelTypes = Literal["mlp_speculator", "suffix", original_types]
         setattr(target_module, "EagleModelTypes", NewEagleModelTypes)
         try:
             self._orig_post_init(*args, **kwargs)

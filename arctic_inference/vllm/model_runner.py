@@ -161,7 +161,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                     pin_memory=self.pin_memory,
                 )
 
-            if self.use_async_scheduling:
+            if (self.use_async_scheduling
+                    and self.speculative_config.method in ("arctic", "mlp_speculator", "suffix")):
                 if not hasattr(self, "valid_sampled_token_count_cpu") or self.valid_sampled_token_count_cpu is None:
                     self.valid_sampled_token_count_event = torch.Event()
                     self.valid_sampled_token_count_copy_stream = torch.cuda.Stream()
@@ -196,6 +197,92 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 max_cached_requests=spec_cfg.suffix_cache_max_requests
             )
 
+        # Async suffix decoding infrastructure: a dedicated CUDA stream and
+        # pinned buffer for copying sampled token IDs to CPU *without*
+        # serialising behind Arctic GPU drafting work on the default stream.
+        if self._suffix_cache is not None and self.use_async_scheduling:
+            self.suffix_copy_stream = torch.cuda.Stream()
+            self.suffix_copy_done_event = torch.Event()
+            max_gen_len = 1 + self.num_spec_tokens
+            self.suffix_sampled_ids_pinned = torch.empty(
+                (self.max_num_reqs, max_gen_len),
+                dtype=torch.int64,
+                device="cpu",
+                pin_memory=self.pin_memory,
+            )
+
+        # Per-request response tokens for suffix pattern building in async
+        # mode.  In async scheduling, _bookkeeping_sync writes -1 placeholders
+        # to token_ids_cpu instead of real values, corrupting the pattern that
+        # propose_suffix_draft_token_ids reads.  We keep a clean copy here.
+        self._suffix_response_tokens: dict[str, list[int]] = {}
+
+        # Backup-token buffer used by suffix-only async rejection sampling.
+        # The arctic proposer has its own buffer; this one covers the case
+        # where no arctic drafter is present.
+        self._suffix_backup_tokens_gpu: Optional[torch.Tensor] = None
+        if (self._suffix_cache is not None
+                and self.use_async_scheduling
+                and self.speculative_config.method not in ("arctic",
+                                                           "mlp_speculator")):
+            self._suffix_backup_tokens_gpu = torch.zeros(
+                self.max_num_reqs, dtype=torch.int32, device=self.device,
+            )
+
+    def _suffix_only_rejection_sample(
+        self,
+        sampled_token_ids: torch.Tensor,
+        common_attn_metadata: "CommonAttentionMetadata",
+    ) -> None:
+        """Rejection-sample accepted tokens for suffix-only async scheduling.
+
+        EAGLE / arctic do this inside propose_draft_token_ids via
+        prepare_next_token_ids_padded.  For suffix-only there is no
+        drafter with that method, so we call the same Triton kernel
+        directly and feed the results into _copy_valid_sampled_token_count.
+        """
+        from vllm.triton_utils import triton
+        from vllm.v1.spec_decode.utils import (
+            eagle_prepare_next_token_padded_kernel,
+        )
+
+        num_reqs = self.input_batch.num_reqs
+        batch_size, num_tokens = sampled_token_ids.shape
+        device = sampled_token_ids.device
+
+        # Compute backup tokens (last accepted token per request) on CPU,
+        # then copy to GPU in one shot to avoid per-element synchronisation.
+        backup = self._suffix_backup_tokens_gpu
+        assert backup is not None
+        backup_np = np.empty(num_reqs, dtype=np.int32)
+        for i in range(num_reqs):
+            req_id = self.input_batch.req_ids[i]
+            seq_len = int(common_attn_metadata.seq_lens_cpu[i].item())
+            backup_np[i] = self.requests[req_id].get_token_id(seq_len)
+        backup[:num_reqs].copy_(
+            torch.from_numpy(backup_np).to(device), non_blocking=True,
+        )
+
+        next_token_ids = torch.empty(batch_size, dtype=torch.int32,
+                                     device=device)
+        valid_counts = torch.empty(batch_size, dtype=torch.int32,
+                                   device=device)
+
+        BLOCK_SIZE_TOKENS = triton.next_power_of_2(num_tokens)
+        eagle_prepare_next_token_padded_kernel[(batch_size,)](
+            sampled_token_ids,
+            self.discard_request_mask.gpu,
+            backup,
+            next_token_ids,
+            valid_counts,
+            self.model_config.get_vocab_size(),
+            num_tokens,
+            batch_size,
+            sampled_token_ids.stride(0),
+            BLOCK_SIZE_TOKENS=BLOCK_SIZE_TOKENS,
+        )
+
+        self._copy_valid_sampled_token_count(next_token_ids, valid_counts)
 
     def _build_attention_metadata(self, *args, **kwargs):
         attn_metadata, spec_decode_common_attn_metadata = \
@@ -219,8 +306,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         sp_size = self.parallel_config.ulysses_sequence_parallel_size
         num_input_tokens = round_up(num_scheduled_tokens, sp_size)
 
-        if torch.distributed.get_rank() == 0:
-            print(f"padding num_scheduled_tokens {num_scheduled_tokens} -> num_input_tokens {num_input_tokens}")
+        #if torch.distributed.get_rank() == 0:
+        #    print(f"padding num_scheduled_tokens {num_scheduled_tokens} -> num_input_tokens {num_input_tokens}")
 
         return num_input_tokens
 
@@ -496,7 +583,6 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         use_async_path = (
             self.speculative_config.method in ("arctic", "mlp_speculator")
-            and self._suffix_cache is None
             and isinstance(sampled_token_ids, torch.Tensor)
             and self.use_async_scheduling
             and common_attn_metadata is not None
@@ -524,11 +610,21 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 spec_decode_metadata=spec_decode_metadata,
             )
 
-            return self.drafter.propose(
+            draft = self.drafter.propose(
                 context_token_ids=next_token_ids,
                 previous_hidden_states=target_hidden_states,
-                num_predict_tokens=self.speculative_config.num_speculative_tokens,
+                num_predict_tokens=self.drafter.model.n_predict,
             )
+            # Pad to full num_spec_tokens width so the tensor matches
+            # the shape expected by _copy_draft_token_ids_to_cpu and
+            # _prepare_input_ids, and so suffix merge has room to write
+            # longer sequences.
+            if draft.shape[1] < self.num_spec_tokens:
+                draft = torch.nn.functional.pad(
+                    draft, (0, self.num_spec_tokens - draft.shape[1]),
+                    value=0,
+                )
+            return draft
 
         if isinstance(sampled_token_ids, torch.Tensor):
             sampled_token_ids_list = [
@@ -564,7 +660,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             arctic_output_tensor = self.drafter.propose(
                 context_token_ids=next_token_ids,
                 previous_hidden_states=previous_hidden_states,
-                num_predict_tokens=self.speculative_config.num_speculative_tokens,
+                num_predict_tokens=self.drafter.model.n_predict,
             )
             
             arctic_spec_token_ids = arctic_output_tensor.tolist()
@@ -575,7 +671,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             
             suffix_spec_token_ids = []
             min_score = 0 if self.speculative_config.method == "suffix" \
-                else self.speculative_config.num_speculative_tokens
+                else self.drafter.model.n_predict
                 
             for result in results:
                 if result.score >= min_score:
@@ -700,12 +796,15 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 num_prompt_tokens = self.input_batch.num_prompt_tokens[index]
                 prompt_token_ids = self.input_batch.token_ids_cpu[index, :num_prompt_tokens]
                 self._suffix_cache.start_request(req_id, prompt_token_ids.tolist())
+                self._suffix_response_tokens[req_id] = []
 
             self._suffix_cache.add_active_response(req_id, sampled_ids)
+            self._suffix_response_tokens[req_id].extend(sampled_ids)
 
         for req_id in list(self._suffix_cache.active_requests):
             if req_id not in seen_req_ids:
                 self._suffix_cache.stop_request(req_id)
+                self._suffix_response_tokens.pop(req_id, None)
 
     def propose_suffix_draft_token_ids(
         self,
@@ -720,13 +819,39 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 continue
 
             req_id = self.input_batch.req_ids[i]
-            num_tokens = self.input_batch.num_tokens_no_spec[i]
-            if num_tokens >= self.max_model_len:
-                results.append(SuffixDecodingDraft())
-                continue
+            index = self.input_batch.req_id_to_index[req_id]
 
-            start = max(0, num_tokens - config.suffix_cache_max_depth)
-            pattern = self.input_batch.token_ids_cpu[i, start:num_tokens].tolist()
+            # In async mode, token_ids_cpu contains -1 placeholders at
+            # decoded positions (written by _bookkeeping_sync).  Build the
+            # pattern from the clean _suffix_response_tokens instead.
+            if (self.use_async_scheduling
+                    and req_id in self._suffix_response_tokens):
+                response = self._suffix_response_tokens[req_id]
+                num_prompt = int(
+                    self.input_batch.num_prompt_tokens[index])
+                num_tokens = num_prompt + len(response)
+                if num_tokens >= self.max_model_len:
+                    results.append(SuffixDecodingDraft())
+                    continue
+                # Take up to suffix_cache_max_depth tokens from the tail.
+                depth = config.suffix_cache_max_depth
+                if len(response) >= depth:
+                    pattern = response[-depth:]
+                else:
+                    need = depth - len(response)
+                    prompt_start = max(0, num_prompt - need)
+                    prompt_part = self.input_batch.token_ids_cpu[
+                        index, prompt_start:num_prompt].tolist()
+                    pattern = prompt_part + response
+            else:
+                num_tokens = self.input_batch.num_tokens_no_spec[i]
+                if num_tokens >= self.max_model_len:
+                    results.append(SuffixDecodingDraft())
+                    continue
+                start = max(0, num_tokens - config.suffix_cache_max_depth)
+                pattern = self.input_batch.token_ids_cpu[
+                    i, start:num_tokens].tolist()
+
             result = self._suffix_cache.speculate(
                 req_id,
                 pattern,
@@ -742,6 +867,72 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         return results
 
+
+    def _start_suffix_copy(
+        self,
+        sampled_token_ids: torch.Tensor,
+    ) -> None:
+        """Initiate an async D2H copy of sampled token IDs for suffix decoding.
+
+        Copies ``sampled_token_ids`` to a pinned CPU buffer on a dedicated
+        CUDA stream (``suffix_copy_stream``) that only waits for prior work
+        on the default stream (i.e. sampling).
+
+        **This MUST be called BEFORE launching Arctic GPU work on the default
+        stream** so that the copy is not ordered behind Arctic kernels.  The
+        resulting timeline is::
+
+            Default stream:  [sample] -> [arctic prepare / propose  ...]
+            Suffix stream :  [sample] -> [D2H copy] -> [event]
+            CPU            :                            wait -> suffix logic
+
+        The companion ``_finish_suffix_copy`` synchronises on the copy event
+        and returns the materialised CPU list.
+        """
+        n_rows = sampled_token_ids.shape[0]
+        n_cols = sampled_token_ids.shape[-1]
+        default_stream = torch.cuda.current_stream()
+        with torch.cuda.stream(self.suffix_copy_stream):
+            self.suffix_copy_stream.wait_stream(default_stream)
+            self.suffix_sampled_ids_pinned[:n_rows, :n_cols].copy_(
+                sampled_token_ids, non_blocking=True,
+            )
+            self.suffix_copy_done_event.record()
+        self._suffix_copy_shape = (n_rows, n_cols)
+
+    def _finish_suffix_copy(self) -> list[list[int]]:
+        """Wait for the suffix copy and return sampled token IDs as CPU lists.
+
+        Synchronises on the copy event recorded by ``_start_suffix_copy``,
+        then parses the pinned buffer into ``list[list[int]]``, applying
+        rejection-sampling for spec-decode batches and masking discarded
+        (still-in-prefill) requests.
+        """
+        self.suffix_copy_done_event.synchronize()
+        n_rows, n_cols = self._suffix_copy_shape
+        pinned = self.suffix_sampled_ids_pinned[:n_rows, :n_cols]
+
+        num_reqs = self.input_batch.num_reqs
+        discard_indices = np.nonzero(
+            self.discard_request_mask.np[:num_reqs]
+        )[0]
+
+        if n_cols == 1:
+            # No spec decode tokens -- simple tolist on pinned buffer.
+            result = pinned.tolist()
+            for i in discard_indices:
+                result[int(i)].clear()
+        else:
+            # Spec decode tokens present -- rejection-sample on CPU.
+            # parse_output does .cpu().numpy(); on an already-CPU tensor the
+            # .cpu() is a no-op, so this efficiently reuses the pinned buffer.
+            result, _ = RejectionSampler.parse_output(
+                pinned,
+                self.input_batch.vocab_size,
+                discard_indices,
+            )
+
+        return result
 
     @torch.inference_mode
     def sample_tokens(
@@ -809,20 +1000,180 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 )
             self._copy_draft_token_ids_to_cpu(scheduler_output)
 
-        use_async_sched_for_arctic = (
-            self.use_async_scheduling
-            and self.speculative_config
+        # --- Draft proposal orchestration ---
+        #
+        # There are three drafting modes depending on async scheduling and
+        # which drafters are active:
+        #
+        # A) Arctic-only + async:
+        #      Pre-bookkeeping.  Arctic runs entirely on GPU tensors
+        #      (the existing EAGLE-like async path).
+        #
+        # B) Suffix (with or without arctic) + async:
+        #      Pre-bookkeeping.  Uses a *dedicated* suffix_copy_stream so
+        #      that the D2H transfer of sampled token IDs only waits on
+        #      "sampling complete" -- NOT on Arctic GPU work.  Timeline:
+        #
+        #        Default stream:  [sample] -> [arctic GPU work ----------->]
+        #        Suffix  stream:  [sample] -> [D2H copy] -> [event]
+        #        CPU            :                           wait -> suffix
+        #
+        #      At merge time, if any requests need arctic fallback, we
+        #      sync on the arctic result (.tolist()); by then the GPU
+        #      kernels have had the full suffix-CPU window to finish.
+        #
+        # C) Non-async (any combination):
+        #      Post-bookkeeping.  propose_draft_token_ids handles everything
+        #      using CPU valid_sampled_token_ids from bookkeeping.
+
+        has_suffix = self._suffix_cache is not None
+        is_arctic_method = (
+            self.speculative_config is not None
             and self.speculative_config.method in ("arctic", "mlp_speculator")
         )
-
-        # For arctic spec decoding, it can treat arbitrary input lengths
-        input_fits_in_drafter = spec_decode_common_attn_metadata and True
+        input_fits_in_drafter = spec_decode_common_attn_metadata is not None
         sampled_token_ids = sampler_output.sampled_token_ids
-        propose_drafts_after_bookkeeping = False
-        if use_async_sched_for_arctic:
-            if input_fits_in_drafter:
-                propose_draft_token_ids(sampled_token_ids)
 
+        # Determine if we should use async pre-bookkeeping drafting.
+        use_async_spec = (
+            self.use_async_scheduling
+            and self.speculative_config is not None
+            and (is_arctic_method or has_suffix)
+            and input_fits_in_drafter
+        )
+
+        if use_async_spec:
+            if is_arctic_method and not has_suffix:
+                # (A) Arctic-only async: use existing closure which calls
+                #     propose_draft_token_ids (the method) with a GPU tensor
+                #     and triggers the async GPU path internally.
+                propose_draft_token_ids(sampled_token_ids)
+            else:
+                # (B) Suffix (± arctic) + async.
+                #     All drafting runs BEFORE bookkeeping so that
+                #     token_ids_cpu still contains real values for suffix
+                #     pattern matching.
+                arctic_draft = None
+
+                # Step 1: Initiate async D2H copy of sampled_token_ids on
+                #         suffix_copy_stream.  The stream waits only for the
+                #         default-stream work queued so far (= sampling), so
+                #         the copy is NOT ordered behind Arctic GPU kernels
+                #         that we enqueue next.
+                self._start_suffix_copy(sampled_token_ids)
+
+                # Step 1b: For suffix-only (no arctic drafter), perform
+                #          rejection sampling on the default stream.
+                #          Arctic does this inside propose_draft_token_ids;
+                #          without an arctic drafter we must do it ourselves
+                #          so that _bookkeeping_sync sees the expected
+                #          prev_sampled_token_ids and valid_sampled_token_count.
+                if not is_arctic_method:
+                    self._suffix_only_rejection_sample(
+                        sampled_token_ids,
+                        spec_decode_common_attn_metadata,
+                    )
+
+                # Step 2: Launch arctic on the default stream.
+                #         GPU kernels run concurrently with the D2H copy
+                #         on suffix_copy_stream.
+                if is_arctic_method:
+                    with record_function_or_nullcontext(
+                        "gpu_model_runner: draft (arctic)"
+                    ):
+                        arctic_draft = self.propose_draft_token_ids(
+                            scheduler_output,
+                            sampled_token_ids,
+                            self.input_batch.sampling_metadata,
+                            hidden_states,
+                            sample_hidden_states,
+                            aux_hidden_states,
+                            spec_decode_metadata,
+                            spec_decode_common_attn_metadata,
+                        )
+
+                # Step 3: Wait for the D2H copy, then run suffix logic
+                #         on the CPU.  This overlaps with any remaining
+                #         Arctic GPU work still in flight on the default
+                #         stream.
+                with record_function_or_nullcontext(
+                    "gpu_model_runner: draft (suffix)"
+                ):
+                    sampled_cpu = self._finish_suffix_copy()
+                    self._update_suffix_cache(sampled_cpu)
+                    suffix_results = self.propose_suffix_draft_token_ids(
+                        sampled_cpu
+                    )
+
+                    min_score = (
+                        0 if self.speculative_config.method == "suffix"
+                        else self.drafter.model.n_predict
+                    )
+                    suffix_draft = [
+                        result.token_ids if result.score >= min_score
+                        else []
+                        for result in suffix_results
+                    ]
+
+                # Step 4: Merge arctic + suffix results.
+                #         Suffix takes priority when available.
+                #
+                #         The merged result MUST be a torch.Tensor on GPU
+                #         because upstream _prepare_input_ids (next iteration)
+                #         asserts isinstance(self._draft_token_ids, torch.Tensor)
+                #         and uses it for on-device scatter.
+                if arctic_draft is not None:
+                    # Arctic produced a GPU tensor.  Overwrite rows where
+                    # suffix has results.  This avoids the arctic_draft.tolist()
+                    # sync when suffix covers many/all requests, and always
+                    # keeps the result as a GPU tensor.
+                    if isinstance(arctic_draft, torch.Tensor):
+                        merged = arctic_draft
+                    else:
+                        # Shouldn't happen in async path, but handle gracefully.
+                        k = self.num_spec_tokens
+                        merged = torch.zeros(
+                            (len(arctic_draft), k),
+                            dtype=torch.int64,
+                            device=self.device,
+                        )
+                        for i, row in enumerate(arctic_draft):
+                            t = row[:k]
+                            if t:
+                                merged[i, :len(t)] = torch.tensor(
+                                    t, dtype=torch.int64, device=self.device,
+                                )
+
+                    # Overwrite rows that have suffix results.
+                    for i, s in enumerate(suffix_draft):
+                        if s:
+                            k = min(len(s), merged.shape[1])
+                            merged[i, :k] = torch.tensor(
+                                s[:k], dtype=torch.int64, device=self.device,
+                            )
+                            if k < merged.shape[1]:
+                                merged[i, k:] = 0
+
+                    self._draft_token_ids = merged
+                else:
+                    # Suffix-only: no arctic tensor to overlay on.
+                    # Build a GPU tensor from the suffix lists.
+                    k = self.num_spec_tokens
+                    n = len(suffix_draft)
+                    merged = torch.zeros(
+                        (n, k), dtype=torch.int64, device=self.device,
+                    )
+                    for i, s in enumerate(suffix_draft):
+                        if s:
+                            t = s[:k]
+                            merged[i, :len(t)] = torch.tensor(
+                                t, dtype=torch.int64, device=self.device,
+                            )
+                    self._draft_token_ids = merged
+
+                self._copy_draft_token_ids_to_cpu(scheduler_output)
+
+        # --- Bookkeeping ---
         with record_function_or_nullcontext("gpu_model_runner: bookkeep"):
             (
                 num_nans_in_logits,
@@ -841,12 +1192,20 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 spec_decode_metadata,
             )
 
+        # (C) Non-async drafting: run after bookkeeping.
+        # Pass the raw GPU sampled_token_ids tensor (not the cleaned
+        # valid_sampled_token_ids list) so that propose_draft_token_ids
+        # gets a properly shaped 2-D tensor with -1 markers for rejected
+        # tokens.  The method already handles tensors correctly: it
+        # filters out -1 to build the CPU list for
+        # prepare_next_token_ids_cpu and keeps the raw tensor for
+        # prepare_hidden_states.
         if (
-            self.speculative_config
-            and not use_async_sched_for_arctic
+            self.speculative_config is not None
+            and not use_async_spec
             and input_fits_in_drafter
         ):
-            propose_draft_token_ids(valid_sampled_token_ids)
+            propose_draft_token_ids(sampled_token_ids)
 
         with record_function_or_nullcontext("gpu_model_runner: eplb"):
             self.eplb_step()
