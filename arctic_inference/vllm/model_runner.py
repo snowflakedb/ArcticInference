@@ -210,6 +210,18 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 device="cpu",
                 pin_memory=self.pin_memory,
             )
+            # Pinned buffer for suffix merge results.  Using pinned memory
+            # for H2C copies avoids the implicit default-stream
+            # synchronisation that cudaMemcpyAsync performs with pageable
+            # (non-pinned) source memory.  Without this, the merge step
+            # blocks the CPU until ALL pending GPU work (including Arctic
+            # drafting) completes, destroying the async overlap.
+            self._suffix_merge_pinned = torch.zeros(
+                (self.max_num_reqs, self.num_spec_tokens),
+                dtype=torch.int64,
+                device="cpu",
+                pin_memory=self.pin_memory,
+            )
 
         # Per-request response tokens for suffix pattern building in async
         # mode.  In async scheduling, _bookkeeping_sync writes -1 placeholders
@@ -259,8 +271,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             req_id = self.input_batch.req_ids[i]
             seq_len = int(common_attn_metadata.seq_lens_cpu[i].item())
             backup_np[i] = self.requests[req_id].get_token_id(seq_len)
+        # Copy directly from CPU numpy-backed tensor to GPU; avoids
+        # creating an intermediate GPU tensor via .to(device).
         backup[:num_reqs].copy_(
-            torch.from_numpy(backup_np).to(device), non_blocking=True,
+            torch.from_numpy(backup_np), non_blocking=True,
         )
 
         next_token_ids = torch.empty(batch_size, dtype=torch.int32,
@@ -1048,54 +1062,33 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 #     propose_draft_token_ids (the method) with a GPU tensor
                 #     and triggers the async GPU path internally.
                 propose_draft_token_ids(sampled_token_ids)
-            else:
-                # (B) Suffix (± arctic) + async.
-                #     All drafting runs BEFORE bookkeeping so that
-                #     token_ids_cpu still contains real values for suffix
-                #     pattern matching.
-                arctic_draft = None
+            elif is_arctic_method:
+                # (B) Arctic + suffix async.
+                #     D2H copy of sampled tokens runs on a dedicated
+                #     suffix_copy_stream that only waits for sampling,
+                #     NOT for Arctic GPU kernels enqueued afterwards.
+                #     Suffix CPU work then overlaps with Arctic GPU.
 
-                # Step 1: Initiate async D2H copy of sampled_token_ids on
-                #         suffix_copy_stream.  The stream waits only for the
-                #         default-stream work queued so far (= sampling), so
-                #         the copy is NOT ordered behind Arctic GPU kernels
-                #         that we enqueue next.
+                # Step 1: Initiate async D2H copy before Arctic GPU work.
                 self._start_suffix_copy(sampled_token_ids)
 
-                # Step 1b: For suffix-only (no arctic drafter), perform
-                #          rejection sampling on the default stream.
-                #          Arctic does this inside propose_draft_token_ids;
-                #          without an arctic drafter we must do it ourselves
-                #          so that _bookkeeping_sync sees the expected
-                #          prev_sampled_token_ids and valid_sampled_token_count.
-                if not is_arctic_method:
-                    self._suffix_only_rejection_sample(
+                # Step 2: Launch arctic on the default stream.
+                with record_function_or_nullcontext(
+                    "gpu_model_runner: draft (arctic)"
+                ):
+                    arctic_draft = self.propose_draft_token_ids(
+                        scheduler_output,
                         sampled_token_ids,
+                        self.input_batch.sampling_metadata,
+                        hidden_states,
+                        sample_hidden_states,
+                        aux_hidden_states,
+                        spec_decode_metadata,
                         spec_decode_common_attn_metadata,
                     )
 
-                # Step 2: Launch arctic on the default stream.
-                #         GPU kernels run concurrently with the D2H copy
-                #         on suffix_copy_stream.
-                if is_arctic_method:
-                    with record_function_or_nullcontext(
-                        "gpu_model_runner: draft (arctic)"
-                    ):
-                        arctic_draft = self.propose_draft_token_ids(
-                            scheduler_output,
-                            sampled_token_ids,
-                            self.input_batch.sampling_metadata,
-                            hidden_states,
-                            sample_hidden_states,
-                            aux_hidden_states,
-                            spec_decode_metadata,
-                            spec_decode_common_attn_metadata,
-                        )
-
-                # Step 3: Wait for the D2H copy, then run suffix logic
-                #         on the CPU.  This overlaps with any remaining
-                #         Arctic GPU work still in flight on the default
-                #         stream.
+                # Step 3: Wait for D2H copy, then run suffix on CPU.
+                #         This overlaps with remaining Arctic GPU work.
                 with record_function_or_nullcontext(
                     "gpu_model_runner: draft (suffix)"
                 ):
@@ -1105,10 +1098,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                         sampled_cpu
                     )
 
-                    min_score = (
-                        0 if self.speculative_config.method == "suffix"
-                        else self.drafter.model.n_predict
-                    )
+                    min_score = self.drafter.model.n_predict
                     suffix_draft = [
                         result.token_ids if result.score >= min_score
                         else []
@@ -1122,55 +1112,110 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 #         because upstream _prepare_input_ids (next iteration)
                 #         asserts isinstance(self._draft_token_ids, torch.Tensor)
                 #         and uses it for on-device scatter.
-                if arctic_draft is not None:
-                    # Arctic produced a GPU tensor.  Overwrite rows where
-                    # suffix has results.  This avoids the arctic_draft.tolist()
-                    # sync when suffix covers many/all requests, and always
-                    # keeps the result as a GPU tensor.
-                    if isinstance(arctic_draft, torch.Tensor):
-                        merged = arctic_draft
-                    else:
-                        # Shouldn't happen in async path, but handle gracefully.
-                        k = self.num_spec_tokens
-                        merged = torch.zeros(
-                            (len(arctic_draft), k),
-                            dtype=torch.int64,
-                            device=self.device,
-                        )
-                        for i, row in enumerate(arctic_draft):
-                            t = row[:k]
-                            if t:
-                                merged[i, :len(t)] = torch.tensor(
-                                    t, dtype=torch.int64, device=self.device,
-                                )
-
-                    # Overwrite rows that have suffix results.
-                    for i, s in enumerate(suffix_draft):
-                        if s:
-                            k = min(len(s), merged.shape[1])
-                            merged[i, :k] = torch.tensor(
-                                s[:k], dtype=torch.int64, device=self.device,
-                            )
-                            if k < merged.shape[1]:
-                                merged[i, k:] = 0
-
-                    self._draft_token_ids = merged
+                if isinstance(arctic_draft, torch.Tensor):
+                    merged = arctic_draft
                 else:
-                    # Suffix-only: no arctic tensor to overlay on.
-                    # Build a GPU tensor from the suffix lists.
+                    # Shouldn't happen in async path, but handle gracefully.
                     k = self.num_spec_tokens
-                    n = len(suffix_draft)
-                    merged = torch.zeros(
-                        (n, k), dtype=torch.int64, device=self.device,
-                    )
-                    for i, s in enumerate(suffix_draft):
-                        if s:
-                            t = s[:k]
-                            merged[i, :len(t)] = torch.tensor(
-                                t, dtype=torch.int64, device=self.device,
-                            )
-                    self._draft_token_ids = merged
+                    n = len(arctic_draft)
+                    pin = self._suffix_merge_pinned[:n, :k]
+                    pin_np = pin.numpy()
+                    pin_np[:] = 0
+                    for i, row in enumerate(arctic_draft):
+                        t = row[:k]
+                        if t:
+                            pin_np[i, :len(t)] = t
+                    merged = pin.to(
+                        device=self.device, non_blocking=True)
 
+                # Batch-overwrite rows that have suffix results.
+                # CRITICAL: use the pre-allocated *pinned* merge buffer
+                # so that cudaMemcpyAsync does NOT synchronise the default
+                # stream.  With pageable (non-pinned) memory CUDA must
+                # sync the stream first, blocking the CPU until Arctic GPU
+                # work finishes -- destroying the async overlap.
+                width = merged.shape[1]
+                suffix_indices = [
+                    i for i, s in enumerate(suffix_draft) if s
+                ]
+                if suffix_indices:
+                    n_sfx = len(suffix_indices)
+                    overlay_pin = self._suffix_merge_pinned[:n_sfx, :width]
+                    overlay_np = overlay_pin.numpy()
+                    overlay_np[:] = 0
+                    for j, idx in enumerate(suffix_indices):
+                        s = suffix_draft[idx]
+                        slen = min(len(s), width)
+                        overlay_np[j, :slen] = s[:slen]
+                    # Pinned H2C -- truly non-blocking.
+                    overlay_t = overlay_pin.to(
+                        device=self.device, non_blocking=True)
+                    idx_pin = torch.tensor(
+                        suffix_indices, dtype=torch.long
+                    ).pin_memory()
+                    idx_t = idx_pin.to(
+                        device=self.device, non_blocking=True)
+                    merged.index_copy_(0, idx_t, overlay_t)
+
+                self._draft_token_ids = merged
+                self._copy_draft_token_ids_to_cpu(scheduler_output)
+            else:
+                # (B2) Suffix-only async.
+                #      No Arctic GPU work to overlap with, so skip the
+                #      copy stream (its overhead exceeds the marginal
+                #      overlap with the lightweight rejection kernel).
+                #      Instead: rejection sample → parse tokens directly
+                #      → suffix CPU work → build GPU tensor via pinned buf.
+                self._suffix_only_rejection_sample(
+                    sampled_token_ids,
+                    spec_decode_common_attn_metadata,
+                )
+
+                # Parse sampled tokens to CPU lists.  .cpu() syncs the
+                # default stream (waits for the rejection kernel, which
+                # is lightweight), then parse_output performs CPU-side
+                # rejection to extract accepted token IDs.
+                with record_function_or_nullcontext(
+                    "gpu_model_runner: draft (suffix)"
+                ):
+                    num_reqs = self.input_batch.num_reqs
+                    discard_indices = np.nonzero(
+                        self.discard_request_mask.np[:num_reqs]
+                    )[0]
+                    n_cols = sampled_token_ids.shape[-1]
+                    if n_cols == 1:
+                        sampled_cpu = sampled_token_ids.tolist()
+                        for idx in discard_indices:
+                            sampled_cpu[int(idx)].clear()
+                    else:
+                        sampled_cpu, _ = RejectionSampler.parse_output(
+                            sampled_token_ids.cpu(),
+                            self.input_batch.vocab_size,
+                            discard_indices,
+                        )
+
+                    self._update_suffix_cache(sampled_cpu)
+                    suffix_results = self.propose_suffix_draft_token_ids(
+                        sampled_cpu
+                    )
+                    suffix_draft = [
+                        result.token_ids if result.score >= 0
+                        else []
+                        for result in suffix_results
+                    ]
+
+                # Build GPU tensor from suffix lists via pinned buffer.
+                k = self.num_spec_tokens
+                n = len(suffix_draft)
+                pin = self._suffix_merge_pinned[:n, :k]
+                pin_np = pin.numpy()
+                pin_np[:] = 0
+                for i, s in enumerate(suffix_draft):
+                    if s:
+                        slen = min(len(s), k)
+                        pin_np[i, :slen] = s[:slen]
+                self._draft_token_ids = pin.to(
+                    device=self.device, non_blocking=True)
                 self._copy_draft_token_ids_to_cpu(scheduler_output)
 
         # --- Bookkeeping ---
