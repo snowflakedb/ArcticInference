@@ -542,86 +542,15 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         return hidden_states, hidden_states[logits_indices]
 
     # ------------------------------------------------------------------
-    # _sample override: bypass the rejection sampler when
-    # disable_by_batch_size is active.
-    #
-    # In async scheduling the AsyncScheduler always adds placeholder
-    # spec tokens for every decode request, so spec_decode_metadata is
-    # never None.  When the batch exceeds disable_by_batch_size, draft
-    # proposal is correctly skipped (propose_draft_token_ids returns
-    # empty), but the *current* step still runs the rejection sampler
-    # on the (large) logits tensor → logits.sort inside top-k/top-p
-    # OOMs.
-    #
-    # Fix: when disable_by_batch_size triggers, sample only the first
-    # (target) logit per request with the regular sampler and return an
-    # "all-drafts-rejected" output.  The scheduler's accounting stays
-    # correct because update_from_output sees num_accepted=0 and
-    # adjusts num_computed_tokens / num_output_placeholders accordingly.
+    # _sample: inline the base GPUModelRunner._sample logic here because
+    # the class is monkey-patched at runtime, making both super() and
+    # GPUModelRunner._sample(self, ...) resolve back to this method.
     # ------------------------------------------------------------------
     def _sample(
         self,
         logits: torch.Tensor | None,
         spec_decode_metadata: SpecDecodeMetadata | None,
     ) -> SamplerOutput:
-        if (
-            spec_decode_metadata is not None
-            and self.speculative_config
-            and self.speculative_config.disable_by_batch_size
-            and len(self.input_batch.req_ids)
-            > self.speculative_config.disable_by_batch_size
-        ):
-            sampling_metadata = self.input_batch.sampling_metadata
-            self.input_batch.update_async_output_token_ids()
-
-            # Replay the async-spec-token update the base _sample does
-            # so that penalties / bad-words see the right token history.
-            if (self.use_async_scheduling
-                    and self._draft_token_req_ids is not None):
-                draft_token_ids_cpu, _ = self._get_draft_token_ids_cpu()
-                self.input_batch.update_async_spec_token_ids(
-                    draft_token_ids_cpu)
-
-            # Extract the first (target) logit per request.
-            cu = spec_decode_metadata.cu_num_sampled_tokens
-            batch_size = len(spec_decode_metadata.num_draft_tokens)
-            first_indices = torch.zeros(
-                batch_size, dtype=cu.dtype, device=cu.device)
-            if batch_size > 1:
-                first_indices[1:] = cu[:-1]
-            assert logits is not None
-            first_logits = logits[first_indices]
-
-            regular_output = self.sampler(
-                logits=first_logits,
-                sampling_metadata=sampling_metadata,
-            )
-
-            # Build "all-drafts-rejected" output in the shape the
-            # rejection sampler would return:
-            #   (batch_size, max_spec_len + 1)
-            # Position 0 = accepted token, positions 1.. = placeholder.
-            max_spec_len = spec_decode_metadata.max_spec_len
-            PLACEHOLDER = -1  # matches PLACEHOLDER_TOKEN_ID in
-            #                   rejection_sampler.py
-            output_token_ids = torch.full(
-                (batch_size, max_spec_len + 1),
-                PLACEHOLDER,
-                device=regular_output.sampled_token_ids.device,
-                dtype=regular_output.sampled_token_ids.dtype,
-            )
-            output_token_ids[:, 0] = (
-                regular_output.sampled_token_ids.squeeze(-1))
-
-            self._update_states_after_model_execute(output_token_ids)
-            return SamplerOutput(
-                sampled_token_ids=output_token_ids,
-                logprobs_tensors=None,
-            )
-
-        # Inline the base GPUModelRunner._sample logic here because the
-        # class is monkey-patched at runtime, making both super() and
-        # GPUModelRunner._sample(self, ...) resolve back to this method.
         sampling_metadata = self.input_batch.sampling_metadata
         self.input_batch.update_async_output_token_ids()
         if spec_decode_metadata is None:
@@ -689,11 +618,19 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         spec_decode_metadata: SpecDecodeMetadata | None,
         common_attn_metadata: CommonAttentionMetadata,
     ) -> list[list[int]] | torch.Tensor:
-        drafting_disabled = (
+        # Compute the maximum number of requests to draft for.
+        # When disable_by_batch_size is set and the batch exceeds it,
+        # we still draft for the first N requests instead of disabling
+        # entirely.  This avoids the stale-data crash that occurs when
+        # drafting is fully disabled one step and re-enabled the next.
+        batch_size = len(self.input_batch.req_ids)
+        draft_limit = batch_size  # default: draft for all
+        if (
             self.speculative_config
             and self.speculative_config.disable_by_batch_size
-            and len(self.input_batch.req_ids) > self.speculative_config.disable_by_batch_size
-        )
+            and batch_size > self.speculative_config.disable_by_batch_size
+        ):
+            draft_limit = self.speculative_config.disable_by_batch_size
 
         use_async_path = (
             self.speculative_config.method in ("arctic", "mlp_speculator")
@@ -701,14 +638,6 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             and self.use_async_scheduling
             and common_attn_metadata is not None
         )
-
-        if drafting_disabled and not use_async_path:
-            # Non-async: safe to return early; bookkeeping runs before
-            # the draft result is consumed.
-            if self.speculative_config.method in ("arctic", "mlp_speculator"):
-                 batch_size = len(self.input_batch.req_ids)
-                 return torch.empty((batch_size, 0), dtype=torch.int64, device=self.device)
-            return [[] for _ in range(len(self.input_batch.req_ids))]
 
         if use_async_path:
             assert isinstance(sampled_token_ids, torch.Tensor)
@@ -726,23 +655,16 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 next_token_ids, valid_sampled_tokens_count
             )
 
-            # Check disable_by_batch_size AFTER setting
-            # prev_sampled_token_ids / valid_sampled_token_count
-            # (via _copy_valid_sampled_token_count above) so that
-            # _bookkeeping_sync and _update_states still work.
-            if drafting_disabled:
-                batch_size = len(self.input_batch.req_ids)
-                return torch.empty((batch_size, 0), dtype=torch.int64, device=self.device)
-
             target_hidden_states = self.drafter.prepare_hidden_states(
                 sample_hidden_states=sample_hidden_states,
                 sampled_token_ids=sampled_token_ids,
                 spec_decode_metadata=spec_decode_metadata,
             )
 
+            # Only draft for the first draft_limit requests.
             draft = self.drafter.propose(
-                context_token_ids=next_token_ids,
-                previous_hidden_states=target_hidden_states,
+                context_token_ids=next_token_ids[:draft_limit],
+                previous_hidden_states=target_hidden_states[:draft_limit],
                 num_predict_tokens=self.drafter.model.n_predict,
             )
             # Pad to full num_spec_tokens width so the tensor matches
@@ -754,6 +676,16 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                     draft, (0, self.num_spec_tokens - draft.shape[1]),
                     value=0,
                 )
+            # Pad back to full batch_size; rows beyond draft_limit
+            # get zeros (a valid token id) so downstream never sees
+            # stale / garbage data.
+            if draft_limit < batch_size:
+                full_draft = torch.zeros(
+                    batch_size, draft.shape[1],
+                    dtype=draft.dtype, device=draft.device,
+                )
+                full_draft[:draft_limit] = draft
+                draft = full_draft
             return draft
 
         if isinstance(sampled_token_ids, torch.Tensor):
@@ -788,13 +720,19 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 scheduler_output.num_scheduled_tokens,
             )
             
+            # Only draft for the first draft_limit requests.
             arctic_output_tensor = self.drafter.propose(
-                context_token_ids=next_token_ids,
-                previous_hidden_states=previous_hidden_states,
+                context_token_ids=next_token_ids[:draft_limit],
+                previous_hidden_states=previous_hidden_states[:draft_limit],
                 num_predict_tokens=self.drafter.model.n_predict,
             )
             
             arctic_spec_token_ids = arctic_output_tensor.tolist()
+            # Pad with empty lists for requests beyond draft_limit.
+            if draft_limit < batch_size:
+                arctic_spec_token_ids.extend(
+                    [] for _ in range(batch_size - draft_limit)
+                )
 
         if self._suffix_cache is not None:
             self._update_suffix_cache(sampled_token_ids_list)
@@ -1055,15 +993,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                     spec_decode_metadata,
                     spec_decode_common_attn_metadata,
                 )
-            # When drafting is disabled (e.g. disable_by_batch_size), the
-            # result is a 0-column tensor.  Don't copy it to CPU or the
-            # shape will mismatch draft_token_ids_cpu; instead signal
-            # "no draft" so the next step runs without speculation.
-            if (isinstance(self._draft_token_ids, torch.Tensor)
-                    and self._draft_token_ids.shape[1] == 0):
-                self._draft_token_ids = None
-            else:
-                self._copy_draft_token_ids_to_cpu(scheduler_output)
+            self._copy_draft_token_ids_to_cpu(scheduler_output)
 
         # --- Draft proposal orchestration ---
         #
@@ -1164,83 +1094,65 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 #         asserts isinstance(self._draft_token_ids, torch.Tensor)
                 #         and uses it for on-device scatter.
 
-                # Detect whether Arctic drafting was disabled (0-column
-                # tensor from disable_by_batch_size).
-                arctic_disabled = (
-                    isinstance(arctic_draft, torch.Tensor)
-                    and arctic_draft.shape[1] == 0
-                )
-
                 # Collect suffix rows that have results.
                 suffix_indices = [
                     i for i, s in enumerate(suffix_draft) if s
                 ]
 
-                if arctic_disabled:
-                    # disable_by_batch_size triggered -- skip ALL
-                    # speculation (including suffix) to avoid OOM
-                    # under high batch pressure.  Suffix CPU work
-                    # already ran but we discard its results.
-                    self._draft_token_ids = None
+                if isinstance(arctic_draft, torch.Tensor):
+                    merged = arctic_draft
                 else:
-                    if isinstance(arctic_draft, torch.Tensor):
-                        merged = arctic_draft
-                    else:
-                        # Shouldn't happen in async path, but handle
-                        # gracefully.
-                        k = self.num_spec_tokens
-                        n = len(arctic_draft)
-                        pin = self._suffix_merge_pinned[:n, :k]
-                        pin_np = pin.numpy()
-                        pin_np[:] = 0
-                        for i, row in enumerate(arctic_draft):
-                            t = row[:k]
-                            if t:
-                                pin_np[i, :len(t)] = t
-                        merged = pin.to(
-                            device=self.device, non_blocking=True)
+                    # Shouldn't happen in async path, but handle
+                    # gracefully.
+                    k = self.num_spec_tokens
+                    n = len(arctic_draft)
+                    pin = self._suffix_merge_pinned[:n, :k]
+                    pin_np = pin.numpy()
+                    pin_np[:] = 0
+                    for i, row in enumerate(arctic_draft):
+                        t = row[:k]
+                        if t:
+                            pin_np[i, :len(t)] = t
+                    merged = pin.to(
+                        device=self.device, non_blocking=True)
 
-                    # When Arctic drafting is disabled (0-column), pad
-                    # to full num_spec_tokens width so that suffix merge
-                    # has room to write and _copy_draft_token_ids_to_cpu
-                    # gets the shape it expects.
-                    if merged.shape[1] < self.num_spec_tokens:
-                        merged = torch.nn.functional.pad(
-                            merged,
-                            (0, self.num_spec_tokens - merged.shape[1]),
-                            value=0,
-                        )
+                if merged.shape[1] < self.num_spec_tokens:
+                    merged = torch.nn.functional.pad(
+                        merged,
+                        (0, self.num_spec_tokens - merged.shape[1]),
+                        value=0,
+                    )
 
-                    # Batch-overwrite rows that have suffix results.
-                    # CRITICAL: use the pre-allocated *pinned* merge
-                    # buffer so that cudaMemcpyAsync does NOT synchronise
-                    # the default stream.  With pageable (non-pinned)
-                    # memory CUDA must sync the stream first, blocking the
-                    # CPU until Arctic GPU work finishes -- destroying
-                    # the async overlap.
-                    width = merged.shape[1]
-                    if suffix_indices:
-                        n_sfx = len(suffix_indices)
-                        overlay_pin = \
-                            self._suffix_merge_pinned[:n_sfx, :width]
-                        overlay_np = overlay_pin.numpy()
-                        overlay_np[:] = 0
-                        for j, idx in enumerate(suffix_indices):
-                            s = suffix_draft[idx]
-                            slen = min(len(s), width)
-                            overlay_np[j, :slen] = s[:slen]
-                        # Pinned H2C -- truly non-blocking.
-                        overlay_t = overlay_pin.to(
-                            device=self.device, non_blocking=True)
-                        idx_pin = torch.tensor(
-                            suffix_indices, dtype=torch.long
-                        ).pin_memory()
-                        idx_t = idx_pin.to(
-                            device=self.device, non_blocking=True)
-                        merged.index_copy_(0, idx_t, overlay_t)
+                # Batch-overwrite rows that have suffix results.
+                # CRITICAL: use the pre-allocated *pinned* merge
+                # buffer so that cudaMemcpyAsync does NOT synchronise
+                # the default stream.  With pageable (non-pinned)
+                # memory CUDA must sync the stream first, blocking the
+                # CPU until Arctic GPU work finishes -- destroying
+                # the async overlap.
+                width = merged.shape[1]
+                if suffix_indices:
+                    n_sfx = len(suffix_indices)
+                    overlay_pin = \
+                        self._suffix_merge_pinned[:n_sfx, :width]
+                    overlay_np = overlay_pin.numpy()
+                    overlay_np[:] = 0
+                    for j, idx in enumerate(suffix_indices):
+                        s = suffix_draft[idx]
+                        slen = min(len(s), width)
+                        overlay_np[j, :slen] = s[:slen]
+                    # Pinned H2C -- truly non-blocking.
+                    overlay_t = overlay_pin.to(
+                        device=self.device, non_blocking=True)
+                    idx_pin = torch.tensor(
+                        suffix_indices, dtype=torch.long
+                    ).pin_memory()
+                    idx_t = idx_pin.to(
+                        device=self.device, non_blocking=True)
+                    merged.index_copy_(0, idx_t, overlay_t)
 
-                    self._draft_token_ids = merged
-                    self._copy_draft_token_ids_to_cpu(scheduler_output)
+                self._draft_token_ids = merged
+                self._copy_draft_token_ids_to_cpu(scheduler_output)
             else:
                 # (B2) Suffix-only async.
                 #      No Arctic GPU work to overlap with, so skip the
