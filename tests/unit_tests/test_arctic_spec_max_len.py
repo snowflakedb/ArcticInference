@@ -49,13 +49,13 @@ def sampling_configs():
 
 @pytest.fixture
 def model_name():
-    return "Snowflake/Llama-3.1-SwiftKV-8B-Instruct"
+    return "meta-llama/Llama-3.3-70B-Instruct"
 
 
 # Define the speculative configurations that will be tested
 ARCTIC_SPEC_CONFIG = {
     "method": "arctic",
-    "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.1-8B-Instruct",
+    "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.3-70B-Instruct",
     "num_speculative_tokens": 3,
     "disable_by_batch_size": 64,
     "enable_suffix_decoding": True,
@@ -85,6 +85,7 @@ def test_speculative_decoding(
     This test is parameterized to cover 'arctic' and 'suffix' methods.
     '''
     with monkeypatch.context() as m:
+        m.setenv("ARCTIC_INFERENCE_ENABLED", "1")
         m.setenv("VLLM_PLUGINS", "arctic_inference")
         m.setenv("VLLM_USE_V1", "1")
 
@@ -92,11 +93,12 @@ def test_speculative_decoding(
 
         spec_llm = LLM(
             model=model_name,
-            tensor_parallel_size=1,
+            tensor_parallel_size=2,
             quantization="fp8",
             speculative_config=spec_config,
             max_model_len=MAX_MODEL_LEN,
             enforce_eager=True,
+            trust_remote_code=True,
         )
 
         for sampling_config in sampling_configs:

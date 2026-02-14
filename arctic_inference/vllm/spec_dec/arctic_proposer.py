@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional, Union, Tuple, List
+from typing import Optional, Union, List
 
 from vllm.config import VllmConfig
 from vllm.model_executor.model_loader import get_model
@@ -166,7 +166,8 @@ class ArcticProposer:
 
         offsets = torch.cumsum(num_processed_tokens_per_req, dim=0) - num_processed_tokens_per_req
 
-        valid_mask = (sampled_token_ids != -1)
+        vocab_size = self.vllm_config.model_config.get_vocab_size()
+        valid_mask = (sampled_token_ids != -1) & (sampled_token_ids < vocab_size)
         gen_lens = valid_mask.sum(dim=1).to(dtype=torch.int64)
 
         last_valid = torch.clamp(gen_lens - 1, min=0)
@@ -188,7 +189,7 @@ class ArcticProposer:
         context_token_ids: Union[torch.Tensor, np.ndarray, List[int]],
         previous_hidden_states: Optional[torch.Tensor],
         num_predict_tokens: int,
-    ) -> Optional[np.ndarray]:
+    ) -> Optional[torch.Tensor]:
         assert num_predict_tokens > 0
         if isinstance(context_token_ids, torch.Tensor):
             if context_token_ids.device != self.device:
@@ -212,7 +213,7 @@ class ArcticProposer:
         requests: dict[str, CachedRequestState],
         gpu_input_batch: InputBatch,
         num_scheduled_tokens: dict[str, int],
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> torch.Tensor:
         req_ids = gpu_input_batch.req_ids
         next_token_ids: list[int] = []
         for i, token_ids in enumerate(sampled_token_ids):
