@@ -225,6 +225,28 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 pin_memory=self.pin_memory,
             )
 
+        # Pre-allocated GPU buffer for the merged draft tensor.
+        # Avoids per-step F.pad / torch.zeros allocations in the async
+        # Arctic drafting path (propose_draft_token_ids + suffix merge).
+        # Shape: [max_num_reqs, num_spec_tokens], int64 (matches
+        # draft_token_ids_cpu for zero-cost _copy_draft_token_ids_to_cpu).
+        if (self.speculative_config is not None
+                and self.use_async_scheduling
+                and self.speculative_config.method
+                    in ("arctic", "mlp_speculator")):
+            self._draft_merged_gpu = torch.zeros(
+                (self.max_num_reqs, self.num_spec_tokens),
+                dtype=torch.int64, device=self.device,
+            )
+
+        # Pre-allocated pinned index buffer for suffix merge overlay.
+        # Avoids per-step torch.tensor(...).pin_memory() allocations.
+        if self._suffix_cache is not None and self.use_async_scheduling:
+            self._suffix_index_pinned = torch.empty(
+                self.max_num_reqs, dtype=torch.long,
+                device="cpu", pin_memory=self.pin_memory,
+            )
+
         # Per-request response tokens for suffix pattern building in async
         # mode.  In async scheduling, _bookkeeping_sync writes -1 placeholders
         # to token_ids_cpu instead of real values, corrupting the pattern that
@@ -817,30 +839,37 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             )
 
             # Only draft for the first draft_limit requests.
-            draft = self.drafter.propose(
+            raw_draft = self.drafter.propose(
                 context_token_ids=next_token_ids[:draft_limit],
                 previous_hidden_states=target_hidden_states[:draft_limit],
                 num_predict_tokens=self.drafter.model.n_predict,
             )
-            # Pad to full num_spec_tokens width so the tensor matches
-            # the shape expected by _copy_draft_token_ids_to_cpu and
-            # _prepare_input_ids, and so suffix merge has room to write
-            # longer sequences.
-            if draft.shape[1] < self.num_spec_tokens:
-                draft = torch.nn.functional.pad(
-                    draft, (0, self.num_spec_tokens - draft.shape[1]),
-                    value=0,
-                )
-            # Pad back to full batch_size; rows beyond draft_limit
-            # get zeros (a valid token id) so downstream never sees
-            # stale / garbage data.
-            if draft_limit < batch_size:
-                full_draft = torch.zeros(
-                    batch_size, draft.shape[1],
-                    dtype=draft.dtype, device=draft.device,
-                )
-                full_draft[:draft_limit] = draft
-                draft = full_draft
+
+            # Use pre-allocated GPU buffer when available.  This avoids
+            # per-step F.pad + torch.zeros allocations.  The buffer is
+            # [max_num_reqs, num_spec_tokens] so a single zero_() +
+            # copy_() handles both width and batch padding in one shot.
+            merged_buf = getattr(self, '_draft_merged_gpu', None)
+            if merged_buf is not None:
+                draft = merged_buf[:batch_size]
+                draft.zero_()
+                rd_rows, rd_cols = raw_draft.shape
+                draft[:rd_rows, :rd_cols].copy_(raw_draft)
+            else:
+                draft = raw_draft
+                if draft.shape[1] < self.num_spec_tokens:
+                    draft = torch.nn.functional.pad(
+                        draft,
+                        (0, self.num_spec_tokens - draft.shape[1]),
+                        value=0,
+                    )
+                if draft_limit < batch_size:
+                    full_draft = torch.zeros(
+                        batch_size, draft.shape[1],
+                        dtype=draft.dtype, device=draft.device,
+                    )
+                    full_draft[:draft_limit] = draft
+                    draft = full_draft
             return draft
 
         if isinstance(sampled_token_ids, torch.Tensor):
@@ -993,7 +1022,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 continue
 
             index = self.input_batch.req_id_to_index[req_id]
-            if req_id not in self._suffix_cache.active_requests:
+            is_new = req_id not in self._suffix_cache.active_requests
+            if is_new:
                 if req_id in self._suffix_cache.cached_requests:
                     self._suffix_cache.evict_cached_response(req_id)
                 num_prompt_tokens = self.input_batch.num_prompt_tokens[index]
@@ -1004,10 +1034,12 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             self._suffix_cache.add_active_response(req_id, sampled_ids)
             self._suffix_response_tokens[req_id].extend(sampled_ids)
 
+        stopped_ids = []
         for req_id in list(self._suffix_cache.active_requests):
             if req_id not in seen_req_ids:
                 self._suffix_cache.stop_request(req_id)
                 self._suffix_response_tokens.pop(req_id, None)
+                stopped_ids.append(req_id)
 
     def propose_suffix_draft_token_ids(
         self,
@@ -1055,12 +1087,13 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 pattern = self.input_batch.token_ids_cpu[
                     i, start:num_tokens].tolist()
 
+            max_spec = min(
+                MAX_SPEC_LEN, self.max_model_len - num_tokens - 1
+            )
             result = self._suffix_cache.speculate(
                 req_id,
                 pattern,
-                max_spec_tokens=min(
-                    MAX_SPEC_LEN, self.max_model_len - num_tokens - 1
-                ),
+                max_spec_tokens=max_spec,
                 max_spec_factor=config.suffix_max_spec_factor,
                 max_spec_offset=config.suffix_max_spec_offset,
                 min_token_prob=config.suffix_min_token_prob,
@@ -1121,14 +1154,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         )[0]
 
         if n_cols == 1:
-            # No spec decode tokens -- simple tolist on pinned buffer.
             result = pinned.tolist()
             for i in discard_indices:
                 result[int(i)].clear()
         else:
-            # Spec decode tokens present -- rejection-sample on CPU.
-            # parse_output does .cpu().numpy(); on an already-CPU tensor the
-            # .cpu() is a no-op, so this efficiently reuses the pinned buffer.
             result, _ = RejectionSampler.parse_output(
                 pinned,
                 self.input_batch.vocab_size,
@@ -1326,6 +1355,9 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                     i for i, s in enumerate(suffix_draft) if s
                 ]
 
+                # arctic_draft is already a [batch, num_spec_tokens]
+                # GPU tensor (from the pre-allocated _draft_merged_gpu
+                # buffer when available, or F.pad fallback).
                 if isinstance(arctic_draft, torch.Tensor):
                     merged = arctic_draft
                 else:
@@ -1371,9 +1403,18 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                     # Pinned H2C -- truly non-blocking.
                     overlay_t = overlay_pin.to(
                         device=self.device, non_blocking=True)
-                    idx_pin = torch.tensor(
-                        suffix_indices, dtype=torch.long
-                    ).pin_memory()
+                    # Use pre-allocated pinned index buffer when
+                    # available to avoid per-step allocation.
+                    idx_pinned = getattr(
+                        self, '_suffix_index_pinned', None)
+                    if idx_pinned is not None:
+                        idx_pin = idx_pinned[:n_sfx]
+                        idx_pin[:] = torch.tensor(
+                            suffix_indices, dtype=torch.long)
+                    else:
+                        idx_pin = torch.tensor(
+                            suffix_indices, dtype=torch.long
+                        ).pin_memory()
                     idx_t = idx_pin.to(
                         device=self.device, non_blocking=True)
                     merged.index_copy_(0, idx_t, overlay_t)
@@ -1527,6 +1568,12 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 num_nans_in_logits=num_nans_in_logits,
                 cudagraph_stats=cudagraph_stats,
             )
+            # Attach actual draft lengths to the ModelRunnerOutput so the
+            # scheduler can read them reliably in update_from_output.
+            # This survives the async pipeline (scheduler_output attrs
+            # may not due to object lifecycle in the batch queue).
+            output._actual_draft_lens = getattr(
+                scheduler_output, '_actual_draft_lens', None)
 
         if not self.use_async_scheduling:
             return output

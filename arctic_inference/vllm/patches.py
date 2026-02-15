@@ -129,21 +129,36 @@ class AsyncSchedulerPatch(ArcticPatch[AsyncScheduler]):
         set by the worker doesn't survive serialisation back to the
         scheduler).
 
-        Strategy: ``_prev_actual_draft_len`` converges **upward** to
-        the drafter's ``n_predict`` via ``max(prev, num_accepted)``.
-        Only steps that actually accept tokens update the value;
-        zero-acceptance steps are ignored so a single bad step doesn't
-        shrink the allocation and starve future drafting.
+        Strategy:
+        1. **Primary path**: read ``_actual_draft_lens`` from the
+           ``model_runner_output`` object (attached by the model runner
+           to the ``ModelRunnerOutput`` dataclass, which reliably
+           survives the async pipeline).
+        2. **Legacy path**: read from ``scheduler_output._actual_draft_lens``
+           (works in same-process non-async mode).
+        3. **Fallback**: infer from acceptance results with exponential
+           growth — when all drafted tokens are accepted, double the
+           allocation so suffix decoding reaches full capacity in
+           O(log n) steps instead of O(n).
         """
         sampled_token_ids = model_runner_output.sampled_token_ids
         req_id_to_index = model_runner_output.req_id_to_index
 
-        result = Scheduler.update_from_output(self, scheduler_output, model_runner_output)
+        result = Scheduler.update_from_output(
+            self, scheduler_output, model_runner_output)
 
-        # Fast path: if the worker is in the same process, use its
-        # reported actual_draft_lens directly (most accurate).
+        # Primary path: read from model_runner_output (most reliable
+        # for async scheduling — the ModelRunnerOutput object is
+        # returned by get_output() and guaranteed to survive).
         actual_lens = getattr(
-            scheduler_output, '_actual_draft_lens', None)
+            model_runner_output, '_actual_draft_lens', None)
+
+        # Legacy path: read from scheduler_output (works for non-async
+        # or same-process setups where the attribute is preserved).
+        if not actual_lens:
+            actual_lens = getattr(
+                scheduler_output, '_actual_draft_lens', None)
+
         if actual_lens:
             for req_id, actual_len in actual_lens.items():
                 request = self.requests.get(req_id)
@@ -152,8 +167,15 @@ class AsyncSchedulerPatch(ArcticPatch[AsyncScheduler]):
             return result
 
         # Fallback: infer from acceptance results (multi-process case).
-        # We grow the allocation via max(prev, num_accepted + 1) so
-        # that it converges to n_predict within a few steps:
+        # Uses exponential growth when all drafted tokens are accepted
+        # (indicating the drafter / suffix cache can handle more), so
+        # the allocation converges to num_spec_tokens in O(log n)
+        # steps:
+        #   step 0: 1 position  → accept 1/1 → prev = 2
+        #   step 1: 2 positions → accept 2/2 → prev = 4
+        #   step 2: 4 positions → accept 4/4 → prev = 8
+        #   ...
+        # When not all are accepted (normal drafter), linear growth:
         #   step 0: 1 position  → accept 1 → prev = 2
         #   step 1: 2 positions → accept 2 → prev = 3
         #   step 2: 3 positions → steady state (n_predict = 3)
@@ -181,9 +203,16 @@ class AsyncSchedulerPatch(ArcticPatch[AsyncScheduler]):
             prev = getattr(request, '_prev_actual_draft_len', None)
 
             if num_accepted > 0:
-                # Grow: use num_accepted + 1 so the next step has room
-                # to discover the drafter can produce more tokens.
-                new_val = min(num_accepted + 1, self.num_spec_tokens)
+                if num_accepted >= num_draft and num_draft > 0:
+                    # All drafted tokens accepted — the drafter (or
+                    # suffix cache) could produce more if given room.
+                    # Double the allocation for exponential ramp-up.
+                    new_val = min(
+                        num_draft * 2, self.num_spec_tokens)
+                else:
+                    # Partial acceptance: grow linearly.
+                    new_val = min(
+                        num_accepted + 1, self.num_spec_tokens)
                 request._prev_actual_draft_len = max(
                     prev or 0, new_val)
             elif prev is None:
