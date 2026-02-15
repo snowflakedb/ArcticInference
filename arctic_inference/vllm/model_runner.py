@@ -105,7 +105,6 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
     _orig_initialize_kv_cache = GPUModelRunner.initialize_kv_cache
     _orig_capture_cudagraphs = GPUModelRunner._capture_cudagraphs
-    _orig_prepare_inputs = GPUModelRunner._prepare_inputs
     _orig_profile_run = GPUModelRunner.profile_run
     _orig_load_model = GPUModelRunner.load_model
     _orig_propose_draft_token_ids = GPUModelRunner.propose_draft_token_ids
@@ -113,6 +112,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     _orig_init = GPUModelRunner.__init__
     _orig_build_attention_metadata = GPUModelRunner._build_attention_metadata
     _orig_execute_model = GPUModelRunner.execute_model
+    _orig_bookkeeping_sync = GPUModelRunner._bookkeeping_sync
+    _orig_sample_tokens = GPUModelRunner.sample_tokens
     # _orig_pad_for_sequence_parallelism = GPUModelRunner._pad_for_sequence_parallelism
 
     def __init__(
@@ -229,6 +230,13 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         # to token_ids_cpu instead of real values, corrupting the pattern that
         # propose_suffix_draft_token_ids reads.  We keep a clean copy here.
         self._suffix_response_tokens: dict[str, list[int]] = {}
+
+        # Actual draft lengths per request from the previous step.  Used
+        # by execute_model to trim the scheduler's spec token allocation
+        # down to the real draft width, and communicated back to the
+        # scheduler (via scheduler_output._actual_draft_lens) so
+        # _update_after_schedule can set dynamic placeholder counts.
+        self._prev_actual_draft_lens: dict[str, int] = {}
 
         # Backup-token buffer used by suffix-only async rejection sampling.
         # The arctic proposer has its own buffer; this one covers the case
@@ -607,6 +615,143 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         finally:
             self.model = orig_model
 
+    @torch.inference_mode
+    def sample_tokens(self, grammar_output):
+        """Wrapper around base sample_tokens for arctic async spec decode.
+
+        Saves execute_model_state before the base clears it, then handles
+        the 'not-fits-in-drafter' case that the base only handles for Eagle.
+        """
+        _arctic_saved_state = None
+        if (self.execute_model_state is not None
+                and self.speculative_config is not None
+                and self.speculative_config.method
+                    in ("arctic", "mlp_speculator", "suffix")
+                and self.use_async_scheduling):
+            _arctic_saved_state = (
+                self.execute_model_state.scheduler_output,
+                self.execute_model_state.spec_decode_common_attn_metadata,
+            )
+
+        result = self._orig_sample_tokens(grammar_output)
+
+        # If _arctic_async_sampled_tensor was stashed by _bookkeeping_sync
+        # but never consumed by propose_draft_token_ids, this is the
+        # not-fits-in-drafter case.  Mirror Eagle's handling: call
+        # _copy_valid_sampled_token_count and set draft tokens to zeros.
+        stashed = getattr(self, '_arctic_async_sampled_tensor', None)
+        if stashed is not None:
+            del self._arctic_async_sampled_tensor
+            if _arctic_saved_state is not None:
+                scheduler_output, common_attn_meta = _arctic_saved_state
+                self._arctic_handle_not_fits(
+                    stashed, scheduler_output, common_attn_meta)
+
+        return result
+
+    def _arctic_handle_not_fits(
+        self,
+        sampled_token_ids: torch.Tensor,
+        scheduler_output: "SchedulerOutput",
+        common_attn_metadata,
+    ) -> None:
+        """Mirror Eagle's not-fits-in-drafter path for arctic async.
+
+        When the input is too long for the drafter but spec decode is
+        active, Eagle still calls prepare_next_token_ids_padded /
+        _copy_valid_sampled_token_count and sets draft tokens to zeros.
+        Without this, _get_valid_sampled_token_count returns stale counts
+        and _prepare_input_ids scatters -1 placeholders into the
+        embedding layer.
+        """
+        if (hasattr(self, 'drafter')
+                and hasattr(self.drafter, 'prepare_next_token_ids_padded')
+                and common_attn_metadata is not None):
+            next_token_ids, valid_sampled_tokens_count = (
+                self.drafter.prepare_next_token_ids_padded(
+                    common_attn_metadata,
+                    sampled_token_ids,
+                    self.requests,
+                    self.input_batch,
+                    self.discard_request_mask.gpu,
+                )
+            )
+            self._copy_valid_sampled_token_count(
+                next_token_ids, valid_sampled_tokens_count)
+        else:
+            # Fallback for drafters without prepare_next_token_ids_padded
+            # (e.g. suffix-only).  Compute valid counts with PyTorch ops.
+            mask = sampled_token_ids != -1
+            valid_counts = mask.sum(dim=1)
+            batch_size = sampled_token_ids.shape[0]
+            col_indices = torch.arange(
+                sampled_token_ids.shape[1],
+                device=sampled_token_ids.device,
+            ).unsqueeze(0).expand_as(sampled_token_ids)
+            last_valid_col = (
+                col_indices.masked_fill(~mask, -1).max(dim=1).values)
+            last_valid_col = last_valid_col.clamp(min=0)
+            next_token_ids = sampled_token_ids[
+                torch.arange(batch_size,
+                             device=sampled_token_ids.device),
+                last_valid_col,
+            ]
+            self._copy_valid_sampled_token_count(
+                next_token_ids, valid_counts)
+
+        # Zero draft tokens -- same as Eagle's not-fits path.
+        self._draft_token_ids = torch.zeros(
+            1, device=self.device, dtype=torch.int32,
+        ).expand(len(self.input_batch.req_ids), self.num_spec_tokens)
+        self._copy_draft_token_ids_to_cpu(
+            scheduler_output, zeros_only=True)
+
+    def _bookkeeping_sync(
+        self,
+        scheduler_output: "SchedulerOutput",
+        sampler_output: SamplerOutput,
+        logits: torch.Tensor | None,
+        hidden_states: torch.Tensor,
+        num_scheduled_tokens: int,
+        spec_decode_metadata: SpecDecodeMetadata | None,
+    ):
+        """Wrap base _bookkeeping_sync to handle arctic async spec decode.
+
+        In the base vLLM code, only Eagle-style drafters run *before*
+        bookkeeping (setting prev_sampled_token_ids via
+        _copy_valid_sampled_token_count).  Arctic/suffix drafting runs
+        *after* bookkeeping, so prev_sampled_token_ids is still None
+        when bookkeeping checks ``assert sampled_token_ids.shape[-1] == 1``.
+
+        We fix this by:
+          1. Saving the GPU sampled tensor for propose_draft_token_ids.
+          2. Setting prev_sampled_token_ids to a placeholder so the
+             assertion is skipped.  The real value will be written by
+             _copy_valid_sampled_token_count inside propose_draft_token_ids
+             (fits case) or sample_tokens (not-fits case).
+        """
+        sampled_token_ids = sampler_output.sampled_token_ids
+        if (self.use_async_scheduling
+                and self.speculative_config is not None
+                and self.speculative_config.method
+                    in ("arctic", "mlp_speculator", "suffix")
+                and spec_decode_metadata is not None
+                and sampled_token_ids.shape[-1] > 1
+                and self.input_batch.prev_sampled_token_ids is None):
+            # Stash the full GPU tensor so propose_draft_token_ids can
+            # pick it up later (it normally only receives an empty list
+            # in the post-bookkeeping path).
+            self._arctic_async_sampled_tensor = sampled_token_ids
+            # Placeholder: first column only (bonus token per request).
+            # Prevents the assertion from firing; the correct value will
+            # be overwritten by _copy_valid_sampled_token_count shortly.
+            self.input_batch.prev_sampled_token_ids = (
+                sampled_token_ids[:, :1])
+
+        return self._orig_bookkeeping_sync(
+            scheduler_output, sampler_output, logits, hidden_states,
+            num_scheduled_tokens, spec_decode_metadata)
+
     def propose_draft_token_ids(
         self,
         scheduler_output: "SchedulerOutput",
@@ -618,6 +763,16 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         spec_decode_metadata: SpecDecodeMetadata | None,
         common_attn_metadata: CommonAttentionMetadata,
     ) -> list[list[int]] | torch.Tensor:
+        # In async mode, the base vLLM dispatches arctic to the
+        # post-bookkeeping path which passes valid_sampled_token_ids
+        # (an empty list for async).  Recover the stashed GPU tensor
+        # so the fast async drafting path below can activate.
+        if (isinstance(sampled_token_ids, list)
+                and len(sampled_token_ids) == 0
+                and hasattr(self, '_arctic_async_sampled_tensor')):
+            sampled_token_ids = self._arctic_async_sampled_tensor
+            del self._arctic_async_sampled_tensor
+
         # Compute the maximum number of requests to draft for.
         # When disable_by_batch_size is set and the batch exceeds it,
         # we still draft for the first N requests instead of disabling
@@ -772,6 +927,59 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         if spec_token_ids is None:
              spec_token_ids = [[] for _ in range(len(self.input_batch.req_ids))]
+
+        # For async scheduling the base _prepare_input_ids asserts that
+        # _draft_token_ids is a torch.Tensor and uses it to scatter draft
+        # tokens into the input.  If we reached here (non-async code path)
+        # while async scheduling is active we must:
+        #   1. Convert the list-of-lists draft tokens to a padded tensor.
+        #   2. Call _copy_valid_sampled_token_count so the next step's
+        #      _get_valid_sampled_token_count returns correct counts.
+        if (self.use_async_scheduling
+                and isinstance(spec_token_ids, list)
+                and isinstance(sampled_token_ids, torch.Tensor)):
+            # --- _copy_valid_sampled_token_count ---
+            if (hasattr(self, 'drafter')
+                    and hasattr(self.drafter, 'prepare_next_token_ids_padded')
+                    and common_attn_metadata is not None):
+                next_tok, valid_cnt = (
+                    self.drafter.prepare_next_token_ids_padded(
+                        common_attn_metadata,
+                        sampled_token_ids,
+                        self.requests,
+                        self.input_batch,
+                        self.discard_request_mask.gpu,
+                    ))
+                self._copy_valid_sampled_token_count(next_tok, valid_cnt)
+            else:
+                # Manual fallback (suffix-only drafter).
+                mask = sampled_token_ids != -1
+                valid_cnt = mask.sum(dim=1)
+                _bs = sampled_token_ids.shape[0]
+                cols = torch.arange(
+                    sampled_token_ids.shape[1],
+                    device=sampled_token_ids.device,
+                ).unsqueeze(0).expand_as(sampled_token_ids)
+                last_col = cols.masked_fill(~mask, -1).max(dim=1).values
+                last_col = last_col.clamp(min=0)
+                next_tok = sampled_token_ids[
+                    torch.arange(_bs, device=sampled_token_ids.device),
+                    last_col,
+                ]
+                self._copy_valid_sampled_token_count(next_tok, valid_cnt)
+
+            # --- Convert list[list[int]] -> padded tensor ---
+            padded = torch.zeros(
+                batch_size, self.num_spec_tokens,
+                dtype=torch.int32, device=self.device,
+            )
+            for i, tokens in enumerate(spec_token_ids):
+                length = min(len(tokens), self.num_spec_tokens)
+                if length > 0:
+                    padded[i, :length] = torch.tensor(
+                        tokens[:length], dtype=torch.int32,
+                        device=self.device)
+            spec_token_ids = padded
 
         return spec_token_ids
 
@@ -1043,6 +1251,25 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 #     propose_draft_token_ids (the method) with a GPU tensor
                 #     and triggers the async GPU path internally.
                 propose_draft_token_ids(sampled_token_ids)
+
+                # Track actual draft lengths for next step's allocation.
+                _n_predict = self.drafter.model.n_predict
+                _batch_size = len(self.input_batch.req_ids)
+                _disable_bs = (
+                    self.speculative_config.disable_by_batch_size
+                    if self.speculative_config else None
+                )
+                _draft_limit = _batch_size
+                if _disable_bs and _batch_size > _disable_bs:
+                    _draft_limit = _disable_bs
+                self._prev_actual_draft_lens = {
+                    req_id: _n_predict if i < _draft_limit else 0
+                    for i, req_id in enumerate(self.input_batch.req_ids)
+                }
+                scheduler_output._actual_draft_lens = (
+                    self._prev_actual_draft_lens
+                )
+
             elif is_arctic_method:
                 # (B) Arctic + suffix async.
                 #     D2H copy of sampled tokens runs on a dedicated
@@ -1153,6 +1380,27 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
                 self._draft_token_ids = merged
                 self._copy_draft_token_ids_to_cpu(scheduler_output)
+
+                # Track actual draft lengths for next step's allocation.
+                _n_predict = self.drafter.model.n_predict
+                _batch_size = len(self.input_batch.req_ids)
+                _disable_bs = (
+                    self.speculative_config.disable_by_batch_size
+                    if self.speculative_config else None
+                )
+                _draft_limit = _batch_size
+                if _disable_bs and _batch_size > _disable_bs:
+                    _draft_limit = _disable_bs
+                _actual_lens: dict[str, int] = {}
+                for _i, _req_id in enumerate(self.input_batch.req_ids):
+                    _s = (len(suffix_draft[_i])
+                          if _i < len(suffix_draft) else 0)
+                    _a = _n_predict if _i < _draft_limit else 0
+                    # Suffix takes priority when available.
+                    _actual_lens[_req_id] = _s if _s > 0 else _a
+                self._prev_actual_draft_lens = _actual_lens
+                scheduler_output._actual_draft_lens = _actual_lens
+
             else:
                 # (B2) Suffix-only async.
                 #      No Arctic GPU work to overlap with, so skip the
@@ -1211,6 +1459,15 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 self._draft_token_ids = pin.to(
                     device=self.device, non_blocking=True)
                 self._copy_draft_token_ids_to_cpu(scheduler_output)
+
+                # Track actual draft lengths for next step's allocation.
+                _actual_lens_b2: dict[str, int] = {}
+                for _i, _req_id in enumerate(self.input_batch.req_ids):
+                    _s = (len(suffix_draft[_i])
+                          if _i < len(suffix_draft) else 0)
+                    _actual_lens_b2[_req_id] = _s
+                self._prev_actual_draft_lens = _actual_lens_b2
+                scheduler_output._actual_draft_lens = _actual_lens_b2
 
         # --- Bookkeeping ---
         with record_function_or_nullcontext("gpu_model_runner: bookkeep"):

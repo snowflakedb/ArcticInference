@@ -13,9 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import vllm
 from vllm.logger import init_logger
+from vllm.v1.core.sched.async_scheduler import AsyncScheduler
+from vllm.v1.core.sched.scheduler import Scheduler
 from vllm.v1.engine.core import EngineCoreProc
 from vllm.v1.worker.worker_base import WorkerBase
 
@@ -33,6 +34,165 @@ from arctic_inference.vllm.ulysses import apply_shift_parallel_patches
 
 
 logger = init_logger(__name__)
+
+
+class AsyncSchedulerPatch(ArcticPatch[AsyncScheduler]):
+    """Patch AsyncScheduler to:
+    1. Respect ``disable_by_batch_size`` when allocating spec token
+       placeholders (the worker only drafts for the first N requests).
+    2. Use the previous step's actual draft length for dynamic placeholder
+       allocation, avoiding wasted verification compute when the real draft
+       width (e.g. Arctic n_predict=3) is much smaller than
+       num_speculative_tokens (e.g. 12).
+    3. Store ``_scheduled_spec_count`` so that the post-fix in
+       ``update_from_output`` can compensate for worker-side trimming.
+    """
+
+    _orig_update_after_schedule = AsyncScheduler._update_after_schedule
+
+    def _update_after_schedule(self, scheduler_output):
+        # Call the base Scheduler._update_after_schedule (NOT the
+        # AsyncScheduler override which we are replacing).
+        Scheduler._update_after_schedule(self, scheduler_output)
+
+        has_structured_output_requests = False
+        pending_structured_output_tokens = False
+        spec_decode_tokens = scheduler_output.scheduled_spec_decode_tokens
+
+        # Respect disable_by_batch_size: only add spec token placeholders
+        # for the first N decode requests (matching the worker's draft_limit
+        # in propose_draft_token_ids).
+        spec_config = getattr(self.vllm_config, 'speculative_config', None)
+        disable_bs = (
+            spec_config.disable_by_batch_size if spec_config else None
+        )
+        decode_with_spec_count = 0
+        for req_id in scheduler_output.num_scheduled_tokens:
+            request = self.requests[req_id]
+            has_structured_output_requests |= request.use_structured_output
+            pending_structured_output_tokens |= (
+                request.use_structured_output
+                and request.num_output_placeholders > 0
+            )
+            cur_num_spec_tokens = len(spec_decode_tokens.get(req_id, ()))
+            # Store the originally-scheduled spec count so that
+            # update_from_output can compensate for worker-side trimming.
+            request._scheduled_spec_count = cur_num_spec_tokens
+
+            if (
+                request.num_computed_tokens
+                == request.num_tokens
+                + request.num_output_placeholders
+                + cur_num_spec_tokens
+            ):
+                # The request will generate a new token + spec tokens.
+                request.num_output_placeholders += 1 + cur_num_spec_tokens
+
+                # Check if beyond the disable_by_batch_size limit.
+                decode_with_spec_count += 1
+                if disable_bs and decode_with_spec_count > disable_bs:
+                    # Beyond limit: no spec token placeholders.
+                    request.spec_token_ids = []
+                    continue
+
+                # Use the previous step's actual draft length when
+                # available.  On the very first decode step, start with
+                # just 1 spec position to avoid polluting the KV cache
+                # with zero-token entries (the drafter only produces
+                # n_predict << num_spec_tokens real tokens; the rest
+                # are zeros whose KV entries persist in the async lag
+                # window and compound into degraded acceptance).  The
+                # allocation grows to n_predict within 2-3 steps via
+                # the feedback in update_from_output.
+                prev_actual = getattr(
+                    request, '_prev_actual_draft_len', None)
+                if prev_actual is not None:
+                    num_placeholders = min(
+                        max(prev_actual, 1), self.num_spec_tokens)
+                else:
+                    num_placeholders = 1
+
+                request.spec_token_ids = [-1] * num_placeholders
+
+        scheduler_output.has_structured_output_requests = (
+            has_structured_output_requests)
+        scheduler_output.pending_structured_output_tokens = (
+            pending_structured_output_tokens)
+
+    def update_from_output(self, scheduler_output, model_runner_output):
+        """Wrap Scheduler.update_from_output to store actual draft counts.
+
+        We infer the drafter's real capability from the acceptance
+        results so that the next ``_update_after_schedule`` can size
+        placeholders correctly.  This works even when the worker runs
+        in a separate process (where scheduler_output._actual_draft_lens
+        set by the worker doesn't survive serialisation back to the
+        scheduler).
+
+        Strategy: ``_prev_actual_draft_len`` converges **upward** to
+        the drafter's ``n_predict`` via ``max(prev, num_accepted)``.
+        Only steps that actually accept tokens update the value;
+        zero-acceptance steps are ignored so a single bad step doesn't
+        shrink the allocation and starve future drafting.
+        """
+        sampled_token_ids = model_runner_output.sampled_token_ids
+        req_id_to_index = model_runner_output.req_id_to_index
+
+        result = Scheduler.update_from_output(self, scheduler_output, model_runner_output)
+
+        # Fast path: if the worker is in the same process, use its
+        # reported actual_draft_lens directly (most accurate).
+        actual_lens = getattr(
+            scheduler_output, '_actual_draft_lens', None)
+        if actual_lens:
+            for req_id, actual_len in actual_lens.items():
+                request = self.requests.get(req_id)
+                if request is not None:
+                    request._prev_actual_draft_len = actual_len
+            return result
+
+        # Fallback: infer from acceptance results (multi-process case).
+        # We grow the allocation via max(prev, num_accepted + 1) so
+        # that it converges to n_predict within a few steps:
+        #   step 0: 1 position  → accept 1 → prev = 2
+        #   step 1: 2 positions → accept 2 → prev = 3
+        #   step 2: 3 positions → steady state (n_predict = 3)
+        if not sampled_token_ids:
+            return result
+
+        for req_id in scheduler_output.num_scheduled_tokens:
+            scheduled_spec = (
+                scheduler_output.scheduled_spec_decode_tokens.get(req_id))
+            if not scheduled_spec:
+                continue
+
+            req_index = req_id_to_index.get(req_id)
+            if req_index is None:
+                continue
+
+            request = self.requests.get(req_id)
+            if request is None:
+                continue
+
+            generated = sampled_token_ids[req_index]
+            num_accepted = (len(generated) - 1) if generated else 0
+            num_draft = len(scheduled_spec)
+
+            prev = getattr(request, '_prev_actual_draft_len', None)
+
+            if num_accepted > 0:
+                # Grow: use num_accepted + 1 so the next step has room
+                # to discover the drafter can produce more tokens.
+                new_val = min(num_accepted + 1, self.num_spec_tokens)
+                request._prev_actual_draft_len = max(
+                    prev or 0, new_val)
+            elif prev is None:
+                # First step for this request, zero acceptance.
+                # Seed with 1 so _update_after_schedule doesn't
+                # fall back to the full num_spec_tokens next time.
+                request._prev_actual_draft_len = 1
+
+        return result
 
 
 class EngineCoreProcPatch(ArcticPatch[EngineCoreProc]):
@@ -94,6 +254,10 @@ def apply_arctic_patches():
     # Patches that make later patches work properly.
     EngineCoreProcPatch.apply_patch()
     WorkerBasePatch.apply_patch()
+
+    # Async scheduler patches for spec decode (disable_by_batch_size
+    # interaction + dynamic draft width allocation).
+    AsyncSchedulerPatch.apply_patch()
 
     # Patches to vLLM arguments and configuration objects.
     EngineArgsPatch.apply_patch()
