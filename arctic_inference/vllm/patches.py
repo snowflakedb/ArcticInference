@@ -95,22 +95,21 @@ class AsyncSchedulerPatch(ArcticPatch[AsyncScheduler]):
                     request.spec_token_ids = []
                     continue
 
-                # Use the previous step's actual draft length when
-                # available.  On the very first decode step, start with
-                # just 1 spec position to avoid polluting the KV cache
-                # with zero-token entries (the drafter only produces
-                # n_predict << num_spec_tokens real tokens; the rest
-                # are zeros whose KV entries persist in the async lag
-                # window and compound into degraded acceptance).  The
-                # allocation grows to n_predict within 2-3 steps via
-                # the feedback in update_from_output.
+                # Use previous step's actual draft length to size
+                # placeholders.  When suffix had a good match (actual
+                # > n_predict), allocate the full width so the next
+                # step can verify all suffix tokens.  When suffix
+                # didn't match (actual = n_predict from arctic),
+                # allocate only that many to avoid wasting attention
+                # compute on zero-padded positions.
+                # Cold start: allocate full width (generous).
                 prev_actual = getattr(
                     request, '_prev_actual_draft_len', None)
                 if prev_actual is not None:
                     num_placeholders = min(
                         max(prev_actual, 1), self.num_spec_tokens)
                 else:
-                    num_placeholders = 1
+                    num_placeholders = self.num_spec_tokens
 
                 request.spec_token_ids = [-1] * num_placeholders
 
