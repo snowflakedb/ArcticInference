@@ -1,6 +1,12 @@
 
+VLLM_PATH="$(pip show vllm | awk '/^Location: /{print $2}')"
 
-VLLM_PATH="/home/yak/myenv_v14/lib/python3.12/site-packages/vllm"
+if [ -z "$VLLM_PATH" ]; then
+  echo "Error: could not find VLLM in current env"
+  exit 1
+else
+  echo "VLLM path is: $VLLM_PATH"
+fi
 
-patch $VLLM_PATH/sampling_params.py < sampling_params.patch
-patch $VLLM_PATH/v1/engine/parallel_sampling.py < parallel_sampling.patch
+patch $VLLM_PATH/vllm/sampling_params.py < sampling_params.patch
+patch $VLLM_PATH/vllm/v1/engine/parallel_sampling.py < parallel_sampling.patch
