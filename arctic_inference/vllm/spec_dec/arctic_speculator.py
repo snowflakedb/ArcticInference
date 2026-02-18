@@ -341,6 +341,7 @@ class ArcticMLPSpeculator(nn.Module, SpeculatorTPInit):
                 argidx = torch.argmax(vals, -1).reshape(batch_size, -1)
                 last_tokens = torch.gather(indices, -1, argidx)
 
+            last_tokens.clamp_(0, self.vocab_size - 1)
             if next_tokens_tensors[head_index] == None:
                 next_tokens_tensors[head_index] = last_tokens
             else:
