@@ -619,9 +619,30 @@ class UlyssesVllmConfig(ArcticPatch[VllmConfig]):
 
     _orig_set_cudagraph_sizes = VllmConfig._set_cudagraph_sizes
 
-    def _set_cudagraph_sizes(self):
+    @staticmethod
+    def _generate_capture_sizes(max_size: int) -> list[int]:
+        sizes = [i for i in [1, 2, 4] if i <= max_size]
+        if max_size >= 8:
+            sizes += list(range(8, min(max_size + 1, 256), 8))
+        if max_size >= 256:
+            sizes += list(range(256, min(max_size + 1, 512), 16))
+        if max_size >= 512:
+            sizes += list(range(512, max_size + 1, 32))
+        return sizes
 
-        print(f"set cudagraph_sizes")
+    @staticmethod
+    def _build_bs_to_padded(capture_sizes: list[int],
+                            max_capture_size: int) -> list[int]:
+        table = [0] * (max_capture_size + 1)
+        for end, start in zip(
+            capture_sizes + [max_capture_size + 1],
+            [0] + capture_sizes,
+        ):
+            for bs in range(start, end):
+                table[bs] = start if bs == start else end
+        return table
+
+    def _set_cudagraph_sizes(self):
         sp_size = _ulysses_sp_size
 
         max_cudagraph_capture_size = self.compilation_config.max_cudagraph_capture_size
@@ -630,99 +651,44 @@ class UlyssesVllmConfig(ArcticPatch[VllmConfig]):
         if cudagraph_capture_sizes is None:
             if max_cudagraph_capture_size is None:
                 max_cudagraph_capture_size = 512
-            cudagraph_capture_sizes = [
-                    i for i in [1, 2, 4] if i <= max_cudagraph_capture_size
-                ]
-            if max_cudagraph_capture_size >= 8:
-                # Step size 8 for small batch sizes, up to 256(not included)
-                cudagraph_capture_sizes += list(
-                    range(8, min(max_cudagraph_capture_size + 1, 256), 8)
-                )
-            if max_cudagraph_capture_size >= 256:
-                # Step size 8 for small batch sizes, up to 512(not included)
-                cudagraph_capture_sizes += list(
-                    range(256, min(max_cudagraph_capture_size + 1, 512), 16)
-                )
-            if max_cudagraph_capture_size >= 512:
-                # Step size 64 for large batch sizes
-                cudagraph_capture_sizes += list(
-                    range(512, max_cudagraph_capture_size + 1, 32)
-                )
-            self.compilation_config.cudagraph_capture_sizes = [i * sp_size for i in cudagraph_capture_sizes]
-            self.compilation_config.max_cudagraph_capture_size = max_cudagraph_capture_size * sp_size
+            # Canonical (unscaled) sizes: [1, 2, 4, 8, ..., 512]
+            canonical_sizes = self._generate_capture_sizes(
+                max_cudagraph_capture_size)
 
-        print(f"UlyssesVllmConfig: scaled max_cudagraph_capture_size to {self.compilation_config.max_cudagraph_capture_size}, cudagraph_capture_sizes to {self.compilation_config.cudagraph_capture_sizes}")
+            # Base model (Ulysses): scale by sp_size
+            self.compilation_config.cudagraph_capture_sizes = [
+                s * sp_size for s in canonical_sizes
+            ]
+            self.compilation_config.max_cudagraph_capture_size = (
+                max_cudagraph_capture_size * sp_size
+            )
+
+            # Shift model: scale by 1 (use canonical sizes as-is)
+            shift_sizes = list(canonical_sizes)
+            shift_max = max_cudagraph_capture_size
+        else:
+            shift_sizes = list(cudagraph_capture_sizes)
+            shift_max = max(shift_sizes) if shift_sizes else 0
+
+        self._shift_cudagraph_capture_sizes = shift_sizes
+        self._shift_max_cudagraph_capture_size = shift_max
+        self._shift_bs_to_padded_graph_size = self._build_bs_to_padded(
+            shift_sizes, shift_max) if shift_sizes else []
+
+        print(
+            f"UlyssesVllmConfig: base max_cudagraph_capture_size="
+            f"{self.compilation_config.max_cudagraph_capture_size}, "
+            f"base sizes={self.compilation_config.cudagraph_capture_sizes}, "
+            f"shift max={shift_max}, shift sizes={shift_sizes}"
+        )
 
         self._orig_set_cudagraph_sizes()
 
-    # def update_sizes_for_sequence_parallelism(self, possible_sizes: list) -> list:
-
-    #     sp_size = parallel_state._SP.world_size
-    #     if torch.distributed.get_rank() == 0:
-    #         print(f"Original possible_sizes: {possible_sizes}")
-    #         print(f"Ulysses SP size: {sp_size}")
-    # def _set_cudagraph_sizes(self):
-    #     if (
-    #         self.model_config is not None
-    #         and not self.model_config.enforce_eager
-    #         and self.compilation_config.cudagraph_mode != CUDAGraphMode.NONE
-    #     ):
-    #         max_cudagraph_capture_size = (
-    #             self.compilation_config.max_cudagraph_capture_size
-    #         )
-    #         if max_cudagraph_capture_size is not None:
-    #             max_cudagraph_capture_size *= parallel_state._SP.world_size
-    #         else:
-    #             max_cudagraph_capture_size = 512
-    #         max_num_tokens = self.scheduler_config.max_num_batched_tokens
-
-    #         max_cudagraph_capture_size = min(max_num_tokens, max_cudagraph_capture_size)
-
-    #         if torch.distribute.get_rank() == 0:
-    #             print(f"max_num_tokens: {max_num_tokens} max_cudagraph_capture_size: {max_cudagraph_capture_size}")
-    #             if self.compilation_config.cudagraph_capture_sizes:
-    #                 print(f"Original cudagraph_capture_sizes: {self.compilation_config.cudagraph_capture_sizes}")
-    #             else:
-    #                 print("Original cudagraph_capture_sizes: []")
-
-
-    #     else:
-    #         # no cudagraph in use
-    #         self.compilation_config.max_cudagraph_capture_size = 0
-    #         self.compilation_config.cudagraph_capture_sizes = []
-
-    #     # complete the remaining process.
-    #     self.compilation_config.post_init_cudagraph_sizes()
-
     def pad_for_cudagraph(self, batch_size: int) -> int:
-        # if batch_size > self.compilation_config.max_cudagraph_capture_size,
-        # it should raise an IndexError.
-        # the caller should make sure the batch_size is within the range,
-        # i.e., batch_size <= self.compilation_config.max_cudagraph_capture_size
-
-        # print(f"batch_size {batch_size}")
-        # print(f"len bs_to_padded_graph_size {len(self.compilation_config.bs_to_padded_graph_size)}")
-
-        if torch.distributed.get_rank() == 0:
-            print(
-                f"pad_for_cudagraph called with batch_size {batch_size}, "
-                f"max_cudraph_capture_size "
-                f"{self.compilation_config.max_cudagraph_capture_size}, "
-                f"len(self.compilation_config.bs_to_padded_graph_size): {len(self.compilation_config.bs_to_padded_graph_size)}"
-            )
-
-        sp_size = _ulysses_sp_size
-
-        output = self.compilation_config.bs_to_padded_graph_size[batch_size]
-
-        if torch.distributed.get_rank() == 0:
-            print(
-                f"pad_for_cudagraph returning output {output} "
-                f"for input batch_size {batch_size} "
-                f"with SP size {sp_size}"
-            )
-
-        return output
+        from .model_runner import is_shift_parallel_mode
+        if is_shift_parallel_mode() and self._shift_bs_to_padded_graph_size:
+            return self._shift_bs_to_padded_graph_size[batch_size]
+        return self.compilation_config.bs_to_padded_graph_size[batch_size]
 
 
 class UlyssesEngineCore(ArcticPatch[EngineCore]):

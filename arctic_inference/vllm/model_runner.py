@@ -627,13 +627,14 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         )
 
         if not use_shift_model:
-            return self._orig_execute_model(scheduler_output, intermediate_tensors) 
+            return self._orig_execute_model(scheduler_output, intermediate_tensors)
 
         orig_model = self.model
         try:
             self.model = self.shift_model
-            with set_shift_parallel_mode(True):
-                return self._orig_execute_model(scheduler_output, intermediate_tensors) 
+            with set_shift_parallel_mode(True), \
+                 self._use_shift_cudagraph_tables():
+                return self._orig_execute_model(scheduler_output, intermediate_tensors)
         finally:
             self.model = orig_model
 
@@ -1662,6 +1663,55 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         return new_bs
 
 
+    @contextlib.contextmanager
+    def _shift_graph_capture_context(self):
+        """Disable custom all-reduce on the _SP_TP group during shift model
+        graph capture so it falls back to pynccl (NCCL), which handles graph
+        capture natively.  The _SP_TP group's ca_comm was never set up through
+        the normal vLLM graph_capture() path, so using it inside a CUDA graph
+        would crash."""
+        from vllm.distributed.device_communicators.cuda_communicator import (
+            CudaCommunicator,
+        )
+        sp_tp = parallel_state._SP_TP
+        ca_comm = None
+        if sp_tp is not None and sp_tp.device_communicator is not None:
+            assert isinstance(sp_tp.device_communicator, CudaCommunicator)
+            ca_comm = sp_tp.device_communicator.ca_comm
+        saved_disabled = None
+        if ca_comm is not None:
+            saved_disabled = ca_comm.disabled
+            ca_comm.disabled = True
+        try:
+            yield
+        finally:
+            if ca_comm is not None and saved_disabled is not None:
+                ca_comm.disabled = saved_disabled
+
+    @contextlib.contextmanager
+    def _use_shift_cudagraph_tables(self):
+        """Temporarily swap compilation_config sizes to the shift (unscaled)
+        lookup table so that vLLM internals (dispatcher, pad_for_cudagraph,
+        bounds checks) all see the shift model's sizes."""
+        cc = self.compilation_config
+        saved_sizes = cc.cudagraph_capture_sizes
+        saved_max = cc.max_cudagraph_capture_size
+        saved_table = cc.bs_to_padded_graph_size
+
+        shift_sizes = self.vllm_config._shift_cudagraph_capture_sizes
+        shift_max = self.vllm_config._shift_max_cudagraph_capture_size
+        shift_table = self.vllm_config._shift_bs_to_padded_graph_size
+
+        cc.cudagraph_capture_sizes = shift_sizes
+        cc.max_cudagraph_capture_size = shift_max
+        cc.bs_to_padded_graph_size = shift_table
+        try:
+            yield
+        finally:
+            cc.cudagraph_capture_sizes = saved_sizes
+            cc.max_cudagraph_capture_size = saved_max
+            cc.bs_to_padded_graph_size = saved_table
+
     def _capture_cudagraphs(
         self,
         compilation_cases: list[tuple[int, bool]],
@@ -1677,56 +1727,67 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
         sp_size = parallel_state._SP.world_size
         tp_size = parallel_state._TP.world_size
+        threshold = int(getattr(self, "shift_parallel_threshold", 0))
+        has_shift = getattr(self, "shift_model", None) is not None
+        is_swiftkv = "SwiftKV" in self.model.__class__.__name__
 
-        # if torch.distributed.get_rank() == 0:
-        #     print(f"compilation_cases: {compilation_cases}")
-
-        # Base model (SP): scale only the batch-size field.
-        compilation_cases_base = []
-        for case in compilation_cases:
-            bs = self._case_bs(case)
-            scaled_bs = min(bs * sp_size, self.max_num_tokens)
-            if scaled_bs > int(getattr(self, "shift_parallel_threshold", 0)):
-                compilation_cases_base.append(self._with_bs(case, scaled_bs))
-
-        compilation_cases_base = compilation_cases
+        # --- Base model (Ulysses SP): uses the scaled lookup table (default) ---
+        # Exclude sizes at or below the shift threshold -- those batches
+        # are routed to the shift model at runtime.  Capturing them for the
+        # base model would deadlock because the Ulysses all-to-all collectives
+        # diverge across ranks at small batch sizes.
+        if has_shift and not is_swiftkv:
+            compilation_cases_base = [
+                case for case in compilation_cases
+                if self._case_bs(case) > threshold
+            ]
+        else:
+            compilation_cases_base = list(compilation_cases)
 
         if is_global_first_rank():
             logger.info(
                 "base model (SP=%s, TP=%s) cudagraph mode %s shapes %s",
-                sp_size, tp_size, cudagraph_runtime_mode, [ self._case_bs(c) for c in compilation_cases_base ]
+                sp_size, tp_size, cudagraph_runtime_mode,
+                [self._case_bs(c) for c in compilation_cases_base],
             )
-            print(f"compilation_cases_base: {compilation_cases_base}")
 
         if compilation_cases_base:
             self._orig_capture_cudagraphs(
                 compilation_cases_base, cudagraph_runtime_mode, uniform_decode
             )
 
-        if is_global_first_rank():
-            print(f"compilation_cases_base: {compilation_cases_base}")
-
-        # Shift model (SP*TP but configured as TP-only variant in your routing):
-        if getattr(self, "shift_model", None) is not None:
-            compilation_cases_shift = []
-            for case in compilation_cases:
-                bs = self._case_bs(case)
-                if (bs <= int(getattr(self, "shift_parallel_threshold", 0))
-                        or "SwiftKV" in self.model.__class__.__name__):
-                    compilation_cases_shift.append(case)
+        # --- Shift model (SP*TP fused as TP-only): uses the unscaled lookup table ---
+        # The incoming compilation_cases contain *scaled* base sizes (e.g.
+        # [4, 8, ..., 2048] with sp_size=4).  The shift model needs the
+        # *unscaled* sizes from its own capture list (e.g. [1, 2, ..., 512]).
+        # We rebuild the cases from _shift_cudagraph_capture_sizes, copying
+        # the non-bs fields (like has_lora) from the first matching base case.
+        if has_shift:
+            shift_sizes = self.vllm_config._shift_cudagraph_capture_sizes
+            # Use the first base case as a template for non-bs fields
+            template = compilation_cases[0] if compilation_cases else None
+            compilation_cases_shift = [
+                self._with_bs(template, bs) if template is not None else bs
+                for bs in reversed(shift_sizes)
+            ]
 
             if is_global_first_rank():
                 logger.info(
                     "shift model (SPxTP=%s) shapes %s",
-                    sp_size * tp_size, [ self._case_bs(c) for c in compilation_cases_shift ]
+                    sp_size * tp_size,
+                    [self._case_bs(c) for c in compilation_cases_shift],
                 )
 
             if compilation_cases_shift:
                 orig_model, self.model = self.model, self.shift_model
                 try:
-                    with set_shift_parallel_mode(True):
+                    with set_shift_parallel_mode(True), \
+                         self._use_shift_cudagraph_tables(), \
+                         self._shift_graph_capture_context():
                         self._orig_capture_cudagraphs(
-                            compilation_cases_shift, cudagraph_runtime_mode, uniform_decode
+                            compilation_cases_shift,
+                            cudagraph_runtime_mode,
+                            uniform_decode,
                         )
                 finally:
                     self.model = orig_model
