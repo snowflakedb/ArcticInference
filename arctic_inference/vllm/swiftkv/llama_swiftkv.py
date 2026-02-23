@@ -23,7 +23,9 @@ import vllm.distributed.parallel_state as parallel_state
 from vllm.v1.attention.backend import AttentionType
 from vllm.compilation.decorators import support_torch_compile
 from vllm.config import CacheConfig, VllmConfig
-from vllm.forward_context import ForwardContext, get_forward_context
+from vllm.config.compilation import CUDAGraphMode
+from vllm.forward_context import (BatchDescriptor, ForwardContext,
+                                    get_forward_context)
 from vllm.logger import init_logger
 from vllm.model_executor.layers.layernorm import RMSNorm
 from vllm.model_executor.layers.linear import (ColumnParallelLinear,
@@ -694,6 +696,28 @@ class LlamaSwiftKVModel(nn.Module):
                 k_states,
                 v_states))
 
+        # When swiftkv_select filters tokens (mixed prefill-decode batches),
+        # the decode runner processes fewer tokens than the original batch.
+        # Piecewise CUDA graphs captured for the original batch size cannot
+        # be replayed with modified attention metadata (stale FA3 scheduler
+        # metadata, changed query_start_loc, etc.), so we fall back to eager
+        # compiled execution for the decode runner on these batches.
+        # For decode-only batches all tokens survive, so CUDA graphs are
+        # used normally -- preserving decode throughput.
+        fwd_ctx = get_forward_context()
+        saved_batch_descriptor = fwd_ctx.batch_descriptor
+        saved_cudagraph_mode = fwd_ctx.cudagraph_runtime_mode
+        decode_num_tokens = hidden_states.shape[0]
+        if (saved_batch_descriptor is not None
+                and saved_batch_descriptor.num_tokens != decode_num_tokens):
+            fwd_ctx.batch_descriptor = BatchDescriptor(
+                num_tokens=decode_num_tokens,
+                num_reqs=saved_batch_descriptor.num_reqs,
+                uniform=saved_batch_descriptor.uniform,
+                has_lora=saved_batch_descriptor.has_lora,
+            )
+            fwd_ctx.cudagraph_runtime_mode = CUDAGraphMode.NONE
+
         with model_runner.set_shift_parallel_mode(True):
             hidden_states = self.decode_runner(
                 hidden_states,
@@ -702,6 +726,9 @@ class LlamaSwiftKVModel(nn.Module):
                 k_states,
                 v_states,
             )
+
+        fwd_ctx.batch_descriptor = saved_batch_descriptor
+        fwd_ctx.cudagraph_runtime_mode = saved_cudagraph_mode
 
         attn_metadata = get_attn_metadata_for_swiftkv()
         if attn_metadata is not None:
