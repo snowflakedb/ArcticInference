@@ -816,7 +816,7 @@ class UlyssesEngineCore(ArcticPatch[EngineCore]):
         running, waiting = self.scheduler.get_request_counts()
         scheduled_tokens = scheduler_output.total_num_scheduled_tokens
         concurrency = len(scheduler_output.num_scheduled_tokens.keys())
-        print(f"iteration {self.iteration}, running: {running}, waiting: {waiting}, scheduled tokens: {scheduled_tokens}, concurrency: {concurrency}, total_time_ms: {total_time_ms:.2f}")
+        # print(f"iteration {self.iteration}, running: {running}, waiting: {waiting}, scheduled tokens: {scheduled_tokens}, concurrency: {concurrency}, total_time_ms: {total_time_ms:.2f}")
         self.iteration += 1
 
         return engine_core_outputs, model_executed

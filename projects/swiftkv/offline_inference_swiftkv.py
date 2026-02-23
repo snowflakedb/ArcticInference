@@ -18,7 +18,7 @@ from vllm import LLM, SamplingParams
 
 vllm.plugins.load_general_plugins()
 
-llm = LLM(model="Snowflake/Llama-3.1-SwiftKV-8B-Instruct")
+llm = LLM(model="Snowflake/Llama-3.1-SwiftKV-8B-Instruct", tensor_parallel_size=2)
 
 print("=" * 80)
 
