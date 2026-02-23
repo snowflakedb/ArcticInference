@@ -37,7 +37,6 @@ from vllm.model_executor.model_loader import get_model
 from vllm.sequence import IntermediateTensors
 from vllm.utils.math_utils import round_up, cdiv
 from vllm.v1.attention.backend import CommonAttentionMetadata
-from vllm.v1.kv_cache_interface import KVCacheConfig
 from vllm.v1.outputs import (EMPTY_MODEL_RUNNER_OUTPUT, ModelRunnerOutput,
                               SamplerOutput)
 from vllm.v1.sample.metadata import SamplingMetadata
@@ -103,7 +102,6 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     Rebased GPUModelRunnerPatch for vLLM v14.
     """
 
-    _orig_initialize_kv_cache = GPUModelRunner.initialize_kv_cache
     _orig_capture_cudagraphs = GPUModelRunner._capture_cudagraphs
     _orig_profile_run = GPUModelRunner.profile_run
     _orig_load_model = GPUModelRunner.load_model
@@ -114,6 +112,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     _orig_execute_model = GPUModelRunner.execute_model
     _orig_bookkeeping_sync = GPUModelRunner._bookkeeping_sync
     _orig_sample_tokens = GPUModelRunner.sample_tokens
+    _orig_initialize_kv_cache = GPUModelRunner.initialize_kv_cache
     # _orig_pad_for_sequence_parallelism = GPUModelRunner._pad_for_sequence_parallelism
 
     def __init__(
@@ -361,11 +360,17 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         self._orig_profile_run()
         if getattr(self, "shift_model", None) is not None:
             orig_model, self.model = self.model, self.shift_model
+            cc = self.vllm_config.compilation_config
+            base_ctx = cc.static_forward_context
+            shift_ctx = getattr(self, 'shift_forward_context', None)
             try:
+                if shift_ctx is not None:
+                    cc.static_forward_context = shift_ctx
                 with set_shift_parallel_mode(True):
                     self._dummy_run(self.max_num_tokens, is_profile=True)
             finally:
                 self.model = orig_model
+                cc.static_forward_context = base_ctx
 
 
     def monkeypatch_forward(self: GPUModelRunner):
@@ -385,9 +390,6 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             N = input_tensor.shape[0]
             N_ulysses = N // sp_size
             N_offset = N_ulysses * sp_rank
-
-            if torch.distributed.get_rank() == 0:
-                print(f"N {N}, N_ulysses {N_ulysses}")
 
             kwargs[input_key] = input_tensor[N_offset:N_offset + N_ulysses]
             kwargs['positions'] = positions[N_offset:N_offset + N_ulysses]
@@ -630,13 +632,20 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             return self._orig_execute_model(scheduler_output, intermediate_tensors)
 
         orig_model = self.model
+        cc = self.vllm_config.compilation_config
+        base_ctx = cc.static_forward_context
+        shift_ctx = getattr(self, 'shift_forward_context', None)
         try:
             self.model = self.shift_model
+            if shift_ctx is not None:
+                cc.static_forward_context = shift_ctx
             with set_shift_parallel_mode(True), \
                  self._use_shift_cudagraph_tables():
-                return self._orig_execute_model(scheduler_output, intermediate_tensors)
+                result = self._orig_execute_model(scheduler_output, intermediate_tensors)
         finally:
             self.model = orig_model
+            cc.static_forward_context = base_ctx
+        return result
 
     @torch.inference_mode
     def sample_tokens(self, grammar_output):
@@ -1626,6 +1635,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             self.shift_parallel_threshold = (
                 shift_config.parallel_config.shift_parallel_threshold
             )
+            self.shift_forward_context = (
+                shift_config.compilation_config.static_forward_context
+            )
+
             if "SwiftKV" in self.model.__class__.__name__:
                 if hasattr(self.model, "model") and hasattr(self.model.model, "decode_runner"):
                     self.model.model.decode_runner = self.shift_model.model.decode_runner
@@ -1635,7 +1648,24 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         else:
             self.shift_model = None
             self.shift_parallel_threshold = 0
+            self.shift_forward_context = None
 
+
+    def initialize_kv_cache(self, kv_cache_config) -> None:
+        self._orig_initialize_kv_cache(kv_cache_config)
+        shift_ctx = getattr(self, 'shift_forward_context', None)
+        if shift_ctx is None:
+            return
+        base_ctx = self.compilation_config.static_forward_context
+        bound = 0
+        for name, shift_attn in shift_ctx.items():
+            base_attn = base_ctx.get(name)
+            if base_attn is not None and hasattr(base_attn, 'kv_cache'):
+                shift_attn.kv_cache = base_attn.kv_cache
+                bound += 1
+        if is_global_first_rank():
+            logger.info("Bound KV cache to %d shift model attention layers",
+                        bound)
 
     from vllm.forward_context import BatchDescriptor
     def _case_bs(self, case) -> int:
@@ -1780,7 +1810,12 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
 
             if compilation_cases_shift:
                 orig_model, self.model = self.model, self.shift_model
+                cc = self.vllm_config.compilation_config
+                base_ctx = cc.static_forward_context
+                shift_ctx = getattr(self, 'shift_forward_context', None)
                 try:
+                    if shift_ctx is not None:
+                        cc.static_forward_context = shift_ctx
                     with set_shift_parallel_mode(True), \
                          self._use_shift_cudagraph_tables(), \
                          self._shift_graph_capture_context():
@@ -1791,3 +1826,4 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                         )
                 finally:
                     self.model = orig_model
+                    cc.static_forward_context = base_ctx
