@@ -17,7 +17,9 @@ import vllm
 from vllm.logger import init_logger
 from vllm.v1.core.sched.async_scheduler import AsyncScheduler
 from vllm.v1.core.sched.scheduler import Scheduler
+from vllm.v1.engine import EngineCoreOutputs
 from vllm.v1.engine.core import EngineCoreProc
+from vllm.v1.engine.core_client import InprocClient
 from vllm.v1.worker.worker_base import WorkerBase
 
 from arctic_inference.patching import ArcticPatch
@@ -252,6 +254,19 @@ class WorkerBasePatch(ArcticPatch[WorkerBase]):
         return self._orig_init(*args, **kwargs)
 
 
+class InprocClientPatch(ArcticPatch[InprocClient]):
+    """Ensure InprocClient.get_output() calls post_step() after step_fn(),
+    required for speculative decoding when VLLM_ENABLE_V1_MULTIPROCESSING=0.
+
+    See https://github.com/vllm-project/vllm/issues/27287
+    """
+
+    def get_output(self) -> EngineCoreOutputs:
+        outputs, model_executed = self.engine_core.step_fn()
+        self.engine_core.post_step(model_executed=model_executed)
+        return outputs and outputs.get(0) or EngineCoreOutputs()
+
+
 def apply_arctic_patches():
 
     from transformers import AutoConfig
@@ -297,6 +312,9 @@ def apply_arctic_patches():
     VllmConfigPatch.apply_patch()
     XgrammarBackendPatch.apply_patch()
     MLPSpeculatorConfigPatch.apply_patch()
+
+    # InprocClient spec decode fix (vLLM #27287).
+    InprocClientPatch.apply_patch()
 
     # Main optimization patches.
     apply_shift_parallel_patches()
