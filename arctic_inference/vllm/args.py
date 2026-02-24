@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from dataclasses import dataclass, fields
 
 from vllm.config import ParallelConfig
@@ -32,6 +33,7 @@ class ArcticArgs:
     ulysses_sequence_parallel_size: int = 1
     enable_shift_parallel: bool = False
     shift_parallel_threshold: int = 512
+    forest_cascade_attn_configs: str | None = None
 
 
 @dataclass
@@ -93,6 +95,17 @@ class EngineArgsPatch(ArcticPatch[EngineArgs]):
             help=("Ulysses sequence parallel if batch size > threshold, "
                   "otherwise tensor parallel across the whole world size"),
         )
+        arctic_group.add_argument(
+            "--forest-cascade-attn-configs",
+            type=str,
+            default=None,
+            help=('Enable Forest Cascade Attention with a JSON config. '
+                  'Example: \'{"max_query_len": 16, "min_group_size": 2, '
+                  '"min_additional_prefix_blocks": 1, '
+                  '"min_non_singleton_fraction": 0.25, '
+                  '"max_non_singleton_groups": 256}\'. '
+                  'Pass \'{}\' to enable with all defaults.'),
+        )
         return parser
 
     @classmethod
@@ -123,6 +136,22 @@ class EngineArgsPatch(ArcticPatch[EngineArgs]):
         kwargs["enable_shift_parallel"] = self.enable_shift_parallel
         kwargs["shift_parallel_threshold"] = self.shift_parallel_threshold
         vllm_config.parallel_config = ArcticParallelConfig(**kwargs)
+
+        if self.forest_cascade_attn_configs is not None:
+            try:
+                fca_cfg = json.loads(self.forest_cascade_attn_configs)
+            except json.JSONDecodeError as e:
+                raise ValueError(
+                    f"--forest-cascade-attn-configs must be valid JSON: {e}"
+                ) from e
+            if not isinstance(fca_cfg, dict):
+                raise ValueError(
+                    "--forest-cascade-attn-configs must be a JSON object"
+                )
+            vllm_config._forest_cascade_attn_config = fca_cfg
+        else:
+            vllm_config._forest_cascade_attn_config = None
+
         return vllm_config
 
 

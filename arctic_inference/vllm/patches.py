@@ -32,6 +32,7 @@ from arctic_inference.vllm.config import (ParallelConfigPatch,
 from arctic_inference.vllm.stats import (SpecDecodingStatsPatch, 
                                          SpecDecodingLoggingPatch)
 from arctic_inference.vllm.structured_output import XgrammarBackendPatch
+from arctic_inference.vllm.attention import apply_forest_cascade_patches
 from arctic_inference.vllm.ulysses import apply_shift_parallel_patches
 
 
@@ -315,6 +316,10 @@ def apply_arctic_patches():
 
     # InprocClient spec decode fix (vLLM #27287).
     InprocClientPatch.apply_patch()
+
+    # Forest Cascade Attention backend (always registered; runtime-gated
+    # by --forest-cascade-attn-configs).
+    apply_forest_cascade_patches()
 
     # Main optimization patches.
     apply_shift_parallel_patches()
