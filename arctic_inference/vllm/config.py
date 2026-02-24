@@ -31,12 +31,17 @@ class ArcticParallelConfig(ParallelConfig):
     ulysses_sequence_parallel_size: int = 1
     enable_shift_parallel: bool = False
     shift_parallel_threshold: int = 512
+    enable_context_parallel: bool = False
 
     def __post_init__(self, *args, **kwargs):
         if (self.enable_shift_parallel
                 and self.ulysses_sequence_parallel_size == 1):
             raise ValueError("ulysses_sequence_parallel_size must be > 1 "
                              "when enable_shift_parallel is True.")
+        if (self.enable_context_parallel
+                and self.ulysses_sequence_parallel_size == 1):
+            raise ValueError("ulysses_sequence_parallel_size must be > 1 "
+                             "when enable_context_parallel is True.")
         super().__post_init__(*args, **kwargs)
 
     @property
@@ -145,6 +150,7 @@ class VllmConfigPatch(ArcticPatch[VllmConfig]):
         string += f", ulysses_sequence_parallel_size={self.parallel_config.ulysses_sequence_parallel_size}"
         string += f", enable_shift_parallel={self.parallel_config.enable_shift_parallel}"
         string += f", shift_parallel_threshold={self.parallel_config.shift_parallel_threshold}"
+        string += f", enable_context_parallel={self.parallel_config.enable_context_parallel}"
         return string
 
     def __post_init__(self, *args, **kwargs):

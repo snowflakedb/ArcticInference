@@ -32,6 +32,7 @@ class ArcticArgs:
     ulysses_sequence_parallel_size: int = 1
     enable_shift_parallel: bool = False
     shift_parallel_threshold: int = 512
+    enable_context_parallel: bool = False
 
 
 @dataclass
@@ -93,6 +94,13 @@ class EngineArgsPatch(ArcticPatch[EngineArgs]):
             help=("Ulysses sequence parallel if batch size > threshold, "
                   "otherwise tensor parallel across the whole world size"),
         )
+        arctic_group.add_argument(
+            "--enable-context-parallel",
+            action='store_true',
+            help=('If True, skip all-to-all in Ulysses attention '
+                  '(each GPU runs independent attention on its local '
+                  'sequence chunk).'),
+        )
         return parser
 
     @classmethod
@@ -122,6 +130,7 @@ class EngineArgsPatch(ArcticPatch[EngineArgs]):
             self.ulysses_sequence_parallel_size)
         kwargs["enable_shift_parallel"] = self.enable_shift_parallel
         kwargs["shift_parallel_threshold"] = self.shift_parallel_threshold
+        kwargs["enable_context_parallel"] = self.enable_context_parallel
         vllm_config.parallel_config = ArcticParallelConfig(**kwargs)
         return vllm_config
 

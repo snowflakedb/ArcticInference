@@ -71,12 +71,16 @@ class UlyssesModelConfig(ArcticPatch[ModelConfig]):
     def get_num_kv_heads(self: ModelConfig,
                          parallel_config: ParallelConfig) -> int:
         num_kv_heads = self._orig_get_num_kv_heads(parallel_config)
+        if getattr(parallel_config, 'enable_context_parallel', False):
+            return num_kv_heads
         sp_size = parallel_config.ulysses_sequence_parallel_size
         return max(1, num_kv_heads // sp_size)
 
     def get_num_attention_heads(self: ModelConfig,
                                 parallel_config: ParallelConfig) -> int:
         num_heads = self._orig_get_num_attention_heads(parallel_config)
+        if getattr(parallel_config, 'enable_context_parallel', False):
+            return num_heads
         sp_size = parallel_config.ulysses_sequence_parallel_size
         return max(1, num_heads // sp_size)
 
@@ -478,10 +482,14 @@ class UlyssesAttention(ArcticPatch[Attention]):
     _orig_forward = Attention.forward
 
     def __init__(self, num_heads, *args, **kwargs):
+        from vllm.config import get_current_vllm_config
         from .model_runner import is_shift_parallel_mode
+        config = get_current_vllm_config()
         self.sp_size = parallel_state._SP.world_size
         self.sp_device_group = parallel_state._SP.device_group
-        if not is_shift_parallel_mode():
+        self.enable_context_parallel = getattr(
+            config.parallel_config, 'enable_context_parallel', False)
+        if not self.enable_context_parallel and not is_shift_parallel_mode():
             num_heads //= self.sp_size
             num_kv_heads = kwargs["num_kv_heads"]
             self.is_kv_replicated = True if num_kv_heads < self.sp_size else False
@@ -495,7 +503,8 @@ class UlyssesAttention(ArcticPatch[Attention]):
 
     def forward(self, query, key, value, **kwargs):
         from .model_runner import is_shift_parallel_mode
-        if self.sp_size == 1 or is_shift_parallel_mode():
+        if (self.sp_size == 1 or is_shift_parallel_mode()
+                or self.enable_context_parallel):
             return self._orig_forward(query, key, value, **kwargs)
 
         # prepare
