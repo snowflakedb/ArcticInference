@@ -13,9 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
+from pydantic.dataclasses import dataclass
 import logging
 
+import vllm
 from vllm.config import ParallelConfig, SpeculativeConfig, VllmConfig
 from vllm.transformers_utils.configs.mlp_speculator import MLPSpeculatorConfig
 
@@ -55,6 +56,7 @@ class ArcticParallelConfig(ParallelConfig):
 @dataclass
 class ArcticSpeculativeConfig(SpeculativeConfig):
 
+    method: str | None = None
     enable_suffix_decoding: bool = False
     suffix_cache_max_depth: int = 64
     suffix_speculative_tokens: int = 0
@@ -80,21 +82,18 @@ class SpeculativeConfigPatch(ArcticPatch[SpeculativeConfig]):
     _orig_post_init = SpeculativeConfig.__post_init__
 
     def __new__(cls, *args, **kwargs):
-        # Override __new__ to return an ArcticSpeculativeConfig instead of a
-        # SpeculativeConfig when creating a new instance of the class.
         if cls is SpeculativeConfig:
             return ArcticSpeculativeConfig.__new__(ArcticSpeculativeConfig,
                                                    *args, **kwargs)
         return super(SpeculativeConfig, cls).__new__(cls)
 
     def __post_init__(self):
-        use_suffix = (self.method
-                      == "suffix") or (self.method is None
-                                       and self.enable_suffix_decoding)
-        use_hybrid = (self.method == "arctic"
-                      and self.enable_suffix_decoding)
-        if (use_suffix or self.method == "arctic") and \
-            self.disable_by_batch_size is None:
+        is_arctic_method = self.method in ("arctic", "mlp_speculator")
+        use_suffix = (self.method == "suffix") or (self.method is None 
+                                                   and self.enable_suffix_decoding)
+        use_hybrid = (self.method == "arctic" and self.enable_suffix_decoding)
+
+        if (use_suffix or is_arctic_method) and self.disable_by_batch_size is None:
             logger.info("Defaulting disable_by_batch_size to 64")
             self.disable_by_batch_size = 64
 
@@ -104,8 +103,30 @@ class SpeculativeConfigPatch(ArcticPatch[SpeculativeConfig]):
         if use_suffix:
             self.method = "suffix"
             self.enable_suffix_decoding = True
-            self.num_speculative_tokens = self.suffix_cache_max_depth
+            # Use suffix_speculative_tokens if explicitly set, otherwise
+            # default to 16 (not suffix_cache_max_depth which can be very
+            # large and makes every step process 1+N tokens even when the
+            # suffix cache has no matches).
+            # NOTE: num_speculative_tokens defaults to None (not 0).
+            if self.suffix_speculative_tokens > 0:
+                self.num_speculative_tokens = self.suffix_speculative_tokens
+            elif self.num_speculative_tokens is None:
+                self.num_speculative_tokens = 16
             self._verify_args()
+            return 
+
+        if is_arctic_method:
+            actual_draft_model = getattr(self, "draft_model", None)
+            
+            self.draft_model = None 
+            
+            try:
+                self._orig_post_init()
+            finally:
+                self.draft_model = actual_draft_model
+            
+            if self.num_speculative_tokens == 0:
+                self.num_speculative_tokens = getattr(self, "num_lookahead_slots", 1)
         else:
             self._orig_post_init()
 
@@ -113,6 +134,11 @@ class SpeculativeConfigPatch(ArcticPatch[SpeculativeConfig]):
 class VllmConfigPatch(ArcticPatch[VllmConfig]):
 
     _orig_str = VllmConfig.__str__
+    _orig_post_init = VllmConfig.__post_init__
+
+    from typing import Literal
+    OldEagleModelTypes = vllm.config.speculative.EagleModelTypes
+    NewEagleModelTypes = Literal["arctic", "suffix", OldEagleModelTypes]
 
     def __str__(self, *args, **kwargs):
         string = self._orig_str(*args, **kwargs)
@@ -120,6 +146,24 @@ class VllmConfigPatch(ArcticPatch[VllmConfig]):
         string += f", enable_shift_parallel={self.parallel_config.enable_shift_parallel}"
         string += f", shift_parallel_threshold={self.parallel_config.shift_parallel_threshold}"
         return string
+
+    def __post_init__(self, *args, **kwargs):
+        # if self.speculative_config is not None:
+        #     if self.speculative_config.method not in get_args(EagleModelTypes):
+        #         raise ValueError(
+        #             "Currently, async scheduling is only supported "
+        #             "with EAGLE/MTP kind of speculative decoding"
+        #         )
+        import sys
+        from typing import Literal
+        target_module = sys.modules[VllmConfig.__module__]
+        original_types = getattr(target_module, "EagleModelTypes")
+        NewEagleModelTypes = Literal["mlp_speculator", "suffix", original_types]
+        setattr(target_module, "EagleModelTypes", NewEagleModelTypes)
+        try:
+            self._orig_post_init(*args, **kwargs)
+        finally:
+            setattr(target_module, "EagleModelTypes", original_types)
 
 
 class MLPSpeculatorConfigPatch(ArcticPatch[MLPSpeculatorConfig]):
@@ -129,3 +173,16 @@ class MLPSpeculatorConfigPatch(ArcticPatch[MLPSpeculatorConfig]):
     def __init__(self, *args, **kwargs):
         self.base_model_arch = kwargs.pop("base_model_arch", "")
         self._orig_init(*args, **kwargs)
+
+        # Inject dummy attributes required by vLLM's ModelArchConfigConvertor
+        # The convertor tries to calculate head_size = hidden_size // num_attention_heads
+        if not hasattr(self, "num_attention_heads"):
+            self.num_attention_heads = 1
+        
+        if not hasattr(self, "hidden_size"):
+            # Fallback to n_embd if present, otherwise default to a safe dummy value
+            self.hidden_size = getattr(self, "n_embd", 1024)
+
+        # Ensure hidden_size is an integer to prevent TypeError during division
+        if hasattr(self, "hidden_size"):
+            self.hidden_size = int(self.hidden_size)

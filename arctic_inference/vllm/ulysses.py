@@ -16,14 +16,17 @@
 import threading
 import weakref
 from contextlib import contextmanager
-from concurrent.futures import ThreadPoolExecutor
-from typing import Optional, Any
+from concurrent.futures import Future
+from collections import deque
+from collections.abc import Callable
+from typing import Optional, cast
+import time
 
 import torch
 import vllm.distributed.parallel_state as parallel_state
 import vllm.envs as envs
 from vllm.attention.layer import Attention
-from vllm.config import ModelConfig, ParallelConfig, CUDAGraphMode
+from vllm.config import ModelConfig, ParallelConfig, CUDAGraphMode, VllmConfig
 from vllm.distributed.device_communicators.shm_broadcast import MessageQueue
 from vllm.distributed.parallel_state import (init_model_parallel_group,
                                              get_world_group,
@@ -31,18 +34,22 @@ from vllm.distributed.parallel_state import (init_model_parallel_group,
                                              destroy_distributed_environment)
 from vllm.v1.executor.multiproc_executor import (
     set_multiprocessing_worker_envs)
-from vllm.utils import get_distributed_init_method, get_open_port, get_loopback_ip
+from vllm.utils.network_utils import get_distributed_init_method, get_open_port, get_loopback_ip
+from vllm.utils.system_utils import get_mp_context
 from vllm.v1.executor.abstract import FailureCallback
 from vllm.v1.executor.multiproc_executor import (MultiprocExecutor, WorkerProc,
-                                                 UnreadyWorkerProcHandle)
-from vllm.distributed.kv_transfer.kv_connector.utils import KVOutputAggregator
-from vllm.model_executor.layers.fused_moe import FusedMoE
+                                                 UnreadyWorkerProcHandle,
+                                                 FutureWrapper)
 from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
-from vllm.forward_context import BatchDescriptor
+from vllm.config.compilation import CompilationConfig
+from vllm.v1.engine.core import EngineCore, EngineCoreOutputs
+from vllm.v1.outputs import ModelRunnerOutput
 
 
 from arctic_inference.patching import ArcticPatch
 
+# global variable to hack compilation config
+_ulysses_sp_size = 1
 
 def apply_shift_parallel_patches():
     UlyssesModelConfig.apply_patch()
@@ -51,6 +58,9 @@ def apply_shift_parallel_patches():
     UlyssesMultiprocExecutor.apply_patch()
     UlyssesAttention.apply_patch()
     UlyssesCudagraphDispatcher.apply_patch()
+    UlyssesCompilationConfig.apply_patch()
+    UlyssesVllmConfig.apply_patch()
+    UlyssesEngineCore.apply_patch()
 
 
 class UlyssesModelConfig(ArcticPatch[ModelConfig]):
@@ -99,17 +109,19 @@ class UlyssesParallelState(ArcticPatch[parallel_state]):
     def initialize_model_parallel(
         tensor_model_parallel_size: int = 1,
         pipeline_model_parallel_size: int = 1,
+        prefill_context_model_parallel_size: int = 1,
         decode_context_model_parallel_size: Optional[int] = 1,
         backend: Optional[str] = None,
     ) -> None:
-        
-        from vllm.distributed.parallel_state import _DP, _EP, _PP, _TP
-        # Get world size and rank. Ensure some consistencies.
+
+        from vllm.distributed.parallel_state import _DP, _EP, _PP, _TP, _DCP, _PCP
+
         assert torch.distributed.is_initialized()
         world_size: int = torch.distributed.get_world_size()
         rank = torch.distributed.get_rank()
         backend = backend or torch.distributed.get_backend(
-            get_world_group().device_group)
+            get_world_group().device_group
+        )
 
         data_parallel_size = 1
         from vllm.config import get_current_vllm_config
@@ -117,114 +129,180 @@ class UlyssesParallelState(ArcticPatch[parallel_state]):
         if config is not None:
             data_parallel_size = config.parallel_config.data_parallel_size
 
-        sequence_parallel_size = \
-            config.parallel_config.ulysses_sequence_parallel_size
+        sequence_parallel_size = config.parallel_config.ulysses_sequence_parallel_size
 
+        # vLLM types allow None, but group building needs an int
+        if decode_context_model_parallel_size is None:
+            # treat "no DCP" as DCP==TP (common interpretation)
+            decode_context_model_parallel_size = tensor_model_parallel_size
+
+        # Layout order (extended from vLLM's): ExternalDP x DP x PP x PCP x SP x TP
         all_ranks = torch.arange(world_size).reshape(
-            -1, data_parallel_size, pipeline_model_parallel_size,
-            sequence_parallel_size, tensor_model_parallel_size)  # noqa
+            -1,
+            data_parallel_size,
+            pipeline_model_parallel_size,
+            prefill_context_model_parallel_size,
+            sequence_parallel_size,
+            tensor_model_parallel_size,
+        )
 
-        # Build the tensor model-parallel groups.
-        assert _TP is None, ("tensor model parallel group is already initialized")
+        assert _TP is None, "tensor model parallel group is already initialized"
         group_ranks = all_ranks.view(-1, tensor_model_parallel_size).unbind(0)
         group_ranks = [x.tolist() for x in group_ranks]
         TP_group_ranks = group_ranks
-        # message queue broadcaster is only used in tensor model parallel group
-        _TP = init_model_parallel_group(group_ranks,
-                                        get_world_group().local_rank,
-                                        backend,
-                                        use_message_queue_broadcaster=True,
-                                        group_name="tp")
+        _TP = init_model_parallel_group(
+            group_ranks,
+            get_world_group().local_rank,
+            backend,
+            use_message_queue_broadcaster=True,
+            group_name="tp",
+        )
 
-        # Build the pipeline model-parallel groups.
-        assert _PP is None, (
-            "pipeline model parallel group is already initialized")
-        group_ranks = all_ranks.transpose(2, 4).reshape(
-            -1, pipeline_model_parallel_size).unbind(0)
+        assert _DCP is None, "decode context model parallel group is already initialized"
+        group_ranks = all_ranks.reshape(-1, decode_context_model_parallel_size).unbind(0)
+        group_ranks = [x.tolist() for x in group_ranks]
+        DCP_group_ranks = group_ranks
+        _DCP = init_model_parallel_group(
+            group_ranks,
+            get_world_group().local_rank,
+            backend,
+            use_message_queue_broadcaster=True,
+            group_name="dcp",
+        )
+
+        assert _PCP is None, "prefill context parallel group is already initialized"
+        group_ranks = (
+            all_ranks.transpose(3, 5) 
+            .reshape(-1, prefill_context_model_parallel_size)
+            .unbind(0)
+        )
+        group_ranks = [x.tolist() for x in group_ranks]
+        PCP_group_ranks = group_ranks
+        _PCP = init_model_parallel_group(
+            group_ranks,
+            get_world_group().local_rank,
+            backend,
+            group_name="pcp",
+        )
+
+        assert _PP is None, "pipeline model parallel group is already initialized"
+        group_ranks = (
+            all_ranks.transpose(2, 5)  
+            .reshape(-1, pipeline_model_parallel_size)
+            .unbind(0)
+        )
         group_ranks = [x.tolist() for x in group_ranks]
         PP_group_ranks = group_ranks
-        _PP = init_model_parallel_group(group_ranks,
-                                        get_world_group().local_rank,
-                                        backend,
-                                        group_name="pp")
+        _PP = init_model_parallel_group(
+            group_ranks,
+            get_world_group().local_rank,
+            backend,
+            group_name="pp",
+        )
 
-        assert _DP is None, ("data parallel group is already initialized")
-        group_ranks = all_ranks.transpose(1,
-                                          4).reshape(-1,
-                                                     data_parallel_size).unbind(0)
+        assert _DP is None, "data parallel group is already initialized"
+        group_ranks = (
+            all_ranks.transpose(1, 5) 
+            .reshape(-1, data_parallel_size)
+            .unbind(0)
+        )
         group_ranks = [x.tolist() for x in group_ranks]
         DP_group_ranks = group_ranks
-        _DP = init_model_parallel_group(group_ranks,
-                                        get_world_group().local_rank,
-                                        backend,
-                                        group_name="dp")
+        _DP = init_model_parallel_group(
+            group_ranks,
+            get_world_group().local_rank,
+            backend,
+            group_name="dp",
+        )
 
-        assert _EP is None, ("expert parallel group is already initialized")
-        group_ranks = all_ranks.transpose(1, 3).reshape(
-            -1, data_parallel_size * tensor_model_parallel_size).unbind(0)
+        assert _EP is None, "expert parallel group is already initialized"
+        group_ranks = (
+            all_ranks.permute(0, 4, 2, 1, 3, 5)  # ExternalDP, SP, PP, DP, PCP, TP
+            .reshape(-1, data_parallel_size * prefill_context_model_parallel_size * tensor_model_parallel_size)
+            .unbind(0)
+        )
         group_ranks = [x.tolist() for x in group_ranks]
         EP_group_ranks = group_ranks
-        _EP = init_model_parallel_group(group_ranks,
-                                        get_world_group().local_rank,
-                                        backend,
-                                        group_name="ep")
+        _EP = init_model_parallel_group(
+            group_ranks,
+            get_world_group().local_rank,
+            backend,
+            group_name="ep",
+        )
 
-        # Build the sequence parallel groups.
-        assert parallel_state._SP is None, (
-            "sequence parallel group is already initialized")
-        group_ranks = all_ranks.transpose(3, 4).reshape(
-            -1, sequence_parallel_size).unbind(0)
+        assert parallel_state._SP is None, "sequence parallel group is already initialized"
+        group_ranks = (
+            all_ranks.transpose(4, 5)
+            .reshape(-1, sequence_parallel_size)
+            .unbind(0)
+        )
         group_ranks = [x.tolist() for x in group_ranks]
         SP_group_ranks = group_ranks
-        _SP = init_model_parallel_group(group_ranks,
-                                        get_world_group().local_rank,
-                                        backend,
-                                        group_name="sp")
+        _SP = init_model_parallel_group(
+            group_ranks,
+            get_world_group().local_rank,
+            backend,
+            group_name="sp",
+        )
 
-        # Build full-TP groups for ShiftParallel
-        shift_parallel_size = (tensor_model_parallel_size *
-                               sequence_parallel_size)
-        assert parallel_state._SP_TP is None, (
-            "full-TP group is already initialized")
-        # transpose(3, 4) for obtaining the correct attn head order
-        group_ranks = all_ranks.transpose(3, 4).reshape(
-            -1, shift_parallel_size).unbind(0)
+        shift_parallel_size = tensor_model_parallel_size * sequence_parallel_size
+        assert parallel_state._SP_TP is None, "full-TP group is already initialized"
+        group_ranks = (
+            all_ranks.transpose(4, 5)  # keep same head-order trick as your old transpose(3,4)
+            .reshape(-1, shift_parallel_size)
+            .unbind(0)
+        )
         group_ranks = [x.tolist() for x in group_ranks]
         SP_TP_group_ranks = group_ranks
-        _SP_TP = init_model_parallel_group(group_ranks,
-                                           get_world_group().local_rank,
-                                           backend,
-                                           group_name="sp_tp")
+        _SP_TP = init_model_parallel_group(
+            group_ranks,
+            get_world_group().local_rank,
+            backend,
+            group_name="sp_tp",
+        )
 
         parallel_state.logger.info(
             "rank %s in world size %s is assigned as DP rank %s, PP rank %s, "
-            "TP rank %s, EP rank %s, SP rank %s, SP_TP rank %s", rank,
-            world_size, _DP.rank_in_group, _PP.rank_in_group,
-            _TP.rank_in_group, _EP.rank_in_group, _SP.rank_in_group,
-            _SP_TP.rank_in_group)
+            "PCP rank %s, TP rank %s, DCP rank %s, EP rank %s, SP rank %s, SP_TP rank %s",
+            rank,
+            world_size,
+            _DP.rank_in_group,
+            _PP.rank_in_group,
+            _PCP.rank_in_group,
+            _TP.rank_in_group,
+            _DCP.rank_in_group,
+            _EP.rank_in_group,
+            _SP.rank_in_group,
+            _SP_TP.rank_in_group,
+        )
 
         parallel_state._TP = _TP
+        parallel_state._DCP = _DCP
+        parallel_state._PCP = _PCP
         parallel_state._PP = _PP
-        parallel_state._SP = _SP
-        parallel_state._SP_TP = _SP_TP
         parallel_state._DP = _DP
         parallel_state._EP = _EP
-
-        # check if SP requires kv replication
-        num_kv_heads = config.model_config._orig_get_num_kv_heads(config.parallel_config)
+        parallel_state._SP = _SP
+        parallel_state._SP_TP = _SP_TP
 
         if get_world_group().local_rank == 0:
             parallel_state.logger.info(
-                    f"UlyssesParallelState initialized:\n"
-                    f"  PP {_PP.world_size} ranks {PP_group_ranks}\n"
-                    f"  TP {_TP.world_size} ranks {TP_group_ranks}\n"
-                    f"  SP {_SP.world_size} ranks {SP_group_ranks}\n"
-                    f"  DP {_DP.world_size} ranks {DP_group_ranks}\n"
-                    f"  EP {_EP.world_size} ranks {EP_group_ranks}\n"
-                    f"  SP_TP {_SP_TP.world_size} ranks {SP_TP_group_ranks}")
-            if num_kv_heads < sequence_parallel_size:
-                parallel_state.logger.info(
-                    f"  KV cache is replicated by factor {sequence_parallel_size // num_kv_heads}\n")
+                "UlyssesParallelState initialized:\n"
+                f"  PP {_PP.world_size} ranks {PP_group_ranks}\n"
+                f"  TP {_TP.world_size} ranks {TP_group_ranks}\n"
+                f"  DCP {_DCP.world_size} ranks {DCP_group_ranks}\n"
+                f"  PCP {_PCP.world_size} ranks {PCP_group_ranks}\n"
+                f"  SP {_SP.world_size} ranks {SP_group_ranks}\n"
+                f"  DP {_DP.world_size} ranks {DP_group_ranks}\n"
+                f"  EP {_EP.world_size} ranks {EP_group_ranks}\n"
+                f"  SP_TP {_SP_TP.world_size} ranks {SP_TP_group_ranks}"
+            )
+
+        num_kv_heads = config.model_config._orig_get_num_kv_heads(config.parallel_config)
+        if get_world_group().local_rank == 0 and num_kv_heads < sequence_parallel_size:
+            parallel_state.logger.info(
+                f"KV cache is replicated by factor {sequence_parallel_size // num_kv_heads}"
+            )
 
     @contextmanager
     def graph_capture(device: torch.device):
@@ -276,66 +354,109 @@ class UlyssesMultiprocExecutor(ArcticPatch[MultiprocExecutor]):
         self._finalizer = weakref.finalize(self, self.shutdown)
         self.is_failed = False
         self.shutdown_event = threading.Event()
-        self.failure_callback: Optional[FailureCallback] = None
-        self.io_thread_pool: Optional[ThreadPoolExecutor] = None
+        self.failure_callback: FailureCallback | None = None
 
         self.world_size = self.parallel_config.world_size
-        tensor_parallel_size = self.parallel_config.tensor_parallel_size
-        pp_parallel_size = self.parallel_config.pipeline_parallel_size
-        sp_parallel_size = self.parallel_config.ulysses_sequence_parallel_size
-        assert (self.world_size ==
-                tensor_parallel_size * pp_parallel_size * sp_parallel_size), (
+        assert self.world_size % self.parallel_config.nnodes_within_dp == 0, (
+            f"global world_size ({self.parallel_config.world_size}) must be "
+            f"divisible by nnodes_within_dp "
+            f"({self.parallel_config.nnodes_within_dp}). "
+        )
+        self.local_world_size = self.parallel_config.local_world_size
+        tp_size = self.parallel_config.tensor_parallel_size
+        pp_size = self.parallel_config.pipeline_parallel_size
+        pcp_size = self.parallel_config.prefill_context_parallel_size
+        sp_size = self.parallel_config.ulysses_sequence_parallel_size
+        
+        assert self.world_size == tp_size * pp_size * pcp_size * sp_size, (
             f"world_size ({self.world_size}) must be equal to the "
-            f"tensor_parallel_size ({tensor_parallel_size}) x pipeline"
-            f"_parallel_size ({pp_parallel_size}) x ulysses_sequence_parallel"
-            f"_size ({sp_parallel_size}).")
+            f"tensor_parallel_size ({tp_size}) x pipeline"
+            f"_parallel_size ({pp_size}) x prefill_context"
+            f"_parallel_size ({pcp_size}) x ulysses_sequence_parallel"
+            f"_size ({sp_size})."
+        )
 
-        # Set multiprocessing envs that are common to V0 and V1
+        # Set multiprocessing envs
         set_multiprocessing_worker_envs()
 
-        # Multiprocessing-based executor does not support multi-node setting.
-        # Since it only works for single node, we can use the loopback address
-        # get_loopback_ip() for communication.
+        # use the loopback address get_loopback_ip() for communication.
         distributed_init_method = get_distributed_init_method(
-            get_loopback_ip(), get_open_port())
-
+            get_loopback_ip(), get_open_port()
+        )
+        self.rpc_broadcast_mq: MessageQueue | None = None
+        scheduler_output_handle: Handle | None = None
         # Initialize worker and set up message queues for SchedulerOutputs
         # and ModelRunnerOutputs
-        max_chunk_bytes = envs.VLLM_MQ_MAX_CHUNK_BYTES_MB * 1024 * 1024
-        self.rpc_broadcast_mq = MessageQueue(self.world_size,
-                                             self.world_size,
-                                             max_chunk_bytes=max_chunk_bytes)
-        scheduler_output_handle = self.rpc_broadcast_mq.export_handle()
-
+        if self.parallel_config.node_rank_within_dp == 0:
+            # For leader node within each dp rank,
+            # each dp will have its own leader multiproc executor.
+            max_chunk_bytes = envs.VLLM_MQ_MAX_CHUNK_BYTES_MB * 1024 * 1024
+            self.rpc_broadcast_mq = MessageQueue(
+                self.world_size,
+                self.local_world_size,
+                max_chunk_bytes=max_chunk_bytes,
+                connect_ip=self.parallel_config.master_addr,
+            )
+            scheduler_output_handle = self.rpc_broadcast_mq.export_handle()
+        
         # Create workers
-        unready_workers: list[UnreadyWorkerProcHandle] = []
-        from vllm.utils import get_mp_context
+        # FIX: Removed duplicate initialization and local import that caused UnboundLocalError
         context = get_mp_context()
         shared_worker_lock = context.Lock()
+        unready_workers: list[UnreadyWorkerProcHandle] = []
+        
         success = False
         try:
-            for rank in range(self.world_size):
+            global_start_rank = (
+                self.local_world_size * self.parallel_config.node_rank_within_dp
+            )
+            for local_rank in range(self.local_world_size):
+                global_rank = global_start_rank + local_rank
                 unready_workers.append(
                     WorkerProc.make_worker_process(
                         vllm_config=self.vllm_config,
-                        local_rank=rank,
-                        rank=rank,
+                        local_rank=local_rank,
+                        rank=global_rank,
                         distributed_init_method=distributed_init_method,
                         input_shm_handle=scheduler_output_handle,
                         shared_worker_lock=shared_worker_lock,
-                    ))
+                    )
+                )
 
             # Workers must be created before wait_for_ready to avoid
             # deadlock, since worker.init_device() does a device sync.
+
+            # Wait for all local workers to be ready.
             self.workers = WorkerProc.wait_for_ready(unready_workers)
+
+            # Start background thread to monitor worker health if not in headless mode.
+            if self.monitor_workers:
+                self.start_worker_monitor()
+
+            self.response_mqs = []
+            # Only leader node have remote response mqs
+            if self.parallel_config.node_rank_within_dp == 0:
+                for rank in range(self.world_size):
+                    if rank < self.local_world_size:
+                        local_message_queue = self.workers[rank].worker_response_mq
+                        assert local_message_queue is not None
+                        self.response_mqs.append(local_message_queue)
+                    else:
+                        remote_message_queue = self.workers[0].peer_worker_response_mqs[
+                            rank
+                        ]
+                        assert remote_message_queue is not None
+                        self.response_mqs.append(remote_message_queue)
 
             # Ensure message queues are ready. Will deadlock if re-ordered
             # Must be kept consistent with the WorkerProc.
-            self.rpc_broadcast_mq.wait_until_ready()
-            for w in self.workers:
-                w.worker_response_mq.wait_until_ready()
 
-            self.start_worker_monitor()
+            # Wait for all input mqs to be ready.
+            if self.rpc_broadcast_mq is not None:
+                self.rpc_broadcast_mq.wait_until_ready()
+            # Wait for all remote response mqs to be ready.
+            for response_mq in self.response_mqs:
+                response_mq.wait_until_ready()
             success = True
         finally:
             if not success:
@@ -344,22 +465,11 @@ class UlyssesMultiprocExecutor(ArcticPatch[MultiprocExecutor]):
                 for uw in unready_workers:
                     if uw.death_writer is not None:
                         uw.death_writer.close()
-                self._ensure_worker_termination(
-                    [uw.proc for uw in unready_workers])
+                self._ensure_worker_termination([uw.proc for uw in unready_workers])
 
-        # For pipeline parallel, we use a thread pool for asynchronous
-        # execute_model.
-        if self.max_concurrent_batches > 1:
-            # Note: must use only 1 IO thread to keep dequeue sequence
-            # from the response queue
-            # _async_aggregate_workers_output also assumes a single IO thread
-            self.io_thread_pool = ThreadPoolExecutor(
-                max_workers=1, thread_name_prefix="mp_exec_io")
+        self.futures_queue = deque[tuple[FutureWrapper, Callable]]()
 
         self.output_rank = self._get_output_rank()
-        self.has_connector = self.vllm_config.kv_transfer_config is not None
-        self.kv_output_aggregator = KVOutputAggregator(
-            self.parallel_config.world_size)
 
 
 class UlyssesAttention(ArcticPatch[Attention]):
@@ -431,31 +541,282 @@ class UlyssesCudagraphDispatcher(ArcticPatch[CudagraphDispatcher]):
 
     def initialize_cudagraph_keys(self, cudagraph_mode: CUDAGraphMode,
                                   uniform_decode_query_len: int):
-
         self._orig_initialize_cudagraph_keys(cudagraph_mode, uniform_decode_query_len)
 
-        # Ulysses specific keys for mixed prefill/decode mode
-        if cudagraph_mode.mixed_mode() != CUDAGraphMode.NONE:
-            sp_size = parallel_state._SP.world_size
-            for bs in self.compilation_config.cudagraph_capture_sizes:
-                self.add_cudagraph_key(
-                    cudagraph_mode.mixed_mode(),
-                    BatchDescriptor(num_tokens=bs * sp_size, uniform_decode=False))
+        # sp_group = getattr(parallel_state, "_SP", None)
+        # sp_size = sp_group.world_size if sp_group is not None else 1
+        # if sp_size <= 1:
+        #     return
 
-        # Ulyssses specific keys for full decode mode
-        if cudagraph_mode.decode_mode() == CUDAGraphMode.FULL \
-            and cudagraph_mode.separate_routine():
-            max_num_tokens = uniform_decode_query_len * \
-                self.vllm_config.scheduler_config.max_num_seqs
-            cudagraph_capture_sizes_for_decode = [
-                x for x in self.compilation_config.cudagraph_capture_sizes
-                if x <= max_num_tokens and x >= uniform_decode_query_len
+        # if self.vllm_config.lora_config:
+        #     if self.compilation_config.cudagraph_specialize_lora:
+        #         lora_cases = [True, False]
+        #     else:
+        #         lora_cases = [True]
+        # else:
+        #     lora_cases = [False]
+
+        # if cudagraph_mode.mixed_mode() != CUDAGraphMode.NONE:
+        #     for bs, has_lora in product(
+        #         self.compilation_config.cudagraph_capture_sizes, lora_cases
+        #     ):
+        #         bd = self._create_padded_batch_descriptor(
+        #             num_tokens=bs, #  * sp_size,
+        #             uniform_decode=False,
+        #             has_lora=has_lora,
+        #         ).relax_for_mixed_batch_cudagraphs()
+
+        #         self.add_cudagraph_key(cudagraph_mode.mixed_mode(), bd)
+
+        # if (cudagraph_mode.decode_mode() == CUDAGraphMode.FULL
+        #         and cudagraph_mode.separate_routine()):
+        #     max_num_tokens = (
+        #         uniform_decode_query_len
+        #         * self.vllm_config.scheduler_config.max_num_seqs
+        #     )
+        #     cudagraph_capture_sizes_for_decode = [
+        #         x for x in self.compilation_config.cudagraph_capture_sizes
+        #         if uniform_decode_query_len <= x <= max_num_tokens
+        #     ]
+        #     for bs, has_lora in product(cudagraph_capture_sizes_for_decode, lora_cases):
+        #         bd = self._create_padded_batch_descriptor(
+        #             num_tokens=bs, #  * sp_size,
+        #             uniform_decode=True,
+        #             has_lora=has_lora,
+        #         )
+        #         self.add_cudagraph_key(CUDAGraphMode.FULL, bd)
+
+
+class UlyssesCompilationConfig(ArcticPatch[CompilationConfig]):
+
+    _orig_post_init_cudagraph_sizes = CompilationConfig.post_init_cudagraph_sizes
+
+    def post_init_cudagraph_sizes(self) -> None:
+
+#         # print(f"Before post_init_cudagraph_sizes: max_cudagraph_capture_size={self.max_cudagraph_capture_size}, cudagraph_capture_sizes={self.cudagraph_capture_sizes}")
+
+#         # Access the module-level variable set during engine config creation
+#         sp_size = _ulysses_sp_size
+
+#         # scale sizes by Ulysses sequence parallel size
+#         self.max_cudagraph_capture_size *= sp_size
+#         self.cudagraph_capture_sizes = [size * sp_size for size in self.cudagraph_capture_sizes]
+
+#         # print(f"After scaling for SP size {sp_size}: max_cudagraph_capture_size={self.max_cudagraph_capture_size}, cudagraph_capture_sizes={self.cudagraph_capture_sizes}")
+
+        self._orig_post_init_cudagraph_sizes()
+
+#         # revert back to original shapes
+#         self.max_cudagraph_capture_size //= sp_size
+#         self.cudagraph_capture_sizes = [size // sp_size for size in self.cudagraph_capture_sizes]
+
+#         # print(f"self.bs_to_padded_graph_size {self.bs_to_padded_graph_size}")
+
+#         # import traceback
+#         # traceback.print_stack()
+
+class UlyssesVllmConfig(ArcticPatch[VllmConfig]):
+
+    _orig_set_cudagraph_sizes = VllmConfig._set_cudagraph_sizes
+
+    @staticmethod
+    def _generate_capture_sizes(max_size: int) -> list[int]:
+        sizes = [i for i in [1, 2, 4] if i <= max_size]
+        if max_size >= 8:
+            sizes += list(range(8, min(max_size + 1, 256), 8))
+        if max_size >= 256:
+            sizes += list(range(256, min(max_size + 1, 512), 16))
+        if max_size >= 512:
+            sizes += list(range(512, max_size + 1, 32))
+        return sizes
+
+    @staticmethod
+    def _build_bs_to_padded(capture_sizes: list[int],
+                            max_capture_size: int) -> list[int]:
+        table = [0] * (max_capture_size + 1)
+        for end, start in zip(
+            capture_sizes + [max_capture_size + 1],
+            [0] + capture_sizes,
+        ):
+            for bs in range(start, end):
+                table[bs] = start if bs == start else end
+        return table
+
+    def _set_cudagraph_sizes(self):
+        sp_size = _ulysses_sp_size
+
+        max_cudagraph_capture_size = self.compilation_config.max_cudagraph_capture_size
+        cudagraph_capture_sizes = self.compilation_config.cudagraph_capture_sizes
+
+        if cudagraph_capture_sizes is None:
+            if max_cudagraph_capture_size is None:
+                max_cudagraph_capture_size = 512
+            # Canonical (unscaled) sizes: [1, 2, 4, 8, ..., 512]
+            canonical_sizes = self._generate_capture_sizes(
+                max_cudagraph_capture_size)
+
+            # Base model (Ulysses): scale by sp_size
+            self.compilation_config.cudagraph_capture_sizes = [
+                s * sp_size for s in canonical_sizes
             ]
-            for bs in cudagraph_capture_sizes_for_decode:
-                self.add_cudagraph_key(
-                    CUDAGraphMode.FULL,
-                    BatchDescriptor(num_tokens=bs * sp_size, uniform_decode=True))
-        self.keys_initialized = True
+            self.compilation_config.max_cudagraph_capture_size = (
+                max_cudagraph_capture_size * sp_size
+            )
+
+            # Shift model: scale by 1 (use canonical sizes as-is)
+            shift_sizes = list(canonical_sizes)
+            shift_max = max_cudagraph_capture_size
+        else:
+            shift_sizes = list(cudagraph_capture_sizes)
+            shift_max = max(shift_sizes) if shift_sizes else 0
+
+        self._shift_cudagraph_capture_sizes = shift_sizes
+        self._shift_max_cudagraph_capture_size = shift_max
+        self._shift_bs_to_padded_graph_size = self._build_bs_to_padded(
+            shift_sizes, shift_max) if shift_sizes else []
+
+        print(
+            f"UlyssesVllmConfig: base max_cudagraph_capture_size="
+            f"{self.compilation_config.max_cudagraph_capture_size}, "
+            f"base sizes={self.compilation_config.cudagraph_capture_sizes}, "
+            f"shift max={shift_max}, shift sizes={shift_sizes}"
+        )
+
+        self._orig_set_cudagraph_sizes()
+
+    def pad_for_cudagraph(self, batch_size: int) -> int:
+        from .model_runner import is_shift_parallel_mode
+        if is_shift_parallel_mode() and self._shift_bs_to_padded_graph_size:
+            return self._shift_bs_to_padded_graph_size[batch_size]
+        return self.compilation_config.bs_to_padded_graph_size[batch_size]
 
 
+class UlyssesEngineCore(ArcticPatch[EngineCore]):
 
+    iteration = 0
+
+    def step_with_batch_queue(
+        self,
+    ) -> tuple[dict[int, EngineCoreOutputs] | None, bool]:
+        """Schedule and execute batches with the batch queue.
+        Note that if nothing to output in this step, None is returned.
+
+        The execution flow is as follows:
+        1. Try to schedule a new batch if the batch queue is not full.
+        If a new batch is scheduled, directly return an empty engine core
+        output. In other words, fulfilling the batch queue has a higher priority
+        than getting model outputs.
+        2. If there is no new scheduled batch, meaning that the batch queue
+        is full or no other requests can be scheduled, we block until the first
+        batch in the job queue is finished.
+        3. Update the scheduler from the output.
+        """
+        batch_queue = self.batch_queue
+        assert batch_queue is not None
+
+        # Try to schedule a new batch if the batch queue is not full, but
+        # the scheduler may return an empty batch if all requests are scheduled.
+        # Note that this is not blocking.
+        assert len(batch_queue) < self.batch_queue_size
+
+        step_start_time = time.monotonic()
+
+        model_executed = False
+        deferred_scheduler_output = None
+        if self.scheduler.has_requests():
+            scheduler_output = self.scheduler.schedule()
+            exec_future = self.model_executor.execute_model(
+                scheduler_output, non_block=True
+            )
+            if not self.is_ec_producer:
+                model_executed = scheduler_output.total_num_scheduled_tokens > 0
+
+            if self.is_pooling_model or not model_executed:
+                # No sampling required (no requests scheduled).
+                future = cast(Future[ModelRunnerOutput], exec_future)
+            else:
+                if not scheduler_output.pending_structured_output_tokens:
+                    # We aren't waiting for any tokens, get any grammar output
+                    # and sample immediately.
+                    grammar_output = self.scheduler.get_grammar_bitmask(
+                        scheduler_output
+                    )
+                    future = self.model_executor.sample_tokens(
+                        grammar_output, non_block=True
+                    )
+                else:
+                    # We need to defer sampling until we have processed the model output
+                    # from the prior step.
+                    deferred_scheduler_output = scheduler_output
+
+            if not deferred_scheduler_output:
+                # Add this step's future to the queue.
+                batch_queue.appendleft((future, scheduler_output, exec_future))
+                if (
+                    model_executed
+                    and len(batch_queue) < self.batch_queue_size
+                    and not batch_queue[-1][0].done()
+                ):
+                    # Don't block on next worker response unless the queue is full
+                    # or there are no more requests to schedule.
+                    return None, True
+
+        elif not batch_queue:
+            # Queue is empty. We should not reach here since this method should
+            # only be called when the scheduler contains requests or the queue
+            # is non-empty.
+            return None, False
+
+        # Block until the next result is available.
+        future, scheduler_output, exec_model_fut = batch_queue.pop()
+        with (
+            self.log_error_detail(scheduler_output),
+            self.log_iteration_details(scheduler_output),
+        ):
+            model_output = future.result()
+            if model_output is None:
+                # None from sample_tokens() implies that the original execute_model()
+                # call failed - raise that exception.
+                exec_model_fut.result()
+                raise RuntimeError("unexpected error")
+
+        # Before processing the model output, process any aborts that happened
+        # during the model execution.
+        self._process_aborts_queue()
+        engine_core_outputs = self.scheduler.update_from_output(
+            scheduler_output, model_output
+        )
+
+        # NOTE(nick): We can either handle the deferred tasks here or save
+        # in a field and do it immediately once step_with_batch_queue is
+        # re-called. The latter slightly favors TTFT over TPOT/throughput.
+        if deferred_scheduler_output:
+            # If we are doing speculative decoding with structured output,
+            # we need to get the draft token ids from the prior step before
+            # we can compute the grammar bitmask for the deferred request.
+            if self.use_spec_decode:
+                draft_token_ids = self.model_executor.take_draft_token_ids()
+                assert draft_token_ids is not None
+                # Update the draft token ids in the scheduler output to
+                # filter out the invalid spec tokens, which will be padded
+                # with -1 and skipped by the grammar bitmask computation.
+                self.scheduler.update_draft_token_ids_in_output(
+                    draft_token_ids, deferred_scheduler_output
+                )
+            # We now have the tokens needed to compute the bitmask for the
+            # deferred request. Get the bitmask and call sample tokens.
+            grammar_output = self.scheduler.get_grammar_bitmask(
+                deferred_scheduler_output
+            )
+            future = self.model_executor.sample_tokens(grammar_output, non_block=True)
+            batch_queue.appendleft((future, deferred_scheduler_output, exec_future))
+
+        total_time_ms = (time.monotonic() - step_start_time) * 1000
+
+        running, waiting = self.scheduler.get_request_counts()
+        scheduled_tokens = scheduler_output.total_num_scheduled_tokens
+        concurrency = len(scheduler_output.num_scheduled_tokens.keys())
+        # print(f"iteration {self.iteration}, running: {running}, waiting: {waiting}, scheduled tokens: {scheduled_tokens}, concurrency: {concurrency}, total_time_ms: {total_time_ms:.2f}")
+        self.iteration += 1
+
+        return engine_core_outputs, model_executed

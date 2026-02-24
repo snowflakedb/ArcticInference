@@ -17,7 +17,8 @@ import vllm
 from vllm import LLM, SamplingParams
 
 import os
-os.environ["VLLM_USE_V1"] = "1"
+os.environ["ARCTIC_INFERENCE_ENABLED"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "4,5"
 
 vllm.plugins.load_general_plugins()
 
@@ -29,9 +30,11 @@ llm = LLM(
         "method": "arctic",
         "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.1-70B-Instruct",
         "num_speculative_tokens": 3,
-        "enable_suffix_decoding": True,
+        "enable_suffix_decoding": False,
         "disable_by_batch_size": 64,
     },
+    enforce_eager=True,
+    async_scheduling=True,
     seed=0,
 )
 

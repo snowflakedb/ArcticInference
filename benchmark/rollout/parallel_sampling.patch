@@ -1,0 +1,18 @@
+--- /home/yak/myenv_v14/lib/python3.12/site-packages/vllm/v1/engine/parallel_sampling.py	2026-01-31 22:11:45.340329657 +0000
++++ parallel_sampling.py	2026-01-31 22:08:27.000000000 +0000
+@@ -66,11 +66,13 @@
+           Child `sampling_params` instance.
+         """
+         seed = self.sampling_params.seed
+-        if self.cached_child_sampling_params:
++        # if self.cached_child_sampling_params:
+             # Reuse child sampling_params data structure
+-            return self.cached_child_sampling_params
++        #     return self.cached_child_sampling_params
+         # Build child sampling_params
+         child_sampling_params = copy(self.sampling_params)
++        print(f"child index: {index}, max_tokens_n: {child_sampling_params.max_tokens_n}")
++        child_sampling_params.max_tokens = child_sampling_params.max_tokens_n[index]
+         child_sampling_params.n = 1
+         if seed is None:
+             # Cache child sampling_params for later reuse

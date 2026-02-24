@@ -13,12 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional, Union
+from typing import Optional, Union, List
 
 from vllm.config import VllmConfig
 from vllm.model_executor.model_loader import get_model
+from vllm.v1.attention.backends.utils import CommonAttentionMetadata
 from vllm.v1.spec_decode.metadata import SpecDecodeMetadata
 from vllm.v1.worker.gpu_model_runner import logger
+from vllm.v1.worker.gpu_input_batch import CachedRequestState, InputBatch
+from vllm.v1.utils import CpuGpuBuffer 
+from vllm.utils.platform_utils import is_pin_memory_available 
 
 import numpy as np
 import torch
@@ -38,6 +42,9 @@ class ArcticProposer:
 
         self.model = None
         self.device = None
+
+        self.max_batch_size = vllm_config.scheduler_config.max_num_seqs
+        self.backup_next_token_ids = None  # type: Optional[CpuGpuBuffer]
 
     def load_model(
         self,
@@ -101,63 +108,186 @@ class ArcticProposer:
             quant_config=draft_config_quant_config,
             parallel_config=draft_config_parallel_config,
             scheduler_config=self.vllm_config.scheduler_config,
-            speculative_config=self.vllm_config.speculative_config,
+            speculative_config=self.speculative_config,
             load_config=self.vllm_config.load_config,
             device_config=self.vllm_config.device_config,
         )
 
         self.model = get_model(vllm_config=draft_worker_config)
-        self.device = next(model.parameters()).device
+        self.device = next(self.model.parameters()).device
 
         self.input_hidden_dim = self.model.input_hidden_dim if isinstance(
             self.model, ArcticLSTMSpeculator) else self.model.emb_dim
 
+        self.backup_next_token_ids = CpuGpuBuffer(
+            self.max_batch_size,
+            dtype=torch.int32,
+            pin_memory=is_pin_memory_available(),
+            device=self.device,
+            with_numpy=True,
+        )
+
     def prepare_hidden_states(
         self,
         sample_hidden_states: torch.Tensor,
-        sampled_token_ids: Union[np.ndarray, list[list[int]]],
+        sampled_token_ids: Union[torch.Tensor, np.ndarray, List[List[int]]],
         spec_decode_metadata: SpecDecodeMetadata,
     ) -> torch.Tensor:
-        if sample_hidden_states is not None:
-            assert sample_hidden_states.shape[-1] == self.input_hidden_dim, \
-                f"hidden_states shape mismatch: {sample_hidden_states.shape[-1]} != {self.input_hidden_dim}. \
-                Please make sure spec model is trained using the same base model."
-        
-        # TODO(Ye): fuse into a single kernel
+        assert sample_hidden_states is not None, "sample_hidden_states must be provided"
+
+        if isinstance(sampled_token_ids, np.ndarray):
+            sampled_token_ids = torch.as_tensor(
+                sampled_token_ids, device=sample_hidden_states.device, dtype=torch.long
+            )
+        elif isinstance(sampled_token_ids, list):
+            sampled_token_ids = torch.as_tensor(
+                sampled_token_ids, device=sample_hidden_states.device, dtype=torch.long
+            )
+        elif sampled_token_ids.device != sample_hidden_states.device:
+            sampled_token_ids = sampled_token_ids.to(sample_hidden_states.device, non_blocking=True)
+
         max_gen_len = sampled_token_ids.shape[-1]
-        if max_gen_len == 1:
+        num_requests = sampled_token_ids.shape[0]
+        if max_gen_len == 1 and sample_hidden_states.shape[0] == num_requests:
+            # Fast path: one row per request, no index-select needed.
             return sample_hidden_states
 
         assert spec_decode_metadata is not None
-        valid_mask = sampled_token_ids != -1
-        gen_lens = valid_mask.sum(dim=1)
-        num_sampled_tokens = np.array(spec_decode_metadata.num_draft_tokens)
-        num_sampled_tokens = torch.tensor(num_sampled_tokens,
-                                          device=gen_lens.device) + 1
-        hidden_states_idx = (gen_lens - 1) + torch.cumsum(
-            num_sampled_tokens, 0) - num_sampled_tokens
-        previous_hidden_states = sample_hidden_states[hidden_states_idx]
 
+        if hasattr(spec_decode_metadata, "cu_num_draft_tokens") and spec_decode_metadata.cu_num_draft_tokens is not None:
+            cu = spec_decode_metadata.cu_num_draft_tokens
+            num_draft_tokens_gpu = torch.cat([cu[0:1], cu[1:] - cu[:-1]])
+        else:
+            num_draft_tokens_gpu = torch.as_tensor(
+                spec_decode_metadata.num_draft_tokens, 
+                device=sample_hidden_states.device, 
+                dtype=torch.int64
+            )
+
+        num_processed_tokens_per_req = num_draft_tokens_gpu + 1 
+
+        offsets = torch.cumsum(num_processed_tokens_per_req, dim=0) - num_processed_tokens_per_req
+
+        vocab_size = self.vllm_config.model_config.get_vocab_size()
+        valid_mask = (sampled_token_ids != -1) & (sampled_token_ids < vocab_size)
+        gen_lens = valid_mask.sum(dim=1).to(dtype=torch.int64)
+
+        last_valid = torch.clamp(gen_lens - 1, min=0)
+        hidden_states_idx = offsets + last_valid
+        
+        previous_hidden_states = sample_hidden_states.index_select(
+            dim=0, index=hidden_states_idx
+        )
+  
+        assert previous_hidden_states.size(-1) == self.input_hidden_dim, (
+            f"hidden_states dim {previous_hidden_states.size(-1)} != speculator expected {self.input_hidden_dim}. "
+            "Make sure the spec model is trained with the same base model."
+        )
+        
         return previous_hidden_states
 
     def propose(
         self,
-        context_token_ids: np.ndarray,
-        previous_hidden_states: torch.Tensor,
+        context_token_ids: Union[torch.Tensor, np.ndarray, List[int]],
+        previous_hidden_states: Optional[torch.Tensor],
         num_predict_tokens: int,
-    ) -> Optional[np.ndarray]:
-        assert num_predict_tokens > 0, \
-            f"num_predict_tokens must be greater than 0, got {num_predict_tokens}."
-        
-        input_ids = torch.tensor(context_token_ids, device=self.device)
+    ) -> Optional[torch.Tensor]:
+        assert num_predict_tokens > 0
+        if isinstance(context_token_ids, torch.Tensor):
+            if context_token_ids.device != self.device:
+                input_ids = context_token_ids.to(self.device, non_blocking=True)
+            else:
+                input_ids = context_token_ids
+        else:
+            input_ids = torch.as_tensor(context_token_ids, device=self.device, dtype=torch.long)
 
         next_tokens = self.model.generate_proposals(
             input_ids=input_ids,
             previous_hidden_states=previous_hidden_states,
             num_predict_tokens=num_predict_tokens,
         )
+        return next_tokens
 
-        return next_tokens.cpu().numpy()
+    # Borrow from eagle
+    def prepare_next_token_ids_cpu(
+        self,
+        sampled_token_ids: list[list[int]],
+        requests: dict[str, CachedRequestState],
+        gpu_input_batch: InputBatch,
+        num_scheduled_tokens: dict[str, int],
+    ) -> torch.Tensor:
+        req_ids = gpu_input_batch.req_ids
+        next_token_ids: list[int] = []
+        for i, token_ids in enumerate(sampled_token_ids):
+            if token_ids:
+                # Common case.
+                next_token_id = token_ids[-1]
+            else:
+                # Partial prefill (rare case).
+                # Get the next token id from the request state.
+                req_id = req_ids[i]
+                req_state = requests[req_id]
+                seq_len = req_state.num_computed_tokens + num_scheduled_tokens[req_id]
+                next_token_id = req_state.get_token_id(seq_len)
+            next_token_ids.append(next_token_id)
+        next_token_ids = torch.tensor(
+            next_token_ids, dtype=torch.int32, device=self.device
+        )
+        return next_token_ids
+
+
+    def prepare_next_token_ids_padded(
+        self,
+        common_attn_metadata: CommonAttentionMetadata,
+        sampled_token_ids: torch.Tensor,
+        requests: dict[str, CachedRequestState],
+        gpu_input_batch: InputBatch,
+        discard_request_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        from vllm.triton_utils import triton
+        from vllm.v1.spec_decode.utils import eagle_prepare_next_token_padded_kernel
+        
+        num_reqs = gpu_input_batch.num_reqs
+        self.backup_next_token_ids.np[:num_reqs] = np.array(
+            [
+                requests[gpu_input_batch.req_ids[i]].get_token_id(
+                    common_attn_metadata.seq_lens_cpu[i].item()
+                )
+                for i in range(num_reqs)
+            ],
+            dtype=np.int32,
+        )
+        self.backup_next_token_ids.copy_to_gpu(num_reqs)
+        backup_tokens_gpu = self.backup_next_token_ids.gpu
+
+        batch_size, num_tokens = sampled_token_ids.shape
+        device = sampled_token_ids.device
+
+        assert discard_request_mask.dtype == torch.bool
+        assert backup_tokens_gpu.dtype == torch.int32
+
+        next_token_ids = torch.empty(batch_size, dtype=torch.int32, device=device)
+        valid_sampled_tokens_count = next_token_ids.new_empty(batch_size)
+
+        # Kernel grid: one program per request (row)
+        grid = (batch_size,)
+
+        # Find the next power of 2 for block sizes
+        BLOCK_SIZE_TOKENS = triton.next_power_of_2(num_tokens)
+        eagle_prepare_next_token_padded_kernel[grid](
+            sampled_token_ids,
+            discard_request_mask,
+            backup_tokens_gpu,
+            next_token_ids,
+            valid_sampled_tokens_count,
+            gpu_input_batch.vocab_size,
+            num_tokens,
+            batch_size,
+            sampled_token_ids.stride(0),
+            BLOCK_SIZE_TOKENS=BLOCK_SIZE_TOKENS,
+        )
+
+        return next_token_ids, valid_sampled_tokens_count
 
 
 class SuffixProposer:

@@ -255,6 +255,8 @@ class ArcticMLPSpeculator(nn.Module, SpeculatorTPInit):
                 else vllm_config.scheduler_config.max_num_seqs
             )
             self.cuda_graph_max_batch_size = padding_size(disable_by_batch_size)
+            self.cuda_graph_max_batch_size = padding_size(
+                vllm_config.scheduler_config.max_num_seqs)
             self.static_cuda_buffers = {
                 "last_tokens":
                 torch.empty(self.cuda_graph_max_batch_size,
@@ -339,6 +341,7 @@ class ArcticMLPSpeculator(nn.Module, SpeculatorTPInit):
                 argidx = torch.argmax(vals, -1).reshape(batch_size, -1)
                 last_tokens = torch.gather(indices, -1, argidx)
 
+            last_tokens.clamp_(0, self.vocab_size - 1)
             if next_tokens_tensors[head_index] == None:
                 next_tokens_tensors[head_index] = last_tokens
             else:
@@ -445,11 +448,24 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
         self.n_predict = config.n_predict
         self.vocab_size = config.vocab_size
         self.input_hidden_dim = config.input_hidden_dim
-        config.inner_dim = [int(i) for i in config.inner_dim.split(".")]
+
+        def _parse_dim(value):
+            """Helper to normalize dimension config into a list of ints."""
+            if isinstance(value, str):
+                return [int(i) for i in value.split(".")]
+            elif isinstance(value, int):
+                return [value]
+            elif isinstance(value, list):
+                return [int(i) for i in value]
+            return value
+
+        config.inner_dim = _parse_dim(config.inner_dim)
         self.inner_dim = config.inner_dim
-        config.emb_dim = [int(i) for i in config.emb_dim.split(".")]
-        self.emb_dim = config.emb_dim
-        config.proj_dim = [int(i) for i in config.proj_dim.split(".")]
+
+        config.emb_dim = _parse_dim(config.emb_dim)
+        self.emb_dim = config.emb_dim 
+
+        config.proj_dim = _parse_dim(config.proj_dim)
         self.proj_dim = config.proj_dim
 
         self.max_speculative_tokens = config.num_lookahead_tokens
@@ -617,6 +633,7 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
             else vllm_config.scheduler_config.max_num_seqs
         )
         self.cuda_graph_max_batch_size = padding_size(disable_by_batch_size)
+        
         self.static_cuda_buffers = {
             "last_tokens":
             torch.empty(self.cuda_graph_max_batch_size, 1, dtype=torch.long),
@@ -778,6 +795,7 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
         next_tokens_tensors: List[torch.Tensor],
         cell_states: torch.Tensor = None,
     ) -> torch.Tensor:
+        last_tokens.clamp_(0, self.vocab_size - 1)
         for head_index in range(num_predict_tokens):
             if self.method == "sum_lstm":
                 states, cell_states = self.generate_states(
@@ -810,6 +828,7 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
                 argidx = torch.argmax(vals, -1).reshape(batch_size, -1)
                 last_tokens = torch.gather(indices, -1, argidx)
 
+            last_tokens.clamp_(0, self.vocab_size - 1)
             if next_tokens_tensors[head_index] == None:
                 next_tokens_tensors[head_index] = last_tokens
             else:

@@ -20,10 +20,12 @@ import torch
 from torch import nn
 
 import vllm.distributed.parallel_state as parallel_state
-from vllm.attention.backends.abstract import AttentionType
+from vllm.v1.attention.backend import AttentionType
 from vllm.compilation.decorators import support_torch_compile
 from vllm.config import CacheConfig, VllmConfig
-from vllm.forward_context import ForwardContext, get_forward_context
+from vllm.config.compilation import CUDAGraphMode
+from vllm.forward_context import (BatchDescriptor, ForwardContext,
+                                    get_forward_context)
 from vllm.logger import init_logger
 from vllm.model_executor.layers.layernorm import RMSNorm
 from vllm.model_executor.layers.linear import (ColumnParallelLinear,
@@ -47,7 +49,7 @@ from vllm.sequence import IntermediateTensors
 try:
     from vllm.v1.attention.backends.flashinfer import FlashInferMetadata
     FLASHINFER_AVAILABLE = True
-except ImportError:
+except (ImportError, RuntimeError):
     FLASHINFER_AVAILABLE = False
     FlashInferMetadata = None
 
@@ -76,8 +78,6 @@ class LlamaSwiftKVAttention(LlamaAttention):
         hidden_size: int,
         num_heads: int,
         num_kv_heads: int,
-        rope_theta: float = 10000,
-        rope_scaling: Optional[dict[str, Any]] = None,
         max_position_embeddings: int = 8192,
         quant_config: Optional[QuantizationConfig] = None,
         bias: bool = False,
@@ -91,8 +91,6 @@ class LlamaSwiftKVAttention(LlamaAttention):
             hidden_size=hidden_size,
             num_heads=num_heads,
             num_kv_heads=num_kv_heads,
-            rope_theta=rope_theta,
-            rope_scaling=rope_scaling,
             max_position_embeddings=max_position_embeddings,
             quant_config=quant_config,
             bias=bias,
@@ -148,16 +146,8 @@ class LlamaSwiftKVDecoderLayer(nn.Module):
     ) -> None:
         super().__init__()
         self.hidden_size = config.hidden_size
-        rope_theta = getattr(config, "rope_theta", 10000)
-        rope_scaling = getattr(config, "rope_scaling", None)
-        if rope_scaling is not None and getattr(
-                config, "original_max_position_embeddings", None):
-            rope_scaling["original_max_position_embeddings"] = (
-                config.original_max_position_embeddings)
         max_position_embeddings = getattr(config, "max_position_embeddings",
                                           8192)
-        # Support abacusai/Smaug-72B-v0.1 with attention_bias
-        # Support internlm/internlm-7b with bias
         attention_bias = getattr(config, "attention_bias", False) or getattr(
             config, "bias", False)
         self.self_attn = LlamaSwiftKVAttention(
@@ -166,8 +156,6 @@ class LlamaSwiftKVDecoderLayer(nn.Module):
             num_heads=config.num_attention_heads,
             num_kv_heads=getattr(config, "num_key_value_heads",
                                  config.num_attention_heads),
-            rope_theta=rope_theta,
-            rope_scaling=rope_scaling,
             max_position_embeddings=max_position_embeddings,
             quant_config=quant_config,
             bias=attention_bias,
@@ -374,6 +362,9 @@ class LlamaSwiftKVModel(nn.Module):
 
 
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
+        return self.embed_tokens(input_ids)
+
+    def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
 
     def _init_prefill_runner(self, vllm_config: VllmConfig):
@@ -705,6 +696,28 @@ class LlamaSwiftKVModel(nn.Module):
                 k_states,
                 v_states))
 
+        # When swiftkv_select filters tokens (mixed prefill-decode batches),
+        # the decode runner processes fewer tokens than the original batch.
+        # Piecewise CUDA graphs captured for the original batch size cannot
+        # be replayed with modified attention metadata (stale FA3 scheduler
+        # metadata, changed query_start_loc, etc.), so we fall back to eager
+        # compiled execution for the decode runner on these batches.
+        # For decode-only batches all tokens survive, so CUDA graphs are
+        # used normally -- preserving decode throughput.
+        fwd_ctx = get_forward_context()
+        saved_batch_descriptor = fwd_ctx.batch_descriptor
+        saved_cudagraph_mode = fwd_ctx.cudagraph_runtime_mode
+        decode_num_tokens = hidden_states.shape[0]
+        if (saved_batch_descriptor is not None
+                and saved_batch_descriptor.num_tokens != decode_num_tokens):
+            fwd_ctx.batch_descriptor = BatchDescriptor(
+                num_tokens=decode_num_tokens,
+                num_reqs=saved_batch_descriptor.num_reqs,
+                uniform=saved_batch_descriptor.uniform,
+                has_lora=saved_batch_descriptor.has_lora,
+            )
+            fwd_ctx.cudagraph_runtime_mode = CUDAGraphMode.NONE
+
         with model_runner.set_shift_parallel_mode(True):
             hidden_states = self.decode_runner(
                 hidden_states,
@@ -713,6 +726,9 @@ class LlamaSwiftKVModel(nn.Module):
                 k_states,
                 v_states,
             )
+
+        fwd_ctx.batch_descriptor = saved_batch_descriptor
+        fwd_ctx.cudagraph_runtime_mode = saved_cudagraph_mode
 
         attn_metadata = get_attn_metadata_for_swiftkv()
         if attn_metadata is not None:
@@ -841,6 +857,9 @@ class LlamaSwiftKVForCausalLM(nn.Module):
 
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.model.get_input_embeddings(input_ids)
+
+    def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
+        return self.model.embed_input_ids(input_ids)
 
     def forward(
         self,
