@@ -35,6 +35,7 @@ class ModelConfig(BaseModel):
     enable_chunked_prefill: bool = True
     kv_cache_dtype: str | None = None
     enable_expert_parallel: bool = False
+    trust_remote_code: bool = True
 
     extra_engine_kwargs: dict[str, Any] = Field(default_factory=dict, exclude=True)
     extra_env: dict[str, str] = Field(default_factory=dict, exclude=True)

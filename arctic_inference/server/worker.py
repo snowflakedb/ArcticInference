@@ -38,7 +38,7 @@ class InferenceWorker:
     """Ray actor that hosts an in-process vLLM AsyncLLM engine."""
 
     def __init__(self) -> None:
-        self.llm = None  # AsyncLLM, set in initialize()
+        self.llm = None
         self.state = WorkerLifecycleState.UNINITIALIZED
 
     async def initialize(self, engine_kwargs: dict[str, Any], extra_env: dict[str, str] | None = None) -> None:
@@ -48,11 +48,15 @@ class InferenceWorker:
         if extra_env:
             os.environ.update(extra_env)
 
+        engine_kwargs.setdefault(
+            "worker_extension_cls",
+            "arctic_inference.server.weight_sync.WeightSyncExtension",
+        )
         engine_args = AsyncEngineArgs(**engine_kwargs)
         vllm_config = engine_args.create_engine_config()
         self.llm = AsyncLLM.from_vllm_config(vllm_config)
         self.state = WorkerLifecycleState.READY
-        logger.info(f"Worker {os.getpid()} initialized: model={engine_kwargs.get('model')}")
+        logger.info("Worker %d initialized: model=%s", os.getpid(), engine_kwargs.get("model"))
 
     async def generate(self, prompt: str | list[int], sampling_params: dict[str, Any]) -> dict[str, Any]:
         if self.state != WorkerLifecycleState.READY:
@@ -105,6 +109,33 @@ class InferenceWorker:
 
     def pid(self) -> int:
         return os.getpid()
+
+    # ------------------------------------------------------------------
+    # Weight sync
+    # ------------------------------------------------------------------
+
+    async def sync_weights(
+        self,
+        master_addr: str,
+        master_port: int,
+        rank_offset: int,
+        world_size: int,
+        bucket_size: int = 256 * 1024 * 1024,
+        engine_only: bool = False,
+        direct_mode: bool = False,
+    ) -> dict[str, Any]:
+        """Receive + load weights on all TP workers via a single call."""
+        results = await self.llm.collective_rpc(
+            "sync_weights",
+            args=(master_addr, master_port, rank_offset, world_size,
+                  bucket_size, engine_only, direct_mode),
+        )
+        return results[0] if results else {}
+
+    async def close_weight_sync(self) -> dict[str, Any]:
+        """Destroy persistent NCCLEngine on all TP workers."""
+        results = await self.llm.collective_rpc("close_weight_sync")
+        return results[0] if results else {}
 
     def shutdown(self) -> None:
         if self.llm is not None:

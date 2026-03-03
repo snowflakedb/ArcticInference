@@ -118,6 +118,8 @@ class Scheduler:
         self._poll_task: asyncio.Task | None = None
         self._adjust_task: asyncio.Task | None = None
 
+        self._inflight_tasks: dict[int, set] = {i: set() for i in range(len(workers))}
+
     def submit(self, prompt: str | list[int], sampling_params: dict[str, Any]) -> asyncio.Future:
         """Submit a generation request. Returns a Future that resolves to a result dict."""
         if self._stopped:
@@ -153,6 +155,20 @@ class Scheduler:
         while any(ws.active_requests > 0 for ws in self._workers):
             await asyncio.sleep(0.1)
 
+    async def drain_worker(self, idx: int, timeout: float = 15) -> None:
+        """Block until worker *idx* has zero active requests, or timeout."""
+        if not (0 <= idx < len(self._workers)):
+            return
+        deadline = time.time() + timeout
+        ws = self._workers[idx]
+        while ws.active_requests > 0 and time.time() < deadline:
+            await asyncio.sleep(0.1)
+        if ws.active_requests > 0:
+            logger.warning(
+                f"Drain timeout: worker {idx} still has "
+                f"{ws.active_requests} active requests"
+            )
+
     def pause(self) -> None:
         self._paused = True
 
@@ -163,18 +179,43 @@ class Scheduler:
     def total_concurrency_limit(self) -> int:
         return sum(ws.concurrency_limit for ws in self._workers if ws.available)
 
+    # ------------------------------------------------------------------
+    # Worker availability & weight-sync helpers
+    # ------------------------------------------------------------------
+
+    def is_worker_available(self, idx: int) -> bool:
+        if 0 <= idx < len(self._workers):
+            return self._workers[idx].available
+        return False
+
     def mark_worker_unavailable(self, idx: int) -> None:
         if 0 <= idx < len(self._workers):
             self._workers[idx].available = False
-            self._workers[idx].active_requests = 0
+            logger.info(f"Worker {idx} marked unavailable")
 
     def mark_worker_available(self, idx: int) -> None:
         if 0 <= idx < len(self._workers):
             self._workers[idx].available = True
+            logger.info(f"Worker {idx} marked available")
 
     def update_worker_handle(self, idx: int, new_handle: ray.actor.ActorHandle) -> None:
         if 0 <= idx < len(self._workers):
             self._workers[idx].handle = new_handle
+
+    def cancel_worker_inflight(self, idx: int) -> int:
+        """Cancel all in-flight request tasks for a specific worker.
+
+        Returns the number of tasks cancelled.
+        """
+        tasks = self._inflight_tasks.get(idx, set())
+        cancelled = 0
+        for task in list(tasks):
+            if not task.done():
+                task.cancel()
+                cancelled += 1
+        if cancelled:
+            logger.info(f"Cancelled {cancelled} in-flight requests on worker {idx}")
+        return cancelled
 
     async def shutdown(self) -> None:
         self._stopped = True
@@ -195,6 +236,9 @@ class Scheduler:
 
     async def _process_request(self, req: Request) -> None:
         ws: WorkerState | None = None
+        current_task = asyncio.current_task()
+        tracked_worker_idx: int | None = None
+
         try:
             while not self._stopped:
                 idx = self._routing_fn(req, self._workers)
@@ -209,14 +253,27 @@ class Scheduler:
                     req.future.set_exception(RuntimeError("Scheduler stopped"))
                 return
 
-            result = await ws.handle.generate.remote(req.prompt, req.sampling_params)
-            if not req.future.done():
-                req.future.set_result(result)
+            tracked_worker_idx = req.worker_idx
+            if current_task is not None and tracked_worker_idx is not None:
+                self._inflight_tasks[tracked_worker_idx].add(current_task)
 
+            try:
+                result = await ws.handle.generate.remote(req.prompt, req.sampling_params)
+                if not req.future.done():
+                    req.future.set_result(result)
+            except asyncio.CancelledError:
+                if not req.future.done():
+                    req.future.set_exception(RuntimeError("Request cancelled for weight update"))
+
+        except asyncio.CancelledError:
+            if not req.future.done():
+                req.future.set_exception(RuntimeError("Request cancelled for weight update"))
         except Exception as e:
             if not req.future.done():
                 req.future.set_exception(e)
         finally:
+            if current_task is not None and tracked_worker_idx is not None:
+                self._inflight_tasks[tracked_worker_idx].discard(current_task)
             if ws is not None:
                 ws.active_requests = max(0, ws.active_requests - 1)
 

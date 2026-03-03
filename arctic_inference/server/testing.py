@@ -68,6 +68,15 @@ class DummyWorker:
     def pid(self) -> int:
         return os.getpid()
 
+    async def sync_weights(
+        self, master_addr: str, master_port: int, rank_offset: int,
+        world_size: int, bucket_size: int = 256 * 1024 * 1024,
+    ) -> dict[str, Any]:
+        return {"status": "done", "params_loaded": 0, "elapsed": 0.0}
+
+    async def close_weight_sync(self) -> dict[str, Any]:
+        return {"status": "ok"}
+
     def shutdown(self) -> None:
         self.state = WorkerLifecycleState.UNINITIALIZED
 

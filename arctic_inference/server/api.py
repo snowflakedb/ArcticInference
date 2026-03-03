@@ -23,6 +23,27 @@ class SampleRequest(BaseModel):
         return self
 
 
+class GroupConfig(BaseModel):
+    group_id: int
+    master_addr: str
+    master_port: int
+    world_size: int
+    replica_ids: list[int]
+
+
+class SyncWeightsRequest(BaseModel):
+    groups: list[GroupConfig] | None = None
+    bucket_size: int = 256 * 1024 * 1024
+    strategy: str = "hotswap"
+    engine_only: bool = False
+    direct_mode: bool = False
+
+    # Legacy flat fields — auto-wrapped into a single group covering all replicas
+    master_addr: str | None = None
+    master_port: int | None = None
+    world_size: int | None = None
+
+
 driver = Driver()
 
 
@@ -64,6 +85,57 @@ async def sample_endpoint(request: SampleRequest):
             sampling_params=request.sampling_params,
         )
         return {"results": results}
+    except RuntimeError as e:
+        msg = str(e).lower()
+        if "paused" in msg or "cancelled" in msg:
+            raise HTTPException(status_code=503, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/weights_info")
+async def weights_info_endpoint():
+    try:
+        infos = driver.get_weights_info()
+        return {"weights_info": infos, "count": len(infos)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/sync_weights")
+async def sync_weights_endpoint(request: SyncWeightsRequest):
+    try:
+        if request.groups is not None:
+            groups = [g.model_dump() for g in request.groups]
+        elif request.master_addr is not None and request.master_port is not None:
+            num_replicas = (await driver.status()).get("num_replicas", 1)
+            groups = [{
+                "group_id": 0,
+                "master_addr": request.master_addr,
+                "master_port": request.master_port,
+                "world_size": request.world_size
+                    or (1 + num_replicas * (driver.replica_manager.config.tensor_parallel_size if driver.replica_manager.config else 1)),
+                "replica_ids": list(range(num_replicas)),
+            }]
+        else:
+            raise ValueError("Provide either 'groups' or legacy flat fields (master_addr, master_port, world_size)")
+
+        return await driver.sync_weights(
+            groups,
+            bucket_size=request.bucket_size,
+            strategy=request.strategy,
+            engine_only=request.engine_only,
+            direct_mode=request.direct_mode,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/close_weight_sync")
+async def close_weight_sync_endpoint():
+    try:
+        return await driver.close_weight_sync()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+import time
+from typing import Any, TYPE_CHECKING
 
 import ray
 import torch
 from arctic_inference.server.config import ModelConfig
 from arctic_inference.server.worker import InferenceWorker
+
+if TYPE_CHECKING:
+    from arctic_inference.server.scheduler import Scheduler
 
 logger = logging.getLogger("arctic_inference.server")
 
@@ -26,6 +30,12 @@ class ReplicaManager:
         self.config: ModelConfig | None = None
         self._stop_monitoring = False
         self._health_task: asyncio.Task | None = None
+        self._updating_workers: set[int] = set()
+        self._scheduler: Scheduler | None = None
+        self._cached_weights_info: list[dict] | None = None
+
+    def register_scheduler(self, scheduler: Scheduler) -> None:
+        self._scheduler = scheduler
 
     async def initialize(self, config: ModelConfig) -> int:
         """Create worker actors and initialize vLLM engines. Returns worker count."""
@@ -101,6 +111,10 @@ class ReplicaManager:
         while not self._stop_monitoring:
             await asyncio.sleep(10)
             for i, w in enumerate(self.workers):
+                if i in self._updating_workers:
+                    continue
+                if self._scheduler is not None and not self._scheduler.is_worker_available(i):
+                    continue
                 try:
                     healthy = await asyncio.wait_for(w.is_healthy.remote(), timeout=30)
                 except Exception:
@@ -111,6 +125,10 @@ class ReplicaManager:
 
     async def _restart_worker(self, idx: int) -> None:
         old = self.workers[idx]
+
+        if self._scheduler is not None:
+            self._scheduler.mark_worker_unavailable(idx)
+
         try:
             ray.kill(old)
         except Exception:
@@ -127,4 +145,97 @@ class ReplicaManager:
         await new_worker.initialize.remote(engine_kwargs, extra_env)
 
         self.workers[idx] = new_worker
+
+        if self._scheduler is not None:
+            self._scheduler.update_worker_handle(idx, new_worker)
+            self._scheduler.mark_worker_available(idx)
+
         logger.info(f"Worker {idx} restarted successfully")
+
+    # ------------------------------------------------------------------
+    # Weight sync
+    # ------------------------------------------------------------------
+
+    def get_weights_info(self) -> list[dict]:
+        if not self.config:
+            raise RuntimeError("Not initialized")
+        if self._cached_weights_info is None:
+            from arctic_inference.server.weight_sync import build_weights_info
+            infos = build_weights_info(self.config.model)
+            self._cached_weights_info = [wi.to_dict() for wi in infos]
+        return self._cached_weights_info
+
+    async def sync_weights(
+        self,
+        groups: list[dict[str, Any]],
+        bucket_size: int = 256 * 1024 * 1024,
+        engine_only: bool = False,
+        direct_mode: bool = False,
+    ) -> dict[str, Any]:
+        """Receive + load weights on all replicas via NCCLEngine.
+
+        *groups* maps each NCCL broadcast group to its replicas.  Each
+        replica joins the group that contains it, with the correct
+        rank offset.  All groups operate in parallel.
+
+        If *direct_mode* is True, per-weight send/recv is used instead of
+        bucket packing (BF16 TP=1 zero-copy path).
+        """
+        if not self.config:
+            raise RuntimeError("Not initialized")
+
+        replica_to_group: dict[int, dict[str, Any]] = {}
+        for g in groups:
+            for rid in g["replica_ids"]:
+                replica_to_group[rid] = {
+                    "master_addr": g["master_addr"],
+                    "master_port": g["master_port"],
+                    "world_size": 2,
+                    "rank_offset": 1,
+                }
+
+        start = time.time()
+        self._updating_workers = set(range(len(self.workers)))
+
+        tasks = []
+        for i, worker in enumerate(self.workers):
+            gcfg = replica_to_group.get(i)
+            if gcfg is None:
+                raise RuntimeError(
+                    f"Replica {i} not assigned to any group. "
+                    f"Groups cover replicas: "
+                    f"{[g['replica_ids'] for g in groups]}"
+                )
+            tasks.append(
+                worker.sync_weights.remote(
+                    gcfg["master_addr"],
+                    gcfg["master_port"],
+                    gcfg["rank_offset"],
+                    gcfg["world_size"],
+                    bucket_size,
+                    engine_only,
+                    direct_mode,
+                )
+            )
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        self._updating_workers.clear()
+
+        per_worker = [
+            {"status": "error", "message": str(r)} if isinstance(r, Exception) else r
+            for r in results
+        ]
+        elapsed = time.time() - start
+        n_groups = len(groups)
+        logger.info(
+            f"Weight sync: {len(self.workers)} workers across "
+            f"{n_groups} group(s) in {elapsed:.2f}s"
+        )
+        return {"elapsed": elapsed, "num_groups": n_groups, "workers": per_worker}
+
+    async def close_weight_sync(self) -> dict[str, Any]:
+        results = await asyncio.gather(*[
+            w.close_weight_sync.remote() for w in self.workers
+        ])
+        return {"status": "ok", "workers": list(results)}
+
