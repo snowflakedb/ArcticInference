@@ -11,6 +11,23 @@ import ray
 logger = logging.getLogger("arctic_inference.server")
 
 
+def _serialize_logprobs_position(pos_data: dict | None) -> dict[int, dict] | None:
+    """Convert a single position's {token_id: Logprob} to {token_id: dict}.
+
+    Works for both prompt_logprobs and sample_logprobs positions.
+    vLLM's Logprob is a dataclass with .logprob and .rank attributes.
+    """
+    if pos_data is None:
+        return None
+    out = {}
+    for tok_id, lp in pos_data.items():
+        if hasattr(lp, "logprob"):
+            out[tok_id] = {"logprob": lp.logprob, "rank": lp.rank}
+        else:
+            out[tok_id] = {"logprob": float(lp), "rank": None}
+    return out
+
+
 class WorkerLifecycleState(str, Enum):
     UNINITIALIZED = "uninitialized"
     READY = "ready"
@@ -59,11 +76,23 @@ class InferenceWorker:
             raise RuntimeError("Empty generation output")
 
         choice = final_output.outputs[0]
-        return {
+        result: dict[str, Any] = {
             "text": choice.text,
             "token_ids": list(choice.token_ids),
             "finish_reason": choice.finish_reason,
         }
+
+        if final_output.prompt_logprobs is not None:
+            result["prompt_logprobs"] = [
+                _serialize_logprobs_position(pos) for pos in final_output.prompt_logprobs
+            ]
+
+        if choice.logprobs is not None:
+            result["logprobs"] = [
+                _serialize_logprobs_position(pos) for pos in choice.logprobs
+            ]
+
+        return result
 
     def is_healthy(self) -> bool:
         return self.llm is not None and self.state == WorkerLifecycleState.READY

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 from typing import Any
 
@@ -29,15 +30,31 @@ class DummyWorker:
         if isinstance(prompt, list):
             text = f"dummy({len(prompt)} tokens)"
             token_ids = list(range(len(prompt), len(prompt) + 5))
+            num_prompt_tokens = len(prompt)
         else:
             text = f"dummy({prompt})"
             token_ids = list(range(5))
+            num_prompt_tokens = max(1, len(prompt.split()))
 
-        return {
+        result: dict[str, Any] = {
             "text": text,
             "token_ids": token_ids,
             "finish_reason": "stop",
         }
+
+        top_k = sampling_params.get("prompt_logprobs")
+        if top_k is not None:
+            result["prompt_logprobs"] = _dummy_prompt_logprobs(
+                num_prompt_tokens, int(top_k),
+            )
+
+        top_k_sample = sampling_params.get("logprobs")
+        if top_k_sample is not None:
+            result["logprobs"] = _dummy_sample_logprobs(
+                len(token_ids), int(top_k_sample),
+            )
+
+        return result
 
     def is_healthy(self) -> bool:
         return self.state == WorkerLifecycleState.READY
@@ -53,3 +70,29 @@ class DummyWorker:
 
     def shutdown(self) -> None:
         self.state = WorkerLifecycleState.UNINITIALIZED
+
+
+def _dummy_prompt_logprobs(
+    num_tokens: int, top_k: int,
+) -> list[dict[int, dict] | None]:
+    """Produce deterministic dummy prompt_logprobs matching vLLM's format."""
+    out: list[dict[int, dict] | None] = [None]  # first position is always None
+    for pos in range(1, num_tokens):
+        out.append({
+            pos + k: {"logprob": -0.1 * (k + 1), "rank": k + 1}
+            for k in range(top_k)
+        })
+    return out
+
+
+def _dummy_sample_logprobs(
+    num_tokens: int, top_k: int,
+) -> list[dict[int, dict]]:
+    """Produce deterministic dummy sample logprobs."""
+    return [
+        {
+            pos + k: {"logprob": -0.2 * (k + 1), "rank": k + 1}
+            for k in range(top_k)
+        }
+        for pos in range(num_tokens)
+    ]

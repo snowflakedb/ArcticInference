@@ -45,6 +45,18 @@ async def init_endpoint(config: ModelConfig):
 
 @app.post("/sample")
 async def sample_endpoint(request: SampleRequest):
+    """Generate text and/or compute log probabilities.
+
+    Log-prob support is built into vLLM's SamplingParams:
+
+    - ``prompt_logprobs``: set to top-k (int) to get per-prompt-token logprobs.
+      Returned under the ``prompt_logprobs`` key in each result.
+      For GRPO-style reference log-probs, concatenate prompt + completion as the
+      prompt text and pass ``{"prompt_logprobs": k, "max_tokens": 1}``.
+
+    - ``logprobs``: set to top-k (int) to get per-generated-token logprobs.
+      Returned under the ``logprobs`` key in each result.
+    """
     try:
         results = await driver.sample(
             prompts=request.prompts,
