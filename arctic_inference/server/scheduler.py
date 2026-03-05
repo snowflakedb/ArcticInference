@@ -13,7 +13,7 @@ logger = logging.getLogger("arctic_inference.server")
 
 
 @dataclass
-class Request:
+class _Request:
     id: int
     prompt: str | list[int]
     sampling_params: dict[str, Any]
@@ -33,11 +33,11 @@ class WorkerState:
     waiting_reqs: int = 0
 
 
-RoutingFn = Callable[[Request, list[WorkerState]], int]
+RoutingFn = Callable[[_Request, list[WorkerState]], int]
 ConcurrencyFn = Callable[[list[WorkerState]], list[int]]
 
 
-def least_loaded_routing(request: Request, workers: list[WorkerState]) -> int:
+def least_loaded_routing(request: _Request, workers: list[WorkerState]) -> int:
     """Route to the worker with the lowest load ratio."""
     candidates = [i for i, ws in enumerate(workers) if ws.available and ws.concurrency_limit > 0]
     if not candidates:
@@ -48,7 +48,7 @@ def least_loaded_routing(request: Request, workers: list[WorkerState]) -> int:
     )
 
 
-def utilization_based_concurrency_policy(workers: list[WorkerState]) -> list[int]:
+def utilization_based_concurrency(workers: list[WorkerState]) -> list[int]:
     """Adjust per-worker concurrency limits based on KV cache utilization."""
     TARGET_UTIL = 0.90
     HIGH_UTIL = 0.95
@@ -63,17 +63,15 @@ def utilization_based_concurrency_policy(workers: list[WorkerState]) -> list[int
     for ws in workers:
         current = max(ws.concurrency_limit, MIN_LIMIT)
         util = ws.latest_cache_utilization
-        waiting = ws.waiting_reqs
-        running = ws.running_reqs
 
-        if util == 0.0 and running == 0 and waiting == 0:
+        if util == 0.0 and ws.running_reqs == 0 and ws.waiting_reqs == 0:
             if ws.active_requests > 64:
                 new = max(MIN_LIMIT, int(ws.active_requests * 0.95))
             else:
                 new = min(max(MIN_LIMIT, int(ws.active_requests * 1.5)), MAX_LIMIT)
         elif util > HIGH_UTIL:
             new = current - BACKOFF_STEP
-        elif waiting > MAX_QUEUE:
+        elif ws.waiting_reqs > MAX_QUEUE:
             new = current - BACKOFF_STEP
         elif util < TARGET_UTIL:
             if ws.active_requests >= (current - 2):
@@ -82,7 +80,7 @@ def utilization_based_concurrency_policy(workers: list[WorkerState]) -> list[int
             else:
                 new = current
         else:
-            if ws.active_requests >= current and waiting == 0 and random.random() < PROBE_PROB:
+            if ws.active_requests >= current and ws.waiting_reqs == 0 and random.random() < PROBE_PROB:
                 new = current + 1
             else:
                 new = current
@@ -99,29 +97,33 @@ class Scheduler:
         workers: list[ray.actor.ActorHandle],
         initial_concurrency: int = 64,
         routing_fn: RoutingFn = least_loaded_routing,
-        concurrency_fn: ConcurrencyFn = utilization_based_concurrency_policy,
+        concurrency_fn: ConcurrencyFn = utilization_based_concurrency,
         poll_interval: float = 0.5,
         adjust_interval: float = 0.5,
     ) -> None:
         if not workers:
             raise ValueError("Scheduler requires at least one worker")
 
-        self._workers = [WorkerState(handle=w, concurrency_limit=max(1, initial_concurrency)) for w in workers]
+        self._workers = [
+            WorkerState(handle=w, concurrency_limit=max(1, initial_concurrency))
+            for w in workers
+        ]
         self._routing_fn = routing_fn
         self._concurrency_fn = concurrency_fn
         self._poll_interval = poll_interval
         self._adjust_interval = adjust_interval
-
         self._next_id = 0
         self._paused = False
         self._stopped = False
         self._poll_task: asyncio.Task | None = None
         self._adjust_task: asyncio.Task | None = None
-
         self._inflight_tasks: dict[int, set] = {i: set() for i in range(len(workers))}
 
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
     def submit(self, prompt: str | list[int], sampling_params: dict[str, Any]) -> asyncio.Future:
-        """Submit a generation request. Returns a Future that resolves to a result dict."""
         if self._stopped:
             raise RuntimeError("Scheduler is stopped")
         if self._paused:
@@ -131,7 +133,7 @@ class Scheduler:
 
         loop = asyncio.get_running_loop()
         future = loop.create_future()
-        req = Request(
+        req = _Request(
             id=self._next_id,
             prompt=prompt,
             sampling_params=sampling_params,
@@ -146,7 +148,6 @@ class Scheduler:
         prompts: list[str | list[int]],
         sampling_params: dict[str, Any],
     ) -> list[dict[str, Any]]:
-        """Submit a batch of prompts and await all results."""
         futures = [self.submit(p, sampling_params) for p in prompts]
         return list(await asyncio.gather(*futures))
 
@@ -157,17 +158,13 @@ class Scheduler:
 
     async def drain_worker(self, idx: int, timeout: float = 15) -> None:
         """Block until worker *idx* has zero active requests, or timeout."""
-        if not (0 <= idx < len(self._workers)):
-            return
+        self._check_idx(idx)
         deadline = time.time() + timeout
         ws = self._workers[idx]
         while ws.active_requests > 0 and time.time() < deadline:
             await asyncio.sleep(0.1)
         if ws.active_requests > 0:
-            logger.warning(
-                f"Drain timeout: worker {idx} still has "
-                f"{ws.active_requests} active requests"
-            )
+            logger.warning(f"Drain timeout: worker {idx} still has {ws.active_requests} active requests")
 
     def pause(self) -> None:
         self._paused = True
@@ -180,42 +177,52 @@ class Scheduler:
         return sum(ws.concurrency_limit for ws in self._workers if ws.available)
 
     # ------------------------------------------------------------------
-    # Worker availability & weight-sync helpers
+    # Worker management
     # ------------------------------------------------------------------
 
     def is_worker_available(self, idx: int) -> bool:
-        if 0 <= idx < len(self._workers):
-            return self._workers[idx].available
-        return False
+        self._check_idx(idx)
+        return self._workers[idx].available
 
     def mark_worker_unavailable(self, idx: int) -> None:
-        if 0 <= idx < len(self._workers):
-            self._workers[idx].available = False
-            logger.info(f"Worker {idx} marked unavailable")
+        self._check_idx(idx)
+        self._workers[idx].available = False
 
     def mark_worker_available(self, idx: int) -> None:
-        if 0 <= idx < len(self._workers):
-            self._workers[idx].available = True
-            logger.info(f"Worker {idx} marked available")
+        self._check_idx(idx)
+        self._workers[idx].available = True
 
     def update_worker_handle(self, idx: int, new_handle: ray.actor.ActorHandle) -> None:
-        if 0 <= idx < len(self._workers):
-            self._workers[idx].handle = new_handle
+        self._check_idx(idx)
+        self._workers[idx].handle = new_handle
 
     def cancel_worker_inflight(self, idx: int) -> int:
-        """Cancel all in-flight request tasks for a specific worker.
-
-        Returns the number of tasks cancelled.
-        """
+        """Cancel all in-flight tasks for worker *idx*. Returns count cancelled."""
+        self._check_idx(idx)
         tasks = self._inflight_tasks.get(idx, set())
         cancelled = 0
         for task in list(tasks):
             if not task.done():
                 task.cancel()
                 cancelled += 1
-        if cancelled:
-            logger.info(f"Cancelled {cancelled} in-flight requests on worker {idx}")
         return cancelled
+
+    def add_worker(self, handle: ray.actor.ActorHandle, concurrency_limit: int = 64) -> None:
+        """Add a new worker to the scheduler."""
+        idx = len(self._workers)
+        self._workers.append(WorkerState(handle=handle, concurrency_limit=max(1, concurrency_limit)))
+        self._inflight_tasks[idx] = set()
+
+    def remove_last_worker(self) -> None:
+        """Remove the last worker. Raises if no workers remain."""
+        if not self._workers:
+            raise RuntimeError("No workers to remove")
+        idx = len(self._workers) - 1
+        for task in list(self._inflight_tasks.get(idx, set())):
+            if not task.done():
+                task.cancel()
+        self._inflight_tasks.pop(idx, None)
+        self._workers.pop()
 
     async def shutdown(self) -> None:
         self._stopped = True
@@ -227,6 +234,14 @@ class Scheduler:
                 except asyncio.CancelledError:
                     pass
 
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _check_idx(self, idx: int) -> None:
+        if not (0 <= idx < len(self._workers)):
+            raise IndexError(f"Worker index {idx} out of range (have {len(self._workers)} workers)")
+
     def _ensure_background_tasks(self) -> None:
         loop = asyncio.get_running_loop()
         if self._poll_task is None:
@@ -234,7 +249,7 @@ class Scheduler:
         if self._adjust_task is None:
             self._adjust_task = loop.create_task(self._concurrency_adjust_loop())
 
-    async def _process_request(self, req: Request) -> None:
+    async def _process_request(self, req: _Request) -> None:
         ws: WorkerState | None = None
         current_task = asyncio.current_task()
         tracked_worker_idx: int | None = None

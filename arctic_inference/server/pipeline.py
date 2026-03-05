@@ -1,13 +1,16 @@
-"""High-level dataset processing on top of Driver/Scheduler."""
+"""High-level dataset processing on top of Driver/ReplicaPool."""
 from __future__ import annotations
 
 import asyncio
 import inspect
 import logging
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import tqdm
-from arctic_inference.server.scheduler import Scheduler
+
+if TYPE_CHECKING:
+    from arctic_inference.server.driver import Driver
+    from arctic_inference.server.replica_pool import ReplicaPool
 
 logger = logging.getLogger("arctic_inference.server")
 
@@ -15,26 +18,23 @@ logger = logging.getLogger("arctic_inference.server")
 class LLMHandle:
     """User-facing async interface for LLM calls within a pipeline task.
 
-    Wraps the Scheduler with retry logic and a simple generate() API.
+    Wraps a ReplicaPool with retry logic and a simple generate() API.
     """
 
-    def __init__(self, scheduler: Scheduler) -> None:
-        self._scheduler = scheduler
+    def __init__(self, pool: ReplicaPool) -> None:
+        self._pool = pool
 
     async def generate(self, prompt: str, retries: int = 3, **kwargs: Any) -> str:
-        """Generate text from a prompt. kwargs become vLLM SamplingParams."""
         return await self._call(prompt, "text", retries, kwargs)
 
     async def generate_token_ids(self, prompt_token_ids: list[int], retries: int = 3, **kwargs: Any) -> list[int]:
-        """Generate from token IDs, returns token IDs."""
         return await self._call(prompt_token_ids, "token_ids", retries, kwargs)
 
     async def _call(self, prompt: str | list[int], key: str, retries: int, params: dict[str, Any]) -> Any:
         for attempt in range(retries + 1):
             try:
-                future = self._scheduler.submit(prompt, params)
-                result = await future
-                return result[key]
+                results = await self._pool.submit_batch([prompt], params)
+                return results[0][key]
             except Exception as e:
                 if attempt == retries:
                     raise
@@ -45,33 +45,49 @@ class LLMHandle:
 class Pipeline:
     """Process a dataset through a user-defined async task with managed concurrency.
 
-    Usage:
-        driver = Driver()
-        await driver.init(config)
+    Supports one or more models.  Pass a dict mapping names to model IDs
+    to use multiple models in a single pipeline.
 
-        pipeline = Pipeline(driver)
+    Usage (single model):
+        pipeline = Pipeline(driver, "my-model-id")
 
         @pipeline.task
         async def process(sample, llm):
             return await llm.generate(prompt=sample["text"], max_tokens=100)
 
         results = await pipeline.run(dataset)
+
+    Usage (multiple models):
+        pipeline = Pipeline(driver, {"base": "id-a", "ft": "id-b"})
+
+        @pipeline.task
+        async def process(sample, llms):
+            base = await llms["base"].generate(prompt=sample["text"])
+            ft = await llms["ft"].generate(prompt=sample["text"])
+            return {"base": base, "ft": ft}
+
+        results = await pipeline.run(dataset)
     """
 
-    def __init__(self, driver: "Driver") -> None:  # noqa: F821
-        self.driver = driver
+    def __init__(self, driver: Driver, model_ids: str | dict[str, str]) -> None:
+        if isinstance(model_ids, str):
+            pool = driver._get_pool(model_ids)
+            self._handles: LLMHandle | dict[str, LLMHandle] = LLMHandle(pool)
+        else:
+            if not model_ids:
+                raise ValueError("model_ids must not be empty")
+            self._handles = {
+                name: LLMHandle(driver._get_pool(mid))
+                for name, mid in model_ids.items()
+            }
         self._fn = None
 
     def task(self, func):
-        """Decorator to register the per-sample processing function.
-
-        Must be ``async def fn(sample, llm) -> result``.
-        """
         if not inspect.iscoroutinefunction(func):
             raise ValueError("Pipeline task must be async")
         params = list(inspect.signature(func).parameters)
         if len(params) != 2:
-            raise ValueError(f"Pipeline task must accept exactly 2 parameters (sample, llm), got {params}")
+            raise ValueError(f"Pipeline task must accept exactly 2 parameters (sample, llm/llms), got {params}")
         self._fn = func
         return func
 
@@ -81,17 +97,10 @@ class Pipeline:
         max_retries: int | None = None,
         show_progress: bool = True,
     ) -> list[Any]:
-        """Process *dataset* through the registered task.
-
-        Returns a list of results in dataset order.  Failed tasks (after
-        exhausting retries) are stored as ``{"__error__": "<message>"}``.
-        """
         if self._fn is None:
             raise RuntimeError("No task registered — use @pipeline.task")
-        if self.driver.scheduler is None:
-            raise RuntimeError("Driver not initialized — call driver.init() first")
 
-        llm = LLMHandle(self.driver.scheduler)
+        handles = self._handles
         total = len(dataset)
         results: list[Any] = [None] * total
 
@@ -104,14 +113,13 @@ class Pipeline:
 
         try:
             while not done_submitting or tasks:
-                concurrency_cap = self.driver.scheduler.total_concurrency_limit
-                while len(tasks) < concurrency_cap and not done_submitting:
+                while len(tasks) < 1024 and not done_submitting:
                     try:
                         idx = next(idx_iter)
                     except StopIteration:
                         done_submitting = True
                         break
-                    t = asyncio.create_task(self._fn(dataset[idx], llm))
+                    t = asyncio.create_task(self._fn(dataset[idx], handles))
                     task_map[t] = idx
                     tasks.append(t)
 
@@ -137,7 +145,7 @@ class Pipeline:
                             continue
 
                         logger.warning(f"Task {idx} failed (retry {attempt}): {e}")
-                        rt = asyncio.create_task(self._fn(dataset[idx], llm))
+                        rt = asyncio.create_task(self._fn(dataset[idx], handles))
                         task_map[rt] = idx
                         tasks.append(rt)
         finally:

@@ -9,7 +9,13 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
 
+class InitRequest(BaseModel):
+    config: ModelConfig
+    model_id: str | None = None
+
+
 class SampleRequest(BaseModel):
+    model_id: str
     prompts: list[str] | None = None
     prompt_token_ids: list[list[int]] | None = None
     sampling_params: dict[str, Any] = Field(default_factory=dict)
@@ -32,13 +38,14 @@ class GroupConfig(BaseModel):
 
 
 class SyncWeightsRequest(BaseModel):
+    model_id: str
     groups: list[GroupConfig] | None = None
     bucket_size: int = 256 * 1024 * 1024
     strategy: str = "hotswap"
     engine_only: bool = False
     direct_mode: bool = False
 
-    # Legacy flat fields — auto-wrapped into a single group covering all replicas
+    # Legacy flat fields
     master_addr: str | None = None
     master_port: int | None = None
     world_size: int | None = None
@@ -57,9 +64,9 @@ app = FastAPI(title="Arctic Inference", lifespan=lifespan)
 
 
 @app.post("/init")
-async def init_endpoint(config: ModelConfig):
+async def init_endpoint(request: InitRequest):
     try:
-        return await driver.init(config)
+        return await driver.init(request.config, model_id=request.model_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -80,6 +87,7 @@ async def sample_endpoint(request: SampleRequest):
     """
     try:
         results = await driver.sample(
+            model_id=request.model_id,
             prompts=request.prompts,
             prompt_token_ids=request.prompt_token_ids,
             sampling_params=request.sampling_params,
@@ -95,9 +103,9 @@ async def sample_endpoint(request: SampleRequest):
 
 
 @app.get("/weights_info")
-async def weights_info_endpoint():
+async def weights_info_endpoint(model_id: str):
     try:
-        infos = driver.get_weights_info()
+        infos = driver.get_weights_info(model_id=model_id)
         return {"weights_info": infos, "count": len(infos)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -109,20 +117,22 @@ async def sync_weights_endpoint(request: SyncWeightsRequest):
         if request.groups is not None:
             groups = [g.model_dump() for g in request.groups]
         elif request.master_addr is not None and request.master_port is not None:
-            num_replicas = (await driver.status()).get("num_replicas", 1)
+            pool = driver._get_pool(request.model_id)
+            n = pool.num_replicas
+            tp = pool.tp_size
             groups = [{
                 "group_id": 0,
                 "master_addr": request.master_addr,
                 "master_port": request.master_port,
-                "world_size": request.world_size
-                    or (1 + num_replicas * (driver.replica_manager.config.tensor_parallel_size if driver.replica_manager.config else 1)),
-                "replica_ids": list(range(num_replicas)),
+                "world_size": request.world_size or (1 + n * tp),
+                "replica_ids": list(range(n)),
             }]
         else:
             raise ValueError("Provide either 'groups' or legacy flat fields (master_addr, master_port, world_size)")
 
         return await driver.sync_weights(
-            groups,
+            model_id=request.model_id,
+            groups=groups,
             bucket_size=request.bucket_size,
             strategy=request.strategy,
             engine_only=request.engine_only,
@@ -133,9 +143,18 @@ async def sync_weights_endpoint(request: SyncWeightsRequest):
 
 
 @app.post("/close_weight_sync")
-async def close_weight_sync_endpoint():
+async def close_weight_sync_endpoint(model_id: str):
     try:
-        return await driver.close_weight_sync()
+        return await driver.close_weight_sync(model_id=model_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/models")
+async def models_endpoint():
+    """List all loaded models and GPU resource usage."""
+    try:
+        return await driver.status()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -144,6 +163,14 @@ async def close_weight_sync_endpoint():
 async def status_endpoint():
     try:
         return await driver.status()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/shutdown_model")
+async def shutdown_model_endpoint(model_id: str):
+    try:
+        return await driver.shutdown_model(model_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
