@@ -57,7 +57,7 @@ class DummyWorker:
         return result
 
     def is_healthy(self) -> bool:
-        return self.state == WorkerLifecycleState.READY
+        return self.state in (WorkerLifecycleState.READY, WorkerLifecycleState.SLEEPING)
 
     def get_state(self) -> str:
         return self.state.value
@@ -68,9 +68,18 @@ class DummyWorker:
     def pid(self) -> int:
         return os.getpid()
 
+    async def sleep(self, level: int = 1) -> dict[str, Any]:
+        self.state = WorkerLifecycleState.SLEEPING
+        return {"status": "sleeping", "level": level}
+
+    async def wake_up(self, tags: list[str] | None = None) -> dict[str, Any]:
+        self.state = WorkerLifecycleState.READY
+        return {"status": "ready"}
+
     async def sync_weights(
         self, master_addr: str, master_port: int, rank_offset: int,
         world_size: int, bucket_size: int = 256 * 1024 * 1024,
+        engine_only: bool = False, direct_mode: bool = False,
     ) -> dict[str, Any]:
         return {"status": "done", "params_loaded": 0, "elapsed": 0.0}
 

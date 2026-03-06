@@ -166,6 +166,22 @@ class Driver:
         return await self._get_pool(model_id).close_weight_sync()
 
     # ------------------------------------------------------------------
+    # Sleep / Wake
+    # ------------------------------------------------------------------
+
+    async def sleep(self, model_id: str, level: int = 1) -> dict[str, Any]:
+        """Free GPU memory for *model_id* (drain requests first)."""
+        pool = self._get_pool(model_id)
+        return await pool.sleep(level=level)
+
+    async def wake_up(
+        self, model_id: str, tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Restore GPU memory for *model_id* and resume serving."""
+        pool = self._get_pool(model_id)
+        return await pool.wake_up(tags=tags)
+
+    # ------------------------------------------------------------------
     # Status
     # ------------------------------------------------------------------
 

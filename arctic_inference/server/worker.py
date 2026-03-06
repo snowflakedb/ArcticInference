@@ -31,6 +31,7 @@ def _serialize_logprobs_position(pos_data: dict | None) -> dict[int, dict] | Non
 class WorkerLifecycleState(str, Enum):
     UNINITIALIZED = "uninitialized"
     READY = "ready"
+    SLEEPING = "sleeping"
 
 
 @ray.remote
@@ -99,7 +100,9 @@ class InferenceWorker:
         return result
 
     def is_healthy(self) -> bool:
-        return self.llm is not None and self.state == WorkerLifecycleState.READY
+        return self.llm is not None and self.state in (
+            WorkerLifecycleState.READY, WorkerLifecycleState.SLEEPING,
+        )
 
     def get_state(self) -> str:
         return self.state.value
@@ -109,6 +112,42 @@ class InferenceWorker:
 
     def pid(self) -> int:
         return os.getpid()
+
+    # ------------------------------------------------------------------
+    # Sleep / Wake
+    # ------------------------------------------------------------------
+
+    async def sleep(self, level: int = 1) -> dict[str, Any]:
+        """Free GPU memory by offloading weights and/or KV cache.
+
+        Args:
+            level: 1 = free KV cache only, 2 = free KV cache + weights.
+        """
+        if self.state != WorkerLifecycleState.READY:
+            raise RuntimeError(f"Cannot sleep: worker state is {self.state.value}")
+        await self.llm.collective_rpc("sleep", kwargs={"level": level})
+        self.state = WorkerLifecycleState.SLEEPING
+        logger.info("Worker %d sleeping (level=%d)", os.getpid(), level)
+        return {"status": "sleeping", "level": level}
+
+    async def wake_up(self, tags: list[str] | None = None) -> dict[str, Any]:
+        """Restore GPU memory (reverse of :meth:`sleep`).
+
+        Args:
+            tags: What to restore, e.g. ``["weights"]`` or
+                  ``["weights", "kv_cache"]``.  ``None`` restores everything.
+        """
+        if self.state != WorkerLifecycleState.SLEEPING:
+            if self.state == WorkerLifecycleState.READY:
+                return {"status": "already_ready"}
+            raise RuntimeError(f"Cannot wake up: worker state is {self.state.value}")
+        kwargs: dict[str, Any] = {}
+        if tags is not None:
+            kwargs["tags"] = tags
+        await self.llm.collective_rpc("wake_up", kwargs=kwargs)
+        self.state = WorkerLifecycleState.READY
+        logger.info("Worker %d awake", os.getpid())
+        return {"status": "ready"}
 
     # ------------------------------------------------------------------
     # Weight sync

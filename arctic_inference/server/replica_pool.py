@@ -51,6 +51,7 @@ class ReplicaPool:
         self._health_task: asyncio.Task | None = None
         self._updating_workers: set[int] = set()
         self._cached_weights_info: list[dict] | None = None
+        self._sleeping = False
 
     @property
     def config(self) -> ModelConfig:
@@ -180,6 +181,8 @@ class ReplicaPool:
         self._check_model_id(model_id)
         if self._scheduler is None:
             raise RuntimeError("ReplicaPool not initialized")
+        if self._sleeping:
+            raise RuntimeError("Model is sleeping; call /wake_up first")
         params = sampling_params or {}
         if isinstance(prompts, str):
             return [await self._scheduler.submit(prompts, params)]
@@ -231,6 +234,60 @@ class ReplicaPool:
                 logger.info(f"Scaled up: added worker {len(self._workers) - 1}")
 
     # ------------------------------------------------------------------
+    # Sleep / Wake
+    # ------------------------------------------------------------------
+
+    @property
+    def sleeping(self) -> bool:
+        return self._sleeping
+
+    async def sleep(self, level: int = 1) -> dict[str, Any]:
+        """Drain requests, then free GPU memory on every worker."""
+        if self._scheduler is None:
+            raise RuntimeError("ReplicaPool not initialized")
+        if self._sleeping:
+            return {"status": "already_sleeping", "level": level}
+
+        async with self._lock:
+            self._scheduler.pause()
+            await self._scheduler.drain()
+
+            results = await asyncio.gather(
+                *[w.sleep.remote(level=level) for w in self._workers],
+                return_exceptions=True,
+            )
+            self._sleeping = True
+
+            per_worker = [
+                {"status": "error", "message": str(r)} if isinstance(r, Exception) else r
+                for r in results
+            ]
+            logger.info("ReplicaPool sleeping (%d workers, level=%d)", len(self._workers), level)
+            return {"status": "sleeping", "level": level, "workers": per_worker}
+
+    async def wake_up(self, tags: list[str] | None = None) -> dict[str, Any]:
+        """Restore GPU memory on every worker, then resume scheduling."""
+        if self._scheduler is None:
+            raise RuntimeError("ReplicaPool not initialized")
+        if not self._sleeping:
+            return {"status": "already_ready"}
+
+        async with self._lock:
+            results = await asyncio.gather(
+                *[w.wake_up.remote(tags=tags) for w in self._workers],
+                return_exceptions=True,
+            )
+            self._sleeping = False
+            self._scheduler.resume()
+
+            per_worker = [
+                {"status": "error", "message": str(r)} if isinstance(r, Exception) else r
+                for r in results
+            ]
+            logger.info("ReplicaPool awake (%d workers)", len(self._workers))
+            return {"status": "ready", "workers": per_worker}
+
+    # ------------------------------------------------------------------
     # Status
     # ------------------------------------------------------------------
 
@@ -241,6 +298,7 @@ class ReplicaPool:
         return {
             "model": self._config.model,
             "num_replicas": len(self._workers),
+            "sleeping": self._sleeping,
             "replica_states": list(states),
         }
 

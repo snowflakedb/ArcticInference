@@ -34,6 +34,16 @@ class GroupConfig(BaseModel):
     replica_ids: list[int]
 
 
+class SleepRequest(BaseModel):
+    model_id: str
+    level: int = 1
+
+
+class WakeUpRequest(BaseModel):
+    model_id: str
+    tags: list[str] | None = None
+
+
 class SyncWeightsRequest(BaseModel):
     model_id: str | None = None
     groups: list[GroupConfig] | None = None
@@ -88,6 +98,24 @@ async def generate_endpoint(request: GenerateRequest):
         if "paused" in msg or "cancelled" in msg:
             raise HTTPException(status_code=503, detail=str(e))
         raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/sleep")
+async def sleep_endpoint(request: SleepRequest):
+    """Free GPU memory for a model (drain in-flight requests first)."""
+    try:
+        return await driver.sleep(request.model_id, level=request.level)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/wake_up")
+async def wake_up_endpoint(request: WakeUpRequest):
+    """Restore GPU memory for a model and resume serving."""
+    try:
+        return await driver.wake_up(request.model_id, tags=request.tags)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
