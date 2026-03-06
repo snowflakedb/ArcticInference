@@ -11,7 +11,8 @@ total tokens served per model.
 """
 
 import asyncio
-from arctic_inference.server import Driver, ModelConfig
+from arctic_inference.server import ModelConfig
+from arctic_inference.server.multi_model import Driver
 
 CONFIG = ModelConfig(
     model="Qwen/Qwen3-30B-A3B",
@@ -54,10 +55,10 @@ async def _request_loop(driver: Driver, model_id: str, stop: asyncio.Event, stat
     n = len(PROMPTS)
     while not stop.is_set():
         try:
-            results = await driver.sample(
+            results = await driver.generate(
+                [PROMPTS[idx % n]],
+                SAMPLING_PARAMS,
                 model_id=model_id,
-                prompts=[PROMPTS[idx % n]],
-                sampling_params=SAMPLING_PARAMS,
             )
             stats.record(len(results[0]["token_ids"]), 1)
         except (KeyError, RuntimeError):
@@ -80,7 +81,7 @@ async def print_dashboard(driver: Driver, stop: asyncio.Event, interval: float =
     """Periodically print a one-line-per-model dashboard."""
     while not stop.is_set():
         await asyncio.sleep(interval)
-        status = await driver.status()
+        status = await driver.get_status()
         lines = []
         for mid, info in status["models"].items():
             ready = sum(1 for s in info["replica_states"] if s == "ready")
@@ -105,7 +106,7 @@ async def print_dashboard(driver: Driver, stop: asyncio.Event, interval: float =
 async def wait_ready(driver: Driver, model_id: str):
     """Poll until all replicas for *model_id* report 'ready'."""
     while True:
-        status = await driver.status()
+        status = await driver.get_status()
         info = status["models"].get(model_id)
         if info and all(s == "ready" for s in info["replica_states"]):
             return info["num_replicas"]
@@ -115,7 +116,7 @@ async def wait_ready(driver: Driver, model_id: str):
 async def wait_scale_up(driver: Driver, model_id: str, prev_replicas: int):
     """Poll until *model_id* has more replicas than *prev_replicas* and all ready."""
     while True:
-        status = await driver.status()
+        status = await driver.get_status()
         info = status["models"][model_id]
         n = info["num_replicas"]
         ready = sum(1 for s in info["replica_states"] if s == "ready")
@@ -130,7 +131,7 @@ async def main():
 
     # ---- 1. Load model-a (gets all GPUs) ----
     print("=== 1. Init model-a (gets all GPUs) ===")
-    result = await driver.init(CONFIG, model_id="model-a")
+    result = await driver.initialize(CONFIG, model_id="model-a")
     n = await wait_ready(driver, "model-a")
     print(f"  model-a: {n} replicas ready")
 
@@ -147,7 +148,7 @@ async def main():
 
     # ---- 3. Load model-b (model-a scales down) ----
     print("\n=== 3. Init model-b (model-a scales down) ===")
-    await driver.init(CONFIG, model_id="model-b")
+    await driver.initialize(CONFIG, model_id="model-b")
     n = await wait_ready(driver, "model-b")
     print(f"  model-b: {n} replicas ready")
 
@@ -163,8 +164,8 @@ async def main():
     print("\n=== 5. Shutdown model-a ===")
     stop_a.set()
     await task_a
-    prev = (await driver.status())["models"]["model-b"]["num_replicas"]
-    await driver.shutdown_model("model-a")
+    prev = (await driver.get_status())["models"]["model-b"]["num_replicas"]
+    await driver.shutdown(model_id="model-a")
     del all_stats["model-a"]
     print("  model-a shut down, model-b scaling up in background...")
 
@@ -180,7 +181,7 @@ async def main():
     await task_b
     dash_stop.set()
     await dash_task
-    await driver.shutdown_model("model-b")
+    await driver.shutdown(model_id="model-b")
     print("  Done.")
 
 

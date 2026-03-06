@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 import ray
+import torch
 from arctic_inference.server.config import ModelConfig
 from arctic_inference.server.scheduler import Scheduler
 from arctic_inference.server.worker import InferenceWorker
@@ -13,23 +14,36 @@ from arctic_inference.server.worker import InferenceWorker
 logger = logging.getLogger("arctic_inference.server")
 
 
+def ensure_ray() -> int:
+    """Initialize Ray and return the total number of GPUs in the cluster."""
+    ray.init(ignore_reinit_error=True, log_to_driver=False)
+    nodes = [n for n in ray.nodes() if n["Alive"]]
+    if not nodes:
+        raise RuntimeError("No alive Ray nodes")
+    total = sum(
+        int(n["Resources"].get("GPU", torch.cuda.device_count()))
+        for n in nodes
+    )
+    if total == 0:
+        raise RuntimeError("No GPUs available in the Ray cluster")
+    logger.info(f"{total} GPUs available across {len(nodes)} node(s)")
+    return total
+
+
 class ReplicaPool:
     """Manages a set of worker replicas for a single model.
 
     Owns the workers and an internal :class:`Scheduler` that handles
     request routing and concurrency control.
+
+    Args:
+        worker_cls: Ray actor class for inference workers.
     """
 
-    def __init__(
-        self,
-        config: ModelConfig,
-        worker_cls=InferenceWorker,
-        num_replicas: int = 1,
-        num_gpus_per_replica: int = 0,
-    ) -> None:
-        self._config = config
+    def __init__(self, worker_cls=InferenceWorker) -> None:
         self._worker_cls = worker_cls
-        self._num_gpus_per_replica = num_gpus_per_replica
+        self._config: ModelConfig | None = None
+        self._model_id: str | None = None
         self._workers: list[ray.actor.ActorHandle] = []
         self._scheduler: Scheduler | None = None
         self._lock = asyncio.Lock()
@@ -37,37 +51,73 @@ class ReplicaPool:
         self._health_task: asyncio.Task | None = None
         self._updating_workers: set[int] = set()
         self._cached_weights_info: list[dict] | None = None
-        self._num_replicas_target = num_replicas
 
     @property
     def config(self) -> ModelConfig:
+        if self._config is None:
+            raise RuntimeError("ReplicaPool not initialized")
         return self._config
 
     @property
+    def model_id(self) -> str | None:
+        return self._model_id
+
+    @property
     def tp_size(self) -> int:
-        return self._config.tensor_parallel_size
+        return self.config.tensor_parallel_size
 
     @property
     def num_replicas(self) -> int:
         return len(self._workers)
 
+    def _check_model_id(self, model_id: str | None) -> None:
+        if model_id is not None and self._model_id is not None and model_id != self._model_id:
+            raise ValueError(
+                f"model_id mismatch: got {model_id!r}, "
+                f"expected {self._model_id!r}"
+            )
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
-    async def initialize(self) -> int:
-        """Create worker actors, initialize vLLM engines, start scheduler.
+    async def initialize(
+        self,
+        config: ModelConfig,
+        model_id: str | None = None,
+        num_replicas: int | None = None,
+    ) -> int:
+        """Set configuration, create worker actors, start scheduler.
+
+        Args:
+            config: Model configuration (defines TP size, model name, etc.).
+            model_id: Ignored in single-model mode.
+            num_replicas: Number of replicas. If ``None``, uses all
+                available GPUs (``total_gpus // tensor_parallel_size``).
 
         Returns the number of workers created.
         """
-        ray.init(ignore_reinit_error=True, log_to_driver=False)
+        if self._config is not None:
+            raise RuntimeError("Already initialized. Call shutdown() first.")
 
-        n = self._num_replicas_target
-        logger.info(f"Creating {n} workers (TP={self.tp_size}, GPUs/worker={self._num_gpus_per_replica})")
+        self._config = config
+        self._model_id = model_id
+
+        if num_replicas is None:
+            total_gpus = ensure_ray()
+            num_replicas = total_gpus // self.tp_size
+            if num_replicas == 0:
+                raise RuntimeError(
+                    f"Not enough GPUs: TP={self.tp_size} needs at least "
+                    f"{self.tp_size} GPUs but only {total_gpus} available"
+                )
+
+        n = num_replicas
+        logger.info(f"Creating {n} workers (TP={self.tp_size})")
 
         self._workers = [
             self._worker_cls.options(
-                num_gpus=self._num_gpus_per_replica,
+                num_gpus=self.tp_size,
                 max_concurrency=2048,
             ).remote()
             for _ in range(n)
@@ -85,7 +135,8 @@ class ReplicaPool:
         logger.info(f"ReplicaPool ready: {n} workers")
         return n
 
-    async def shutdown(self) -> None:
+    async def shutdown(self, model_id: str | None = None) -> None:
+        self._check_model_id(model_id)
         self._stop_monitoring = True
         if self._health_task and not self._health_task.done():
             self._health_task.cancel()
@@ -104,19 +155,37 @@ class ReplicaPool:
             except Exception:
                 pass
         self._workers.clear()
+        self._config = None
+        self._model_id = None
+        self._cached_weights_info = None
 
     # ------------------------------------------------------------------
     # Inference
     # ------------------------------------------------------------------
 
-    async def submit_batch(
+    async def generate(
         self,
-        inputs: list[str | list[int]],
-        sampling_params: dict[str, Any],
+        prompts: str | list[int] | list[str | list[int]],
+        sampling_params: dict[str, Any] | None = None,
+        model_id: str | None = None,
     ) -> list[dict[str, Any]]:
+        """Generate completions for one or more prompts.
+
+        Args:
+            prompts: A single prompt (``str`` or token-id ``list[int]``) or a
+                batch of prompts (``list[str | list[int]]``).
+            sampling_params: vLLM sampling parameters (dict or SamplingParams).
+            model_id: Ignored in single-model mode.
+        """
+        self._check_model_id(model_id)
         if self._scheduler is None:
             raise RuntimeError("ReplicaPool not initialized")
-        return await self._scheduler.submit_batch(inputs, sampling_params)
+        params = sampling_params or {}
+        if isinstance(prompts, str):
+            return [await self._scheduler.submit(prompts, params)]
+        if prompts and isinstance(prompts[0], int):
+            return [await self._scheduler.submit(prompts, params)]
+        return await self._scheduler.submit_batch(prompts, params)
 
     # ------------------------------------------------------------------
     # Scaling
@@ -153,7 +222,7 @@ class ReplicaPool:
 
             while len(self._workers) < target_count:
                 worker = self._worker_cls.options(
-                    num_gpus=self._num_gpus_per_replica,
+                    num_gpus=self.tp_size,
                     max_concurrency=2048,
                 ).remote()
                 await worker.initialize.remote(engine_kwargs, extra_env)
@@ -166,8 +235,11 @@ class ReplicaPool:
     # ------------------------------------------------------------------
 
     async def get_status(self) -> dict[str, Any]:
+        if self._config is None:
+            return {"status": "not_initialized"}
         states = await asyncio.gather(*[w.get_state.remote() for w in self._workers])
         return {
+            "model": self._config.model,
             "num_replicas": len(self._workers),
             "replica_states": list(states),
         }
@@ -176,7 +248,10 @@ class ReplicaPool:
     # Weight sync
     # ------------------------------------------------------------------
 
-    def get_weights_info(self) -> list[dict]:
+    def get_weights_info(self, model_id: str | None = None) -> list[dict]:
+        self._check_model_id(model_id)
+        if self._config is None:
+            raise RuntimeError("ReplicaPool not initialized")
         if self._cached_weights_info is None:
             from arctic_inference.server.weight_sync import build_weights_info
             infos = build_weights_info(self._config.model)
@@ -185,22 +260,45 @@ class ReplicaPool:
 
     async def sync_weights(
         self,
-        groups: list[dict[str, Any]],
+        groups: list[dict[str, Any]] | None = None,
         bucket_size: int = 256 * 1024 * 1024,
         strategy: str = "hotswap",
         engine_only: bool = False,
         direct_mode: bool = False,
+        model_id: str | None = None,
+        master_addr: str | None = None,
+        master_port: int | None = None,
+        world_size: int | None = None,
     ) -> dict[str, Any]:
         """Receive weights from sender(s) and load into all replicas.
 
-        Acquires the pool lock to prevent concurrent scaling or other syncs.
-        The *strategy* controls how in-flight requests are handled:
+        Accepts either ``groups`` or legacy flat fields (``master_addr``,
+        ``master_port``, ``world_size``).  The *strategy* controls how
+        in-flight requests are handled:
+
           - **drain**: pause scheduler, wait for in-flight to finish, sync, resume.
           - **skip**: mark workers unavailable, cancel in-flight, sync, re-enable.
           - **hotswap**: sync while serving continues.
         """
+        self._check_model_id(model_id)
         if self._scheduler is None:
             raise RuntimeError("ReplicaPool not initialized")
+
+        if groups is None:
+            if master_addr is None or master_port is None:
+                raise ValueError(
+                    "Provide either 'groups' or legacy flat fields "
+                    "(master_addr, master_port, world_size)"
+                )
+            n = self.num_replicas
+            tp = self.tp_size
+            groups = [{
+                "group_id": 0,
+                "master_addr": master_addr,
+                "master_port": master_port,
+                "world_size": world_size or (1 + n * tp),
+                "replica_ids": list(range(n)),
+            }]
 
         async with self._lock:
             t0 = time.time()
@@ -268,7 +366,8 @@ class ReplicaPool:
                 "workers": per_worker,
             }
 
-    async def close_weight_sync(self) -> dict[str, Any]:
+    async def close_weight_sync(self, model_id: str | None = None) -> dict[str, Any]:
+        self._check_model_id(model_id)
         async with self._lock:
             results = await asyncio.gather(*[w.close_weight_sync.remote() for w in self._workers])
             return {"status": "ok", "workers": list(results)}
@@ -304,7 +403,7 @@ class ReplicaPool:
             pass
 
         new_worker = self._worker_cls.options(
-            num_gpus=self._num_gpus_per_replica,
+            num_gpus=self.tp_size,
             max_concurrency=2048,
         ).remote()
 

@@ -1,4 +1,4 @@
-"""High-level dataset processing on top of Driver/ReplicaPool."""
+"""High-level dataset processing on top of ReplicaPool."""
 from __future__ import annotations
 
 import asyncio
@@ -9,7 +9,6 @@ from typing import Any, TYPE_CHECKING
 import tqdm
 
 if TYPE_CHECKING:
-    from arctic_inference.server.driver import Driver
     from arctic_inference.server.replica_pool import ReplicaPool
 
 logger = logging.getLogger("arctic_inference.server")
@@ -33,7 +32,7 @@ class LLMHandle:
     async def _call(self, prompt: str | list[int], key: str, retries: int, params: dict[str, Any]) -> Any:
         for attempt in range(retries + 1):
             try:
-                results = await self._pool.submit_batch([prompt], params)
+                results = await self._pool.generate([prompt], params)
                 return results[0][key]
             except Exception as e:
                 if attempt == retries:
@@ -45,11 +44,10 @@ class LLMHandle:
 class Pipeline:
     """Process a dataset through a user-defined async task with managed concurrency.
 
-    Supports one or more models.  Pass a dict mapping names to model IDs
-    to use multiple models in a single pipeline.
+    Supports one or more models via ReplicaPool instances.
 
     Usage (single model):
-        pipeline = Pipeline(driver, "my-model-id")
+        pipeline = Pipeline(pool)
 
         @pipeline.task
         async def process(sample, llm):
@@ -58,7 +56,7 @@ class Pipeline:
         results = await pipeline.run(dataset)
 
     Usage (multiple models):
-        pipeline = Pipeline(driver, {"base": "id-a", "ft": "id-b"})
+        pipeline = Pipeline({"base": pool_a, "ft": pool_b})
 
         @pipeline.task
         async def process(sample, llms):
@@ -69,17 +67,16 @@ class Pipeline:
         results = await pipeline.run(dataset)
     """
 
-    def __init__(self, driver: Driver, model_ids: str | dict[str, str]) -> None:
-        if isinstance(model_ids, str):
-            pool = driver._get_pool(model_ids)
-            self._handles: LLMHandle | dict[str, LLMHandle] = LLMHandle(pool)
-        else:
-            if not model_ids:
-                raise ValueError("model_ids must not be empty")
-            self._handles = {
-                name: LLMHandle(driver._get_pool(mid))
-                for name, mid in model_ids.items()
+    def __init__(self, pools: ReplicaPool | dict[str, ReplicaPool]) -> None:
+        if isinstance(pools, dict):
+            if not pools:
+                raise ValueError("pools must not be empty")
+            self._handles: LLMHandle | dict[str, LLMHandle] = {
+                name: LLMHandle(pool)
+                for name, pool in pools.items()
             }
+        else:
+            self._handles = LLMHandle(pools)
         self._fn = None
 
     def task(self, func):
