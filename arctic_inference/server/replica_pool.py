@@ -241,8 +241,9 @@ class ReplicaPool:
     def sleeping(self) -> bool:
         return self._sleeping
 
-    async def sleep(self, level: int = 1) -> dict[str, Any]:
+    async def sleep(self, model_id: str | None = None, level: int = 1) -> dict[str, Any]:
         """Drain requests, then free GPU memory on every worker."""
+        self._check_model_id(model_id)
         if self._scheduler is None:
             raise RuntimeError("ReplicaPool not initialized")
         if self._sleeping:
@@ -265,8 +266,9 @@ class ReplicaPool:
             logger.info("ReplicaPool sleeping (%d workers, level=%d)", len(self._workers), level)
             return {"status": "sleeping", "level": level, "workers": per_worker}
 
-    async def wake_up(self, tags: list[str] | None = None) -> dict[str, Any]:
+    async def wake_up(self, model_id: str | None = None, tags: list[str] | None = None) -> dict[str, Any]:
         """Restore GPU memory on every worker, then resume scheduling."""
+        self._check_model_id(model_id)
         if self._scheduler is None:
             raise RuntimeError("ReplicaPool not initialized")
         if not self._sleeping:

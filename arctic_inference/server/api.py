@@ -106,7 +106,7 @@ async def generate_endpoint(request: GenerateRequest):
 async def sleep_endpoint(request: SleepRequest):
     """Free GPU memory for a model (drain in-flight requests first)."""
     try:
-        return await driver.sleep(request.model_id, level=request.level)
+        return await backend.sleep(request.model_id, level=request.level)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -115,7 +115,7 @@ async def sleep_endpoint(request: SleepRequest):
 async def wake_up_endpoint(request: WakeUpRequest):
     """Restore GPU memory for a model and resume serving."""
     try:
-        return await driver.wake_up(request.model_id, tags=request.tags)
+        return await backend.wake_up(request.model_id, tags=request.tags)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
