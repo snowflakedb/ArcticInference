@@ -39,6 +39,7 @@ $ bash projects/server/api_example.sh
 
 ```console
 $ python projects/server/driver_example.py
+$ python projects/server/driver_example_scaling.py  # dynamic GPU rebalancing demo
 ```
 
 #### Python API (Pipeline)
@@ -52,14 +53,14 @@ $ python projects/server/pipeline_example.py
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/init` | Load a model. Body: `{config: ModelConfig, model_id?: str}`. Returns `model_id`. |
-| `POST` | `/sample` | Generate from prompts or token IDs. Requires `model_id`. |
+| `POST` | `/generate` | Generate from prompts or token IDs. Requires `model_id`. |
+| `POST` | `/sleep` | Free GPU memory for a model (drains in-flight requests first). Body: `{model_id, level?}`. |
+| `POST` | `/wake_up` | Restore GPU memory and resume serving. Body: `{model_id, tags?}`. |
 | `GET` | `/weights_info` | Get weight metadata for a model. Requires `model_id` query param. |
 | `POST` | `/sync_weights` | Receive weights via NCCL. Requires `model_id`. |
 | `POST` | `/close_weight_sync` | Close NCCL engines. Requires `model_id` query param. |
 | `GET` | `/status` | GPU allocation and per-model replica status. |
-| `GET` | `/models` | Alias for `/status`. |
-| `POST` | `/shutdown_model` | Shut down a single model. Requires `model_id` query param. |
-| `POST` | `/shutdown` | Shut down all models. |
+| `POST` | `/shutdown` | Shut down one or all models. Pass `model_id` query param to shut down a single model. |
 
 ### Multi-Model GPU Sharing
 
@@ -68,7 +69,7 @@ When multiple models are loaded, GPUs are split evenly. Loading a new model auto
 ```
 Init model-a (4 GPUs available) → model-a gets 4 replicas
 Init model-b                     → model-a scales to 2, model-b gets 2
-Shutdown model-a                 → model-b keeps 2 (can re-init to reclaim)
+Shutdown model-a                 → model-b scales up to 4 replicas
 ```
 
 ### Model Registry

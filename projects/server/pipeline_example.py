@@ -2,7 +2,7 @@
 
 import asyncio
 
-from arctic_inference.server import Driver, ModelConfig, Pipeline
+from arctic_inference.server import ModelConfig, Pipeline, ReplicaPool, ensure_ray
 
 CONFIG = ModelConfig(
     model="Qwen/Qwen3-30B-A3B",
@@ -13,12 +13,16 @@ CONFIG = ModelConfig(
 
 
 async def main():
-    driver = Driver()
-    await driver.init(CONFIG, model_id="model-a")
-    await driver.init(CONFIG, model_id="model-b")
+    total_gpus = ensure_ray()
+    gpus_per_model = total_gpus // 2
 
-    # Multi-model pipeline: run the same prompts through both models
-    pipeline = Pipeline(driver, {"a": "model-a", "b": "model-b"})
+    pool_a = ReplicaPool()
+    await pool_a.initialize(CONFIG, model_id="model-a", num_replicas=gpus_per_model)
+
+    pool_b = ReplicaPool()
+    await pool_b.initialize(CONFIG, model_id="model-b", num_replicas=gpus_per_model)
+
+    pipeline = Pipeline({"a": pool_a, "b": pool_b})
 
     @pipeline.task
     async def compare(sample, llms):
@@ -38,7 +42,8 @@ async def main():
         print(f"[{i}] A: {result['model_a'][:60]}...")
         print(f"    B: {result['model_b'][:60]}...")
 
-    await driver.shutdown()
+    await pool_a.shutdown()
+    await pool_b.shutdown()
 
 
 if __name__ == "__main__":

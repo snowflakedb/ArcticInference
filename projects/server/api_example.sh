@@ -26,7 +26,7 @@ curl -s "$BASE_URL/status" | python3 -m json.tool
 
 echo ""
 echo "=== 3. Generate ==="
-curl -s -X POST "$BASE_URL/sample" \
+curl -s -X POST "$BASE_URL/generate" \
   -H "Content-Type: application/json" \
   -d '{
     "model_id": "qwen",
