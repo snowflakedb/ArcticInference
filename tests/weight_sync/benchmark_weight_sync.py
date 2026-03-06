@@ -260,7 +260,7 @@ class LoadGenerator:
             t0 = time.time()
             try:
                 resp = session.post(
-                    f"{self.base_url}/sample",
+                    f"{self.base_url}/generate",
                     json={
                         "prompts": [self.prompt],
                         "sampling_params": {
@@ -337,7 +337,11 @@ class WeightSyncBenchmark:
             model_path, params, weights_info, total_bytes = self._load_weights()
 
             status = requests.get(f"{cfg.server_url}/status", timeout=10).json()
-            num_replicas = status.get("num_replicas", 1)
+            if "models" in status:
+                models = status["models"]
+                num_replicas = next(iter(models.values()))["num_replicas"] if models else 1
+            else:
+                num_replicas = status.get("num_replicas", 1)
             from arctic_inference.server.weight_sync import TransferSchedule
             self._schedule = TransferSchedule.build(
                 training_sharding=cfg.training_sharding,
@@ -428,20 +432,20 @@ class WeightSyncBenchmark:
                 time.sleep(10)
         else:
             raise RuntimeError("Server status endpoint unreachable")
-        if status.get("state") == "ready":
+        if status.get("model") or status.get("models"):
             print("[setup] Model already initialized")
             return
-        body: dict = {
+        config: dict = {
             "model": cfg.model,
             "tensor_parallel_size": cfg.tensor_parallel_size,
             "max_model_len": cfg.max_model_len,
             "gpu_memory_utilization": cfg.gpu_memory_utilization,
         }
         if cfg.quantization:
-            body["quantization"] = cfg.quantization
+            config["quantization"] = cfg.quantization
         print(f"[setup] Initializing model: {cfg.model}")
         resp = requests.post(f"{cfg.server_url}/init",
-                             json=body, timeout=cfg.timeout)
+                             json={"config": config}, timeout=cfg.timeout)
         if resp.status_code == 500 and "already" in resp.text.lower() or "state=ready" in resp.text:
             print("[setup] Model already initialized (race with status check)")
             return
@@ -480,7 +484,7 @@ class WeightSyncBenchmark:
         for attempt in range(retries):
             try:
                 resp = requests.post(
-                    f"{self.cfg.server_url}/sample",
+                    f"{self.cfg.server_url}/generate",
                     json={"prompts": [self._VERIFY_PROMPT],
                           "sampling_params": self._VERIFY_SAMPLING},
                     timeout=180)

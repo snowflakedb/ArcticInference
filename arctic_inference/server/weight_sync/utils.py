@@ -140,6 +140,7 @@ class _FP8InplaceUpdater:
         )
         self._linear_types = (ColumnParallelLinear, MergedColumnParallelLinear,
                               QKVParallelLinear, RowParallelLinear)
+        self._model = model
         self._device = device
         self._dtype = target_dtype
 
@@ -193,6 +194,20 @@ class _FP8InplaceUpdater:
         else:
             param.data.copy_(tensor)
 
+    def _quant_and_copy(self, param: nn.Parameter, tensor: torch.Tensor,
+                        scale_param: nn.Parameter | None = None):
+        """FP8-quantize a BF16 tensor and copy into an FP8-transposed param."""
+        from vllm._custom_ops import scaled_fp8_quant
+        qweight, scale = scaled_fp8_quant(
+            tensor.to(dtype=self._dtype, device=self._device), scale=None,
+        )
+        if param.data.ndim == 2 and param.data.shape == (qweight.shape[1], qweight.shape[0]):
+            param.data.copy_(qweight.t().contiguous())
+        else:
+            param.data.copy_(qweight)
+        if scale_param is not None:
+            scale_param.data.copy_(scale)
+
     def _feed_fp8_module(self, mod_path: str, tensor: torch.Tensor,
                          shard_id=None) -> None:
         buf = self._ensure_buf(mod_path)
@@ -223,6 +238,16 @@ class _FP8InplaceUpdater:
 
         param = self._params.get(sf_key)
         if param is not None:
+            if param.data.shape == tensor.shape:
+                self._copy_param(param, tensor)
+                return
+            # Shape mismatch — the param is likely FP8-transposed.
+            # Quantize the BF16 tensor to FP8 and copy with transposition.
+            if param.data.dtype == torch.float8_e4m3fn:
+                scale_name = sf_key.replace(".weight", ".weight_scale")
+                scale_param = self._params.get(scale_name)
+                self._quant_and_copy(param, tensor, scale_param)
+                return
             self._copy_param(param, tensor)
 
     @property
