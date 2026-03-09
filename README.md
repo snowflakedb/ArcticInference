@@ -1,4 +1,4 @@
-[![License Apache 2.0](https://badgen.net/badge/license/apache2.0/blue)](https://github.com/snowflakedb/ArcticInference/blob/main/LICENSE)
+[![License Apache 2.0](https://badgen.net/badge/license/apache2.0/blue)](https://github.com/snowflake-eng/ArcticInference/blob/main/LICENSE)
 [![PyPI version](https://badge.fury.io/py/arctic-inference.svg)](https://pypi.org/project/arctic-inference/)
 
 <h3 align="center">

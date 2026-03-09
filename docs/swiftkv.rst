@@ -26,7 +26,7 @@ Usage with Arctic Inference
 
 To use SwiftKV with Arctic Inference, select a SwiftKV model that has been
 fine-tuned with `SwiftKV in ArcticTraining
-<https://github.com/snowflakedb/ArcticTraining/tree/main/projects/swiftkv>`_. We
+<https://github.com/snowflake-eng/ArcticTraining/tree/main/projects/swiftkv>`_. We
 have publically released SwiftKV models for Meta's Llama-3 series of models `on
 Hugging Face
 <https://huggingface.co/collections/Snowflake/swiftkv-models-674f7d7474eb789e185d31cb>`_.
@@ -53,9 +53,9 @@ Training SwiftKV-Compatible Models
 If your favorite model is not already available as a `SwiftKV-compatible model
 <https://huggingface.co/collections/Snowflake/swiftkv-models-674f7d7474eb789e185d31cb>`_,
 you can fine-tune it with `ArcticTraining
-<https://github.com/snowflakedb/ArcticTraining>`_ to make it compatible with
+<https://github.com/snowflake-eng/ArcticTraining>`_ to make it compatible with
 SwiftKV. 
 
 To get started, refer to our provided `examples
-<https://github.com/snowflakedb/ArcticTraining/tree/main/projects/swiftkv/configs>`_
+<https://github.com/snowflake-eng/ArcticTraining/tree/main/projects/swiftkv/configs>`_
 for how we fine-tuned the Llama-3 and Qwen-2.5 models with SwiftKV

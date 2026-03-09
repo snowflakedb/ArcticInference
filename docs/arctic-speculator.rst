@@ -127,15 +127,15 @@ If a pre-trained draft model (speculator) is not available for your target model
 in `our public list
 <https://huggingface.co/collections/Snowflake/speculators-6812b07f3186d13e243022e4>`_,
 you can train your own using `ArcticTraining
-<https://github.com/snowflakedb/ArcticTraining>`_. ArcticTraining supports the
+<https://github.com/snowflake-eng/ArcticTraining>`_. ArcticTraining supports the
 knowledge distillation process required to create a high-quality draft model
 (e.g., an MLP or LSTM speculator) that closely mimics the target model's output
 distribution, which is crucial for effective speculative decoding.
 
 To get started, refer to the `MLP Speculator training examples in ArcticTraining
-<https://github.com/snowflakedb/ArcticTraining/tree/main/projects/mlp_speculator>`_,
+<https://github.com/snowflake-eng/ArcticTraining/tree/main/projects/mlp_speculator>`_,
 such as the provided `Llama-3.1-8B-Instruct example
-<https://github.com/snowflakedb/ArcticTraining/blob/main/projects/mlp_speculator/llama-8b.yaml>`_,
+<https://github.com/snowflake-eng/ArcticTraining/blob/main/projects/mlp_speculator/llama-8b.yaml>`_,
 and adapt it to your specific model and training needs.
 
 Usage Examples
