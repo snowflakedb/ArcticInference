@@ -13,13 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+
 import vllm
+from vllm.config import set_current_vllm_config
 from vllm.logger import init_logger
 from vllm.v1.core.sched.async_scheduler import AsyncScheduler
 from vllm.v1.core.sched.scheduler import Scheduler
 from vllm.v1.engine import EngineCoreOutputs
 from vllm.v1.engine.core import EngineCoreProc
 from vllm.v1.engine.core_client import InprocClient
+from vllm.v1.worker.gpu_worker import Worker
 from vllm.v1.worker.worker_base import WorkerBase
 
 from arctic_inference.patching import ArcticPatch
@@ -251,8 +255,30 @@ class WorkerBasePatch(ArcticPatch[WorkerBase]):
         from arctic_inference.vllm.model_runner import GPUModelRunnerPatch
 
         GPUModelRunnerPatch.apply_patch()
+        WorkerPatch.apply_patch()
 
         return self._orig_init(*args, **kwargs)
+
+
+class WorkerPatch(ArcticPatch[Worker]):
+    """Fix weights offloading for sleep mode.
+
+    The upstream ``load_model`` incorrectly chains two context managers with
+    ``and``, so the memory-pool context is never entered and weights are not
+    tracked for offloading.  This patch nests them properly.
+
+    Backport of https://github.com/vllm-project/vllm/pull/32947.
+    Remove this patch when vllm is upgraded past v0.14.1.
+    """
+
+    def load_model(self) -> None:
+        eep_scale_up = (
+            os.environ.get("VLLM_ELASTIC_EP_SCALE_UP_LAUNCH") == "1")
+        with (
+            self._maybe_get_memory_pool_context(tag="weights"),
+            set_current_vllm_config(self.vllm_config),
+        ):
+            self.model_runner.load_model(eep_scale_up=eep_scale_up)
 
 
 class InprocClientPatch(ArcticPatch[InprocClient]):
