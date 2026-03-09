@@ -71,7 +71,7 @@ build/install it from source:
 
 .. code-block:: bash
 
-   git clone https://github.com/snowflake-eng/ArcticInference.git && pip install ./ArcticInference
+   git clone https://github.com/snowflakedb/ArcticInference.git && pip install ./ArcticInference
 
 Serving
 ~~~~~~~

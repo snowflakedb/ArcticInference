@@ -1,6 +1,6 @@
 ## Arctic Speculator on vLLM
 
-Arctic Speculator is a comprehensive Speculative Decoding strategy that combines [Suffix Decoding](https://arxiv.org/pdf/2411.04975), easy-to-use speculator training recipes through [ArcticTraining](https://github.com/snowflake-eng/ArcticTraining/tree/main) and optimized speculative inference pipeline through ArcticInference. With this strategy on top of vLLM V1, we achieve up to 4x faster end-to-end task completion for LLM agents and up to 2.8x faster decoding for open-ended interactive workloads compared with vLLM without speculation.
+Arctic Speculator is a comprehensive Speculative Decoding strategy that combines [Suffix Decoding](https://arxiv.org/pdf/2411.04975), easy-to-use speculator training recipes through [ArcticTraining](https://github.com/snowflakedb/ArcticTraining/tree/main) and optimized speculative inference pipeline through ArcticInference. With this strategy on top of vLLM V1, we achieve up to 4x faster end-to-end task completion for LLM agents and up to 2.8x faster decoding for open-ended interactive workloads compared with vLLM without speculation.
 
 <img src="Arctic Speculator Benchmarking.png" alt="" width="900">
 
