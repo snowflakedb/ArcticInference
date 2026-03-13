@@ -162,12 +162,13 @@ class InferenceWorker:
         bucket_size: int = 256 * 1024 * 1024,
         engine_only: bool = False,
         direct_mode: bool = False,
+        reverse: bool = False,
     ) -> dict[str, Any]:
         """Receive + load weights on all TP workers via a single call."""
         results = await self.llm.collective_rpc(
             "sync_weights",
             args=(master_addr, master_port, rank_offset, world_size,
-                  bucket_size, engine_only, direct_mode),
+                  bucket_size, engine_only, direct_mode, reverse),
         )
         return results[0] if results else {}
 

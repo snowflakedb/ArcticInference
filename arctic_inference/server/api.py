@@ -51,6 +51,7 @@ class SyncWeightsRequest(BaseModel):
     strategy: str = "hotswap"
     engine_only: bool = False
     direct_mode: bool = False
+    reverse: bool = False
 
     # Legacy flat fields
     master_addr: str | None = None

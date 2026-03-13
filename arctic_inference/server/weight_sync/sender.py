@@ -66,6 +66,7 @@ class WeightSender:
         base_port: int,
         device: torch.device,
         bucket_size: int = 256 * 1024 * 1024,
+        reverse: bool = False,
     ) -> None:
         self._group = group
         self._schedule = schedule
@@ -73,6 +74,7 @@ class WeightSender:
         self._base_port = base_port
         self._device = device
         self._bucket_size = bucket_size
+        self._reverse = reverse
         self._engines: list[NCCLEngine] | None = None
 
     @property
@@ -117,6 +119,7 @@ class WeightSender:
                 world_size=2,
                 device=self._device,
                 bucket_size=self._bucket_size,
+                reverse=self._reverse,
             )
             engines.append(eng)
         self._engines = engines

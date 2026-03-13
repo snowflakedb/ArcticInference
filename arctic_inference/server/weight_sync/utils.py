@@ -29,14 +29,53 @@ _SF_DTYPE_MAP = {
 # NCCL group creation (shared by sender + receiver)
 # ---------------------------------------------------------------------------
 
-def stateless_init_nccl(master_addr, master_port, rank, world_size, device):
-    """Create an independent PyNcclCommunicator via StatelessProcessGroup."""
+def stateless_init_nccl(master_addr, master_port, rank, world_size, device,
+                        *, is_server=None):
+    """Create an independent PyNcclCommunicator via StatelessProcessGroup.
+
+    When *is_server* is ``None`` (default), ``rank == 0`` creates the TCP
+    listener (standard behaviour).  Pass an explicit bool to decouple the
+    TCP listener role from the NCCL rank — needed when the network only
+    allows one direction of connectivity (e.g. training → inference).
+    """
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
     from vllm.distributed.utils import StatelessProcessGroup
 
-    pg = StatelessProcessGroup.create(
-        host=master_addr, port=master_port, rank=rank, world_size=world_size
-    )
+    if is_server is None:
+        pg = StatelessProcessGroup.create(
+            host=master_addr, port=master_port, rank=rank, world_size=world_size
+        )
+    else:
+        import socket
+        from datetime import timedelta
+        from torch.distributed import TCPStore
+
+        listen_socket = None
+        listen_fd = None
+        if is_server:
+            listen_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            listen_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listen_socket.bind(("0.0.0.0", master_port))
+            listen_socket.listen()
+            listen_fd = listen_socket.fileno()
+
+        store = TCPStore(
+            host_name=master_addr,
+            port=master_port,
+            world_size=world_size,
+            is_master=is_server,
+            timeout=timedelta(seconds=300),
+            use_libuv=False,
+            master_listen_fd=listen_fd,
+        )
+        pg = StatelessProcessGroup(
+            rank=rank,
+            world_size=world_size,
+            store=store,
+            socket=listen_socket,
+            data_expiration_seconds=3600,
+        )
+
     return PyNcclCommunicator(pg, device=device)
 
 

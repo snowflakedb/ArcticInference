@@ -42,6 +42,7 @@ class WeightSyncExtension:
         bucket_size: int = 256 * 1024 * 1024,
         engine_only: bool = False,
         direct_mode: bool = False,
+        reverse: bool = False,
     ) -> dict:
         """Receive weights via NCCL and load them into the model.
 
@@ -77,6 +78,7 @@ class WeightSyncExtension:
                 world_size=2,
                 device=self.device,
                 bucket_size=bucket_size,
+                reverse=reverse,
             )
             self._ws_engine = engine
             self._ws_engine_key = engine_key

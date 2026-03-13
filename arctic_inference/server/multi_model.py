@@ -150,6 +150,7 @@ class Driver:
         strategy: str = "hotswap",
         engine_only: bool = False,
         direct_mode: bool = False,
+        reverse: bool = False,
         model_id: str | None = None,
         master_addr: str | None = None,
         master_port: int | None = None,
@@ -158,6 +159,7 @@ class Driver:
         return await self._get_pool(model_id).sync_weights(
             groups, bucket_size, strategy=strategy,
             engine_only=engine_only, direct_mode=direct_mode,
+            reverse=reverse,
             master_addr=master_addr, master_port=master_port,
             world_size=world_size,
         )

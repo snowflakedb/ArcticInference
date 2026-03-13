@@ -40,6 +40,7 @@ class NCCLEngine:
         world_size: int,
         device: torch.device,
         bucket_size: int = DEFAULT_BUCKET_SIZE,
+        reverse: bool = False,
     ) -> None:
         self.rank = rank
         self.world_size = world_size
@@ -49,8 +50,10 @@ class NCCLEngine:
         self._port = master_port
 
         torch.cuda.set_device(device)
+        is_server = (not self.is_sender) if reverse else None
         self.nccl = stateless_init_nccl(
             master_addr, master_port, rank, world_size, device,
+            is_server=is_server,
         )
 
         self._nccl_stream = torch.cuda.Stream(device=device)

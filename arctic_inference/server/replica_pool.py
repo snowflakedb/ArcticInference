@@ -325,6 +325,7 @@ class ReplicaPool:
         strategy: str = "hotswap",
         engine_only: bool = False,
         direct_mode: bool = False,
+        reverse: bool = False,
         model_id: str | None = None,
         master_addr: str | None = None,
         master_port: int | None = None,
@@ -375,12 +376,14 @@ class ReplicaPool:
             elif strategy != "hotswap":
                 raise ValueError(f"Unknown strategy: {strategy!r}. Use: drain, skip, hotswap")
 
+            tp = self.tp_size
             replica_to_group: dict[int, dict[str, Any]] = {}
             for g in groups:
+                base_port = g["master_port"]
                 for rid in g["replica_ids"]:
                     replica_to_group[rid] = {
                         "master_addr": g["master_addr"],
-                        "master_port": g["master_port"],
+                        "master_port": base_port + rid * tp,
                         "world_size": 2,
                         "rank_offset": 1,
                     }
@@ -399,7 +402,7 @@ class ReplicaPool:
                     worker.sync_weights.remote(
                         gcfg["master_addr"], gcfg["master_port"],
                         gcfg["rank_offset"], gcfg["world_size"],
-                        bucket_size, engine_only, direct_mode,
+                        bucket_size, engine_only, direct_mode, reverse,
                     )
                 )
 
