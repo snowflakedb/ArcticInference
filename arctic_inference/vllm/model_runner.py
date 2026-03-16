@@ -113,6 +113,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     _orig_bookkeeping_sync = GPUModelRunner._bookkeeping_sync
     _orig_sample_tokens = GPUModelRunner.sample_tokens
     _orig_initialize_kv_cache = GPUModelRunner.initialize_kv_cache
+    _orig_reload_weights = GPUModelRunner.reload_weights
     # _orig_pad_for_sequence_parallelism = GPUModelRunner._pad_for_sequence_parallelism
 
     def __init__(
@@ -1650,6 +1651,14 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             self.shift_parallel_threshold = 0
             self.shift_forward_context = None
 
+
+    def reload_weights(self) -> None:
+        self._orig_reload_weights()
+
+        drafter = getattr(self, "drafter", None)
+        if drafter is not None and getattr(drafter, "model", None) is not None:
+            logger.info("Reloading drafter (spec model) weights...")
+            drafter.load_model(self.model)
 
     def initialize_kv_cache(self, kv_cache_config) -> None:
         self._orig_initialize_kv_cache(kv_cache_config)

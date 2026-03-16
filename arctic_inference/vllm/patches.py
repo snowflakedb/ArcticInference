@@ -15,6 +15,7 @@
 
 import os
 
+import torch
 import vllm
 from vllm.config import set_current_vllm_config
 from vllm.logger import init_logger
@@ -261,15 +262,30 @@ class WorkerBasePatch(ArcticPatch[WorkerBase]):
 
 
 class WorkerPatch(ArcticPatch[Worker]):
-    """Fix weights offloading for sleep mode.
+    """Fix weights offloading for sleep mode and add drafter support.
 
-    The upstream ``load_model`` incorrectly chains two context managers with
-    ``and``, so the memory-pool context is never entered and weights are not
-    tracked for offloading.  This patch nests them properly.
-
+    load_model: The upstream ``load_model`` incorrectly chains two context
+    managers with ``and``, so the memory-pool context is never entered and
+    weights are not tracked for offloading.  This patch nests them properly.
     Backport of https://github.com/vllm-project/vllm/pull/32947.
     Remove this patch when vllm is upgraded past v0.14.1.
+
+    sleep/wake_up: Level-2 sleep discards all GPU weights as designed.
+    On wake-up the main model is reloaded from disk via the upstream
+    ``reload_weights()`` path.  The drafter (speculative model) is *not*
+    covered by ``reload_weights()`` and ``drafter.load_model()`` would
+    allocate a new model outside the CuMemAllocator pool, so we save the
+    drafter state to CPU during sleep and restore it on wake-up instead.
+    The drafter is small so the CPU cost is negligible.
+
+    Note: FP8 quantization replaces ``ModelWeightParameter`` with plain
+    ``Parameter`` during ``process_weights_after_loading``, which strips
+    the TP-sharding methods that ``reload_weights()`` depends on.
+    Level-2 sleep therefore only works for non-FP8 models at present.
     """
+
+    _orig_sleep = Worker.sleep
+    _orig_wake_up = Worker.wake_up
 
     def load_model(self) -> None:
         eep_scale_up = (
@@ -279,6 +295,56 @@ class WorkerPatch(ArcticPatch[Worker]):
             set_current_vllm_config(self.vllm_config),
         ):
             self.model_runner.load_model(eep_scale_up=eep_scale_up)
+
+    @staticmethod
+    def _save_module_state(module) -> dict[str, torch.Tensor]:
+        state: dict[str, torch.Tensor] = {}
+        for name, param in module.named_parameters():
+            state[f"param.{name}"] = param.data.cpu().clone()
+        for name, buf in module.named_buffers():
+            state[f"buffer.{name}"] = buf.cpu().clone()
+        return state
+
+    @staticmethod
+    def _restore_module_state(
+        module, state: dict[str, torch.Tensor]
+    ) -> None:
+        for name, param in module.named_parameters():
+            key = f"param.{name}"
+            if key in state:
+                param.data.copy_(state[key])
+        for name, buf in module.named_buffers():
+            key = f"buffer.{name}"
+            if key in state:
+                buf.data.copy_(state[key])
+
+    def sleep(self, level: int = 1) -> None:
+        if level == 2:
+            drafter = getattr(self.model_runner, "drafter", None)
+            if drafter is not None and getattr(drafter, "model", None) is not None:
+                self._sleep_saved_drafter_state = self._save_module_state(
+                    drafter.model
+                )
+            else:
+                self._sleep_saved_drafter_state = {}
+            self._sleep_level = 2
+        self._orig_sleep(level=level)
+
+    def wake_up(self, tags: list[str] | None = None) -> None:
+        self._orig_wake_up(tags=tags)
+
+        if getattr(self, "_sleep_level", 0) == 2:
+            from arctic_inference.vllm.model_runner import GPUModelRunnerPatch
+            GPUModelRunnerPatch._orig_reload_weights(self.model_runner)
+
+            saved_drafter = getattr(self, "_sleep_saved_drafter_state", {})
+            if saved_drafter:
+                drafter = getattr(self.model_runner, "drafter", None)
+                if drafter is not None and getattr(drafter, "model", None) is not None:
+                    self._restore_module_state(drafter.model, saved_drafter)
+                self._sleep_saved_drafter_state = {}
+
+            self._sleep_level = 0
 
 
 class InprocClientPatch(ArcticPatch[InprocClient]):
