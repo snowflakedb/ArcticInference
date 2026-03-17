@@ -51,6 +51,7 @@ class ReplicaPool:
         self._health_task: asyncio.Task | None = None
         self._updating_workers: set[int] = set()
         self._cached_weights_info: list[dict] | None = None
+        self._cached_spec_weights_info: list[dict] | None = None
         self._sleeping = False
 
     @property
@@ -159,6 +160,7 @@ class ReplicaPool:
         self._config = None
         self._model_id = None
         self._cached_weights_info = None
+        self._cached_spec_weights_info = None
 
     # ------------------------------------------------------------------
     # Inference
@@ -421,6 +423,129 @@ class ReplicaPool:
             ]
             elapsed = time.time() - t0
             logger.info(f"Weight sync: {n} workers, {len(groups)} group(s) in {elapsed:.2f}s")
+            return {
+                "elapsed": elapsed,
+                "num_groups": len(groups),
+                "strategy": strategy,
+                "strategy_elapsed": elapsed,
+                "workers": per_worker,
+            }
+
+    def get_spec_weights_info(self, model_id: str | None = None) -> list[dict]:
+        """Return weight metadata for the spec (drafter) model."""
+        self._check_model_id(model_id)
+        if self._config is None:
+            raise RuntimeError("ReplicaPool not initialized")
+        spec_model = getattr(self._config, "speculative_model", None)
+        if not spec_model:
+            raise RuntimeError("No speculative_model configured")
+        if self._cached_spec_weights_info is None:
+            from arctic_inference.server.weight_sync import build_weights_info
+            infos = build_weights_info(spec_model)
+            self._cached_spec_weights_info = [wi.to_dict() for wi in infos]
+        return self._cached_spec_weights_info
+
+    async def sync_spec_weights(
+        self,
+        groups: list[dict[str, Any]] | None = None,
+        bucket_size: int = 256 * 1024 * 1024,
+        strategy: str = "hotswap",
+        engine_only: bool = False,
+        reverse: bool = False,
+        model_id: str | None = None,
+        master_addr: str | None = None,
+        master_port: int | None = None,
+        world_size: int | None = None,
+    ) -> dict[str, Any]:
+        """Receive spec (drafter) weights from sender(s) and load into all replicas.
+
+        Same semantics as :meth:`sync_weights` but targets the drafter model.
+        """
+        self._check_model_id(model_id)
+        if self._scheduler is None:
+            raise RuntimeError("ReplicaPool not initialized")
+
+        if groups is None:
+            if master_addr is None or master_port is None:
+                raise ValueError(
+                    "Provide either 'groups' or legacy flat fields "
+                    "(master_addr, master_port, world_size)"
+                )
+            n = self.num_replicas
+            tp = self.tp_size
+            groups = [{
+                "group_id": 0,
+                "master_addr": master_addr,
+                "master_port": master_port,
+                "world_size": world_size or (1 + n * tp),
+                "replica_ids": list(range(n)),
+            }]
+
+        async with self._lock:
+            t0 = time.time()
+            n = len(self._workers)
+
+            if strategy == "drain":
+                self._scheduler.pause()
+                await self._scheduler.drain()
+            elif strategy == "skip":
+                for i in range(n):
+                    self._scheduler.mark_worker_unavailable(i)
+                for i in range(n):
+                    self._scheduler.cancel_worker_inflight(i)
+            elif strategy != "hotswap":
+                raise ValueError(
+                    f"Unknown strategy: {strategy!r}. "
+                    "Use: drain, skip, hotswap"
+                )
+
+            tp = self.tp_size
+            replica_to_group: dict[int, dict[str, Any]] = {}
+            for g in groups:
+                base_port = g["master_port"]
+                for rid in g["replica_ids"]:
+                    replica_to_group[rid] = {
+                        "master_addr": g["master_addr"],
+                        "master_port": base_port + rid * tp,
+                        "world_size": 2,
+                        "rank_offset": 1,
+                    }
+
+            tasks = []
+            for i, worker in enumerate(self._workers):
+                gcfg = replica_to_group.get(i)
+                if gcfg is None:
+                    raise RuntimeError(
+                        f"Replica {i} not assigned to any group. "
+                        f"Groups cover replicas: "
+                        f"{[g['replica_ids'] for g in groups]}"
+                    )
+                tasks.append(
+                    worker.sync_spec_weights.remote(
+                        gcfg["master_addr"], gcfg["master_port"],
+                        gcfg["rank_offset"], gcfg["world_size"],
+                        bucket_size, engine_only, reverse,
+                    )
+                )
+
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            if strategy == "drain":
+                self._scheduler.resume()
+            elif strategy == "skip":
+                for i in range(n):
+                    self._scheduler.mark_worker_available(i)
+
+            per_worker = [
+                {"status": "error", "message": str(r)}
+                if isinstance(r, Exception) else r
+                for r in results
+            ]
+            elapsed = time.time() - t0
+            logger.info(
+                "Spec weight sync: %d workers, %d group(s) in %.2fs",
+                n, len(groups), elapsed,
+            )
             return {
                 "elapsed": elapsed,
                 "num_groups": len(groups),

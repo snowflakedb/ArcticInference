@@ -14,11 +14,13 @@ Public API
 from arctic_inference.server.weight_sync.utils import (
     WeightInfo,
     build_weights_info,
+    load_spec_checkpoint,
+    spec_bucket_size,
     _DirectParamWriter,
     _FP8InplaceUpdater,
 )
 from arctic_inference.server.weight_sync.engine import NCCLEngine
-from arctic_inference.server.weight_sync.sender import WeightSender
+from arctic_inference.server.weight_sync.sender import WeightSender, send_spec_weights
 from arctic_inference.server.weight_sync.receiver import WeightSyncExtension
 from arctic_inference.server.weight_sync.schedule import TransferSchedule, TransferGroup
 
@@ -30,4 +32,7 @@ __all__ = [
     "TransferGroup",
     "WeightInfo",
     "build_weights_info",
+    "load_spec_checkpoint",
+    "spec_bucket_size",
+    "send_spec_weights",
 ]

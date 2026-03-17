@@ -353,3 +353,70 @@ class _DirectParamWriter:
 
     def all_keys(self) -> list[str]:
         return list(self._views.keys())
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint loading helpers
+# ---------------------------------------------------------------------------
+
+def load_spec_checkpoint(
+    model_path: str,
+) -> list[tuple[str, torch.Tensor]]:
+    """Load all spec-model weights from a checkpoint directory.
+
+    Supports both safetensors and pytorch_model.bin formats.
+    Returns a list of ``(name, tensor)`` pairs with tensors on CPU.
+    """
+    import glob as _glob
+    import os
+
+    weights: list[tuple[str, torch.Tensor]] = []
+    st_files = sorted(_glob.glob(os.path.join(model_path, "*.safetensors")))
+    if st_files:
+        from safetensors.torch import load_file
+        for f in st_files:
+            for name, tensor in load_file(f, device="cpu").items():
+                weights.append((name, tensor))
+    else:
+        bin_file = os.path.join(model_path, "pytorch_model.bin")
+        if os.path.exists(bin_file):
+            state = torch.load(bin_file, map_location="cpu", weights_only=True)
+            for name, tensor in state.items():
+                weights.append((name, tensor))
+    return weights
+
+
+def spec_bucket_size(
+    model_path: str,
+    min_bucket_size: int = 256 * 1024 * 1024,
+) -> int:
+    """Compute a bucket size large enough for the largest spec-model weight.
+
+    Reads only ``config.json`` from *model_path*; no tensors are loaded.
+    Falls back to *min_bucket_size* when the config is absent.
+    """
+    import os
+
+    config_path = os.path.join(model_path, "config.json")
+    if not os.path.exists(config_path):
+        return min_bucket_size
+    with open(config_path) as f:
+        cfg = json.load(f)
+
+    def _parse_dim(val) -> list[int]:
+        if isinstance(val, str):
+            return [int(x) for x in val.split(".")]
+        if isinstance(val, list):
+            return [int(x) for x in val]
+        if isinstance(val, int):
+            return [val]
+        return []
+
+    vocab = cfg.get("vocab_size", 0)
+    dims: list[int] = []
+    for key in ("emb_dim", "inner_dim", "proj_dim", "input_hidden_dim"):
+        dims.extend(_parse_dim(cfg.get(key, 0)))
+    max_dim = max(dims) if dims else 0
+
+    max_bytes = vocab * max_dim * 4  # float32
+    return max(min_bucket_size, max_bytes)

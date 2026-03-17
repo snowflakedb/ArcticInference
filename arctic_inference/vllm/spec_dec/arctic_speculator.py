@@ -416,16 +416,38 @@ class ArcticMLPSpeculator(nn.Module, SpeculatorTPInit):
                                     default_weight_loader)
             weight_loader(param, loaded_weight)
 
+    def _sync_qhead_from_head(self):
+        """Re-derive qhead FP8 weights from the freshly loaded head weights.
+
+        After process_weights_after_loading, qhead stores a transposed FP8
+        weight whose original weight_loader has been discarded.  Instead of
+        loading the raw checkpoint tensor directly (which would fail on a
+        shape mismatch), we re-quantise from the already-TP-sharded head.
+        """
+        from vllm import _custom_ops as ops
+        head_weight = self.head[0].weight.data
+        qweight, weight_scale = ops.scaled_fp8_quant(head_weight, scale=None)
+        self.qhead[0].weight.data.copy_(qweight.t())
+        self.qhead[0].weight_scale.data.copy_(weight_scale)
+
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         params_dict = dict(self.named_parameters())
+        qhead_needs_requant = False
         for name, loaded_weight in weights:
             name = name.replace("speculator.", "")
             param = params_dict.get(name)
             self.maybe_load_weight(param, loaded_weight)
 
-            if name.startswith("head"):
-                param = params_dict.get(name.replace("head", "qhead"))
-                self.maybe_load_weight(param, loaded_weight)
+            if name.startswith("head.") and self.qhead is not None:
+                qparam = params_dict.get(name.replace("head", "qhead"))
+                if qparam is not None:
+                    if hasattr(qparam, "weight_loader"):
+                        self.maybe_load_weight(qparam, loaded_weight)
+                    else:
+                        qhead_needs_requant = True
+
+        if qhead_needs_requant:
+            self._sync_qhead_from_head()
 
 
 class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
@@ -960,6 +982,20 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
                                     default_weight_loader)
             weight_loader(param, loaded_weight)
 
+    def _sync_qhead_from_head(self):
+        """Re-derive qhead FP8 weights from the freshly loaded head weights.
+
+        After process_weights_after_loading, qhead stores a transposed FP8
+        weight whose original weight_loader has been discarded.  Instead of
+        loading the raw checkpoint tensor directly (which would fail on a
+        shape mismatch), we re-quantise from the already-TP-sharded head.
+        """
+        from vllm import _custom_ops as ops
+        head_weight = self.head[0].weight.data
+        qweight, weight_scale = ops.scaled_fp8_quant(head_weight, scale=None)
+        self.qhead[0].weight.data.copy_(qweight.t())
+        self.qhead[0].weight_scale.data.copy_(weight_scale)
+
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         weights = collections.OrderedDict(weights)
         if self.method == "sum_lstm" and self.tie_lstm_embs:
@@ -968,8 +1004,6 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
                 weights.pop("cell_emb.0.weight")
                 weights.pop("output_emb.0.weight")
             except KeyError:
-                # If the weights are not present, it means they are not tied
-                # and we should not try to pop them.
                 print("No tied LSTM embeddings found, skipping.")
                 pass
             for name, param in self.named_parameters():
@@ -986,12 +1020,20 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
                         [forget_proj, input_proj, output_proj, cell_proj])
 
         params_dict = dict(self.named_parameters())
+        qhead_needs_requant = False
         for name, loaded_weight in weights.items():
             print(f"LOADING {name}")
             name = name.replace("speculator.", "")
             param = params_dict.get(name)
             self.maybe_load_weight(param, loaded_weight)
 
-            if name.startswith("head"):
-                param = params_dict.get(name.replace("head", "qhead"))
-                self.maybe_load_weight(param, loaded_weight)
+            if name.startswith("head.") and self.qhead is not None:
+                qparam = params_dict.get(name.replace("head", "qhead"))
+                if qparam is not None:
+                    if hasattr(qparam, "weight_loader"):
+                        self.maybe_load_weight(qparam, loaded_weight)
+                    else:
+                        qhead_needs_requant = True
+
+        if qhead_needs_requant:
+            self._sync_qhead_from_head()

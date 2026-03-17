@@ -182,6 +182,66 @@ class WeightSender:
             self._engines = None
 
 
+def send_spec_weights(
+    model_path: str,
+    master_addr: str,
+    master_port: int,
+    tp_rank: int,
+    device: torch.device,
+    bucket_size: int | None = None,
+) -> dict:
+    """Load spec-model weights and send them via a one-shot NCCLEngine.
+
+    Convenience function for tests and benchmarks that need a quick
+    sender without building a full :class:`TransferSchedule`.
+
+    Parameters
+    ----------
+    model_path : str
+        Path to a spec-model checkpoint directory (safetensors or
+        pytorch_model.bin).
+    master_addr : str
+        NCCL rendezvous address.
+    master_port : int
+        Base port; the actual port is ``master_port + tp_rank``.
+    tp_rank : int
+        TP rank of the target receiver (used for port offset).
+    device : torch.device
+        GPU device for this sender.
+    bucket_size : int or None
+        Bucket size in bytes.  When *None*, computed automatically from
+        the model's ``config.json`` via :func:`spec_bucket_size`.
+
+    Returns
+    -------
+    dict with ``params_sent``, ``elapsed``, etc. from :meth:`NCCLEngine.send_weights`.
+    """
+    from arctic_inference.server.weight_sync.utils import (
+        load_spec_checkpoint,
+        spec_bucket_size,
+    )
+
+    if bucket_size is None:
+        bucket_size = spec_bucket_size(model_path)
+
+    weights = load_spec_checkpoint(model_path)
+    port = master_port + tp_rank
+
+    engine = NCCLEngine(
+        master_addr=master_addr,
+        master_port=port,
+        rank=0,
+        world_size=2,
+        device=device,
+        bucket_size=bucket_size,
+    )
+    try:
+        result = engine.send_weights(weights)
+    finally:
+        engine.destroy()
+    return result
+
+
 def _replayable_iter(
     weights: Iterable[tuple[str, torch.Tensor]],
 ) -> Iterable[tuple[str, torch.Tensor]]:

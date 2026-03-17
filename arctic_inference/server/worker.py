@@ -172,6 +172,24 @@ class InferenceWorker:
         )
         return results[0] if results else {}
 
+    async def sync_spec_weights(
+        self,
+        master_addr: str,
+        master_port: int,
+        rank_offset: int,
+        world_size: int,
+        bucket_size: int = 256 * 1024 * 1024,
+        engine_only: bool = False,
+        reverse: bool = False,
+    ) -> dict[str, Any]:
+        """Receive + load spec (drafter) model weights on all TP workers."""
+        results = await self.llm.collective_rpc(
+            "sync_spec_weights",
+            args=(master_addr, master_port, rank_offset, world_size,
+                  bucket_size, engine_only, reverse),
+        )
+        return results[0] if results else {}
+
     async def close_weight_sync(self) -> dict[str, Any]:
         """Destroy persistent NCCLEngine on all TP workers."""
         results = await self.llm.collective_rpc("close_weight_sync")
