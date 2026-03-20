@@ -1645,6 +1645,16 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 else:
                     logger.warning("Could not apply SwiftKV HACK: "
                                    "model.model.decode_runner not found.")
+
+            cudagraph_mode = self.compilation_config.cudagraph_mode
+            if (cudagraph_mode is not None
+                    and cudagraph_mode.has_full_cudagraphs()
+                    and not self.parallel_config.use_ubatching):
+                from vllm.compilation.cuda_graph import CUDAGraphWrapper
+                self.shift_model = CUDAGraphWrapper(
+                    self.shift_model, self.vllm_config,
+                    runtime_mode=CUDAGraphMode.FULL,
+                )
         else:
             self.shift_model = None
             self.shift_parallel_threshold = 0
@@ -1692,6 +1702,30 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             )
         return new_bs
 
+
+    def _register_shift_cudagraph_keys(
+        self,
+        compilation_cases,
+        cudagraph_runtime_mode: CUDAGraphMode,
+    ):
+        """Register shift model batch sizes in the cudagraph dispatcher so
+        that runtime dispatch correctly routes to captured FULL/PIECEWISE
+        graphs."""
+        dispatcher = getattr(self, 'cudagraph_dispatcher', None)
+        if dispatcher is None:
+            return
+
+        uniform = cudagraph_runtime_mode == CUDAGraphMode.FULL
+        added = 0
+        for case in compilation_cases:
+            bs = self._case_bs(case)
+            bd = dispatcher._create_padded_batch_descriptor(
+                bs, uniform, False,
+            )
+            if not uniform:
+                bd = bd.relax_for_mixed_batch_cudagraphs()
+            dispatcher.add_cudagraph_key(cudagraph_runtime_mode, bd)
+            added += 1
 
     @contextlib.contextmanager
     def _shift_graph_capture_context(self):
@@ -1819,6 +1853,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                     with set_shift_parallel_mode(True), \
                          self._use_shift_cudagraph_tables(), \
                          self._shift_graph_capture_context():
+                        self._register_shift_cudagraph_keys(
+                            compilation_cases_shift,
+                            cudagraph_runtime_mode,
+                        )
                         self._orig_capture_cudagraphs(
                             compilation_cases_shift,
                             cudagraph_runtime_mode,
