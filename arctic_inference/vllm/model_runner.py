@@ -60,6 +60,8 @@ from arctic_inference.vllm.spec_dec.arctic_proposer import (ArcticProposer,
                                                             SuffixProposer)
 
 SP_TP_MODE = None
+_SP_STEPS = 0
+_TP_STEPS = 0
 
 
 @contextlib.contextmanager
@@ -613,6 +615,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     ) -> Union[
         ModelRunnerOutput, AsyncGPUModelRunnerOutput, IntermediateTensors
     ]:
+        global _SP_STEPS, _TP_STEPS
+
         num_scheduled_tokens = getattr(scheduler_output, "total_num_scheduled_tokens", None)
         if num_scheduled_tokens is None:
             try:
@@ -627,6 +631,14 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
             and getattr(self, "shift_model", None) is not None
             and num_scheduled_tokens <= int(getattr(self, "shift_parallel_threshold", 0))
         )
+
+        if not use_shift_model:
+            _SP_STEPS += 1
+        else:
+            _TP_STEPS += 1
+
+        if (_SP_STEPS + _TP_STEPS) % 10 == 0:
+            print(f"[shift-count] SP_steps={_SP_STEPS} TP_steps={_TP_STEPS}", flush=True)
 
         if not use_shift_model:
             return self._orig_execute_model(scheduler_output, intermediate_tensors)
