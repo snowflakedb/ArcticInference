@@ -1645,6 +1645,16 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 else:
                     logger.warning("Could not apply SwiftKV HACK: "
                                    "model.model.decode_runner not found.")
+
+            cudagraph_mode = self.compilation_config.cudagraph_mode
+            if (cudagraph_mode is not None
+                    and cudagraph_mode.has_full_cudagraphs()
+                    and not self.parallel_config.use_ubatching):
+                from vllm.compilation.cuda_graph import CUDAGraphWrapper
+                self.shift_model = CUDAGraphWrapper(
+                    self.shift_model, self.vllm_config,
+                    runtime_mode=CUDAGraphMode.FULL,
+                )
         else:
             self.shift_model = None
             self.shift_parallel_threshold = 0
@@ -1693,30 +1703,34 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         return new_bs
 
 
+    def _register_shift_cudagraph_keys(
+        self,
+        compilation_cases,
+        cudagraph_runtime_mode: CUDAGraphMode,
+    ):
+        """Register shift model batch sizes in the cudagraph dispatcher so
+        that runtime dispatch correctly routes to captured FULL/PIECEWISE
+        graphs."""
+        dispatcher = getattr(self, 'cudagraph_dispatcher', None)
+        if dispatcher is None:
+            return
+
+        uniform = cudagraph_runtime_mode == CUDAGraphMode.FULL
+        added = 0
+        for case in compilation_cases:
+            bs = self._case_bs(case)
+            bd = dispatcher._create_padded_batch_descriptor(
+                bs, uniform, False,
+            )
+            if not uniform:
+                bd = bd.relax_for_mixed_batch_cudagraphs()
+            dispatcher.add_cudagraph_key(cudagraph_runtime_mode, bd)
+            added += 1
+
     @contextlib.contextmanager
     def _shift_graph_capture_context(self):
-        """Disable custom all-reduce on the _SP_TP group during shift model
-        graph capture so it falls back to pynccl (NCCL), which handles graph
-        capture natively.  The _SP_TP group's ca_comm was never set up through
-        the normal vLLM graph_capture() path, so using it inside a CUDA graph
-        would crash."""
-        from vllm.distributed.device_communicators.cuda_communicator import (
-            CudaCommunicator,
-        )
-        sp_tp = parallel_state._SP_TP
-        ca_comm = None
-        if sp_tp is not None and sp_tp.device_communicator is not None:
-            assert isinstance(sp_tp.device_communicator, CudaCommunicator)
-            ca_comm = sp_tp.device_communicator.ca_comm
-        saved_disabled = None
-        if ca_comm is not None:
-            saved_disabled = ca_comm.disabled
-            ca_comm.disabled = True
-        try:
-            yield
-        finally:
-            if ca_comm is not None and saved_disabled is not None:
-                ca_comm.disabled = saved_disabled
+        """Enable ca_comm for shift model graph capture."""
+        yield
 
     @contextlib.contextmanager
     def _use_shift_cudagraph_tables(self):
@@ -1816,9 +1830,39 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 try:
                     if shift_ctx is not None:
                         cc.static_forward_context = shift_ctx
+                    _CA_MIN_BS = 8
+                    compilation_cases_shift = [
+                        c for c in compilation_cases_shift
+                        if self._case_bs(c) >= _CA_MIN_BS
+                    ]
+                    shift_sizes = [
+                        s for s in shift_sizes if s >= _CA_MIN_BS
+                    ]
+                    self.vllm_config._shift_cudagraph_capture_sizes = (
+                        shift_sizes)
+                    self.vllm_config._shift_max_cudagraph_capture_size = (
+                        max(shift_sizes) if shift_sizes else 0)
+                    self.vllm_config._shift_bs_to_padded_graph_size = {
+                        bs: bs for bs in shift_sizes
+                    }
+                    for bs in range(1, _CA_MIN_BS):
+                        self.vllm_config._shift_bs_to_padded_graph_size[
+                            bs] = _CA_MIN_BS
+
+                    if is_global_first_rank():
+                        logger.info(
+                            "shift model: skipping bs < %d for "
+                            "ca_comm graph capture (will pad to %d)",
+                            _CA_MIN_BS, _CA_MIN_BS,
+                        )
+
                     with set_shift_parallel_mode(True), \
                          self._use_shift_cudagraph_tables(), \
                          self._shift_graph_capture_context():
+                        self._register_shift_cudagraph_keys(
+                            compilation_cases_shift,
+                            cudagraph_runtime_mode,
+                        )
                         self._orig_capture_cudagraphs(
                             compilation_cases_shift,
                             cudagraph_runtime_mode,
