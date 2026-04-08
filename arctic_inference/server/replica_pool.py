@@ -44,6 +44,7 @@ class ReplicaPool:
         self._worker_cls = worker_cls
         self._config: ModelConfig | None = None
         self._model_id: str | None = None
+        self._ray_num_gpus: float | int | None = None
         self._workers: list[ray.actor.ActorHandle] = []
         self._scheduler: Scheduler | None = None
         self._lock = asyncio.Lock()
@@ -88,6 +89,7 @@ class ReplicaPool:
         config: ModelConfig,
         model_id: str | None = None,
         num_replicas: int | None = None,
+        ray_num_gpus: float | int | None = None,
     ) -> int:
         """Set configuration, create worker actors, start scheduler.
 
@@ -96,6 +98,9 @@ class ReplicaPool:
             model_id: Ignored in single-model mode.
             num_replicas: Number of replicas. If ``None``, uses all
                 available GPUs (``total_gpus // tensor_parallel_size``).
+            ray_num_gpus: ``num_gpus`` passed to ``ray.remote().options()``.
+                Defaults to ``tensor_parallel_size``. Use a fractional
+                value to colocate workers on the same physical GPUs.
 
         Returns the number of workers created.
         """
@@ -104,6 +109,17 @@ class ReplicaPool:
 
         self._config = config
         self._model_id = model_id
+
+        # TODO: Support ray_num_gpus override with TP > 1 (e.g. fractional
+        #       GPU colocation with tensor parallelism).
+        if ray_num_gpus is not None and self.tp_size > 1:
+            raise ValueError(
+                f"ray_num_gpus={ray_num_gpus} is not supported with "
+                f"tensor_parallel_size={self.tp_size}. "
+                f"Fractional GPU colocation currently requires TP=1."
+            )
+
+        self._ray_num_gpus = ray_num_gpus if ray_num_gpus is not None else self.tp_size
 
         if num_replicas is None:
             total_gpus = ensure_ray()
@@ -115,11 +131,11 @@ class ReplicaPool:
                 )
 
         n = num_replicas
-        logger.info(f"Creating {n} workers (TP={self.tp_size})")
+        logger.info(f"Creating {n} workers (TP={self.tp_size}, ray_num_gpus={self._ray_num_gpus})")
 
         self._workers = [
             self._worker_cls.options(
-                num_gpus=self.tp_size,
+                num_gpus=self._ray_num_gpus,
                 max_concurrency=2048,
             ).remote()
             for _ in range(n)
@@ -159,6 +175,7 @@ class ReplicaPool:
         self._workers.clear()
         self._config = None
         self._model_id = None
+        self._ray_num_gpus = None
         self._cached_weights_info = None
         self._cached_spec_weights_info = None
 
@@ -227,7 +244,7 @@ class ReplicaPool:
 
             while len(self._workers) < target_count:
                 worker = self._worker_cls.options(
-                    num_gpus=self.tp_size,
+                    num_gpus=self._ray_num_gpus,
                     max_concurrency=2048,
                 ).remote()
                 await worker.initialize.remote(engine_kwargs, extra_env)
@@ -591,7 +608,7 @@ class ReplicaPool:
             pass
 
         new_worker = self._worker_cls.options(
-            num_gpus=self.tp_size,
+            num_gpus=self._ray_num_gpus,
             max_concurrency=2048,
         ).remote()
 
