@@ -31,7 +31,7 @@ from arctic_inference.vllm.stats import (SpecDecodingStatsPatch,
                                          SpecDecodingLoggingPatch)
 from arctic_inference.vllm.structured_output import XgrammarBackendPatch
 from arctic_inference.vllm.ulysses import apply_shift_parallel_patches
-
+from arctic_inference.vllm.moe_optimization.layer import apply_moe_optimization_patches
 
 logger = init_logger(__name__)
 
@@ -300,3 +300,4 @@ def apply_arctic_patches():
 
     # Main optimization patches.
     apply_shift_parallel_patches()
+    apply_moe_optimization_patches()
