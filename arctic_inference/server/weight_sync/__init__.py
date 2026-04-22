@@ -1,4 +1,4 @@
-"""Weight synchronization via pipelined NCCL send/recv.
+"""Weight synchronization via pipelined NCCL send/recv or shared memory.
 
 Public API
 ----------
@@ -9,6 +9,8 @@ Public API
 - :class:`TransferGroup`        — one independent NCCL transfer group
 - :class:`WeightInfo`           — lightweight parameter descriptor
 - :func:`build_weights_info`    — build descriptors from safetensors
+- :func:`save_weights_to_shm`   — sender-side shared-memory transfer (colocated)
+- :func:`load_weights_from_shm` — receiver-side shared-memory transfer (colocated)
 """
 
 from arctic_inference.server.weight_sync.utils import (
@@ -23,6 +25,11 @@ from arctic_inference.server.weight_sync.engine import NCCLEngine
 from arctic_inference.server.weight_sync.sender import WeightSender, send_spec_weights
 from arctic_inference.server.weight_sync.receiver import WeightSyncExtension
 from arctic_inference.server.weight_sync.schedule import TransferSchedule, TransferGroup
+from arctic_inference.server.weight_sync.ipc_engine import (
+    save_weights_to_shm,
+    load_weights_from_shm,
+    cleanup_shm,
+)
 
 __all__ = [
     "NCCLEngine",
@@ -35,4 +42,7 @@ __all__ = [
     "load_spec_checkpoint",
     "spec_bucket_size",
     "send_spec_weights",
+    "save_weights_to_shm",
+    "load_weights_from_shm",
+    "cleanup_shm",
 ]

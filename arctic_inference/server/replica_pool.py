@@ -6,6 +6,8 @@ import time
 from typing import Any
 
 import ray
+from ray.util.placement_group import PlacementGroup
+from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 import torch
 from arctic_inference.server.config import ModelConfig
 from arctic_inference.server.scheduler import Scheduler
@@ -45,6 +47,8 @@ class ReplicaPool:
         self._config: ModelConfig | None = None
         self._model_id: str | None = None
         self._ray_num_gpus: float | int | None = None
+        self._placement_group: PlacementGroup | None = None
+        self._bundle_indices: list[int] | None = None
         self._workers: list[ray.actor.ActorHandle] = []
         self._scheduler: Scheduler | None = None
         self._lock = asyncio.Lock()
@@ -73,6 +77,27 @@ class ReplicaPool:
     def num_replicas(self) -> int:
         return len(self._workers)
 
+    def _worker_ray_options(self, replica_idx: int | None = None) -> dict[str, Any]:
+        """Build ``ray.remote().options()`` kwargs for a worker actor."""
+        opts: dict[str, Any] = {"max_concurrency": 2048}
+        if (
+            self._placement_group is not None
+            and self._bundle_indices is not None
+            and replica_idx is not None
+            and replica_idx < len(self._bundle_indices)
+        ):
+            if self.tp_size > 1:
+                opts["num_gpus"] = 0
+            else:
+                opts["num_gpus"] = self._ray_num_gpus
+            opts["scheduling_strategy"] = PlacementGroupSchedulingStrategy(
+                placement_group=self._placement_group,
+                placement_group_bundle_index=self._bundle_indices[replica_idx],
+            )
+        else:
+            opts["num_gpus"] = self._ray_num_gpus
+        return opts
+
     def _check_model_id(self, model_id: str | None) -> None:
         if model_id is not None and self._model_id is not None and model_id != self._model_id:
             raise ValueError(
@@ -90,6 +115,9 @@ class ReplicaPool:
         model_id: str | None = None,
         num_replicas: int | None = None,
         ray_num_gpus: float | int | None = None,
+        placement_group: PlacementGroup | None = None,
+        bundle_indices: list[int] | None = None,
+        extra_env: dict[str, str] | None = None,
     ) -> int:
         """Set configuration, create worker actors, start scheduler.
 
@@ -101,6 +129,13 @@ class ReplicaPool:
             ray_num_gpus: ``num_gpus`` passed to ``ray.remote().options()``.
                 Defaults to ``tensor_parallel_size``. Use a fractional
                 value to colocate workers on the same physical GPUs.
+            placement_group: Optional Ray placement group for colocated
+                scheduling.  When provided together with *bundle_indices*,
+                each worker is pinned to a specific PG bundle.
+            bundle_indices: Per-replica bundle indices into *placement_group*.
+                Must have length ``num_replicas``.
+            extra_env: Extra environment variables passed to workers on init.
+                Used for TP>1 colocated mode (VLLM_RAY_PER_WORKER_GPUS, etc).
 
         Returns the number of workers created.
         """
@@ -109,17 +144,18 @@ class ReplicaPool:
 
         self._config = config
         self._model_id = model_id
+        self._extra_env = extra_env
 
-        # TODO: Support ray_num_gpus override with TP > 1 (e.g. fractional
-        #       GPU colocation with tensor parallelism).
-        if ray_num_gpus is not None and self.tp_size > 1:
+        if ray_num_gpus is not None and self.tp_size > 1 and placement_group is None:
             raise ValueError(
                 f"ray_num_gpus={ray_num_gpus} is not supported with "
                 f"tensor_parallel_size={self.tp_size}. "
-                f"Fractional GPU colocation currently requires TP=1."
+                f"Fractional GPU colocation requires a placement group for TP>1."
             )
 
         self._ray_num_gpus = ray_num_gpus if ray_num_gpus is not None else self.tp_size
+        self._placement_group = placement_group
+        self._bundle_indices = bundle_indices
 
         if num_replicas is None:
             total_gpus = ensure_ray()
@@ -130,20 +166,36 @@ class ReplicaPool:
                     f"{self.tp_size} GPUs but only {total_gpus} available"
                 )
 
+        if bundle_indices is not None and len(bundle_indices) != num_replicas:
+            raise ValueError(
+                f"bundle_indices length ({len(bundle_indices)}) must match "
+                f"num_replicas ({num_replicas})"
+            )
+
         n = num_replicas
         logger.info(f"Creating {n} workers (TP={self.tp_size}, ray_num_gpus={self._ray_num_gpus})")
 
-        self._workers = [
-            self._worker_cls.options(
-                num_gpus=self._ray_num_gpus,
-                max_concurrency=2048,
-            ).remote()
-            for _ in range(n)
-        ]
+        self._workers = []
+        for i in range(n):
+            opts = self._worker_ray_options(replica_idx=i)
+            self._workers.append(self._worker_cls.options(**opts).remote())
 
         engine_kwargs = self._config.to_engine_kwargs()
-        extra_env = self._config.extra_env or None
-        await asyncio.gather(*[w.initialize.remote(engine_kwargs, extra_env) for w in self._workers])
+        base_env = self._config.extra_env or {}
+        if self._extra_env:
+            base_env.update(self._extra_env)
+
+        init_tasks = []
+        for i, w in enumerate(self._workers):
+            env = dict(base_env)
+            if (self.tp_size > 1
+                    and self._bundle_indices is not None
+                    and "VLLM_RAY_PER_WORKER_GPUS" in env):
+                rid = self._bundle_indices[i]
+                env["VLLM_RAY_BUNDLE_INDICES"] = ",".join(
+                    str(rid * self.tp_size + t) for t in range(self.tp_size))
+            init_tasks.append(w.initialize.remote(engine_kwargs, env or None))
+        await asyncio.gather(*init_tasks)
 
         self._scheduler = Scheduler(workers=self._workers, initial_concurrency=64)
 
@@ -243,14 +295,13 @@ class ReplicaPool:
             extra_env = self._config.extra_env or None
 
             while len(self._workers) < target_count:
-                worker = self._worker_cls.options(
-                    num_gpus=self._ray_num_gpus,
-                    max_concurrency=2048,
-                ).remote()
+                idx = len(self._workers)
+                opts = self._worker_ray_options(replica_idx=idx)
+                worker = self._worker_cls.options(**opts).remote()
                 await worker.initialize.remote(engine_kwargs, extra_env)
                 self._workers.append(worker)
                 self._scheduler.add_worker(worker)
-                logger.info(f"Scaled up: added worker {len(self._workers) - 1}")
+                logger.info(f"Scaled up: added worker {idx}")
 
     # ------------------------------------------------------------------
     # Sleep / Wake
@@ -260,7 +311,8 @@ class ReplicaPool:
     def sleeping(self) -> bool:
         return self._sleeping
 
-    async def sleep(self, model_id: str | None = None, level: int = 1) -> dict[str, Any]:
+    async def sleep(self, model_id: str | None = None, level: int = 1,
+                    offload_weights: bool = False) -> dict[str, Any]:
         """Drain requests, then free GPU memory on every worker."""
         self._check_model_id(model_id)
         if self._scheduler is None:
@@ -273,7 +325,8 @@ class ReplicaPool:
             await self._scheduler.drain()
 
             results = await asyncio.gather(
-                *[w.sleep.remote(level=level) for w in self._workers],
+                *[w.sleep.remote(level=level, offload_weights=offload_weights)
+                  for w in self._workers],
                 return_exceptions=True,
             )
             self._sleeping = True
@@ -282,10 +335,12 @@ class ReplicaPool:
                 {"status": "error", "message": str(r)} if isinstance(r, Exception) else r
                 for r in results
             ]
-            logger.info("ReplicaPool sleeping (%d workers, level=%d)", len(self._workers), level)
+            logger.info("ReplicaPool sleeping (%d workers, level=%d, offload_weights=%s)",
+                        len(self._workers), level, offload_weights)
             return {"status": "sleeping", "level": level, "workers": per_worker}
 
-    async def wake_up(self, model_id: str | None = None, tags: list[str] | None = None) -> dict[str, Any]:
+    async def wake_up(self, model_id: str | None = None, tags: list[str] | None = None,
+                      restore_weights: bool = False) -> dict[str, Any]:
         """Restore GPU memory on every worker, then resume scheduling."""
         self._check_model_id(model_id)
         if self._scheduler is None:
@@ -295,7 +350,8 @@ class ReplicaPool:
 
         async with self._lock:
             results = await asyncio.gather(
-                *[w.wake_up.remote(tags=tags) for w in self._workers],
+                *[w.wake_up.remote(tags=tags, restore_weights=restore_weights)
+                  for w in self._workers],
                 return_exceptions=True,
             )
             self._sleeping = False
@@ -448,6 +504,57 @@ class ReplicaPool:
                 "workers": per_worker,
             }
 
+    async def sync_weights_ipc(
+        self,
+        group_id: int,
+        replica_id: int,
+        strategy: str = "hotswap",
+    ) -> dict[str, Any]:
+        """Receive weights via shared memory (colocated mode).
+
+        Used when training and inference share a physical GPU, making
+        NCCL communicator creation impossible.  The training worker writes
+        weights to ``/dev/shm`` and the vLLM worker reads them back.
+        """
+        if self._scheduler is None:
+            raise RuntimeError("ReplicaPool not initialized")
+
+        async with self._lock:
+            t0 = time.time()
+            n = len(self._workers)
+
+            if strategy == "drain":
+                self._scheduler.pause()
+                await self._scheduler.drain()
+            elif strategy == "skip":
+                for i in range(n):
+                    self._scheduler.mark_worker_unavailable(i)
+                for i in range(n):
+                    self._scheduler.cancel_worker_inflight(i)
+
+            worker = self._workers[replica_id]
+            self._updating_workers = {replica_id}
+            result = await worker.sync_weights_ipc.remote(group_id)
+            self._updating_workers.clear()
+
+            if strategy == "drain":
+                self._scheduler.resume()
+            elif strategy == "skip":
+                for i in range(n):
+                    self._scheduler.mark_worker_available(i)
+
+            elapsed = time.time() - t0
+            logger.info(
+                f"Weight sync (IPC): replica {replica_id}, "
+                f"group {group_id} in {elapsed:.2f}s"
+            )
+            return {
+                "elapsed": elapsed,
+                "strategy": strategy,
+                "replica_id": replica_id,
+                "worker_result": result if not isinstance(result, Exception) else str(result),
+            }
+
     def get_spec_weights_info(self, model_id: str | None = None) -> list[dict]:
         """Return weight metadata for the spec (drafter) model."""
         self._check_model_id(model_id)
@@ -582,15 +689,19 @@ class ReplicaPool:
     # ------------------------------------------------------------------
 
     async def _monitor_health(self) -> None:
+        loop = asyncio.get_event_loop()
         while not self._stop_monitoring:
-            await asyncio.sleep(10)
+            await asyncio.sleep(30)
             for i, w in enumerate(self._workers):
                 if i in self._updating_workers:
                     continue
                 if self._scheduler is not None and not self._scheduler.is_worker_available(i):
                     continue
                 try:
-                    healthy = await asyncio.wait_for(w.is_healthy.remote(), timeout=30)
+                    ref = w.is_healthy.remote()
+                    healthy = await loop.run_in_executor(
+                        None, lambda r=ref: ray.get(r, timeout=120)
+                    )
                 except Exception:
                     healthy = False
                 if not healthy:
@@ -607,10 +718,8 @@ class ReplicaPool:
         except Exception:
             pass
 
-        new_worker = self._worker_cls.options(
-            num_gpus=self._ray_num_gpus,
-            max_concurrency=2048,
-        ).remote()
+        opts = self._worker_ray_options(replica_idx=idx)
+        new_worker = self._worker_cls.options(**opts).remote()
 
         engine_kwargs = self._config.to_engine_kwargs()
         extra_env = self._config.extra_env or None

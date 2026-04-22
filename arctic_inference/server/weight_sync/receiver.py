@@ -285,6 +285,225 @@ class WeightSyncExtension:
         return self._build_result(start, mem_before, "batched", loaded)
 
     # ------------------------------------------------------------------
+    # Shared-memory path (colocated mode — no NCCL)
+    # ------------------------------------------------------------------
+
+    def sync_weights_ipc(
+        self,
+        group_id: int,
+        timeout: float = 300,
+    ) -> dict:
+        """Receive weights via shared memory (colocated mode).
+
+        Used when training and inference share a physical GPU, making
+        NCCL communicator creation impossible.  The training worker writes
+        weights to ``/dev/shm`` and this method reads them back.
+        """
+        from vllm.distributed.parallel_state import (
+            get_tensor_model_parallel_world_size,
+        )
+        from arctic_inference.server.weight_sync.ipc_engine import (
+            load_weights_from_shm,
+        )
+
+        start = time.time()
+        model = self.model_runner.model
+        torch.cuda.reset_peak_memory_stats(self.device)
+        mem_before = torch.cuda.memory_allocated(self.device)
+
+        weights = load_weights_from_shm(group_id, timeout=timeout)
+        tp = get_tensor_model_parallel_world_size()
+
+        if self.model_config.quantization:
+            from arctic_inference.server.weight_sync.utils import _FP8InplaceUpdater
+            updater = _FP8InplaceUpdater(
+                model, self.model_config.dtype, self.device,
+            )
+            for name, tensor in weights:
+                updater.feed(name, tensor.to(self.device))
+            loaded = len(weights)
+        elif tp == 1:
+            from arctic_inference.server.weight_sync.utils import _DirectParamWriter
+            writer = _DirectParamWriter(model, self.device)
+            loaded = 0
+            for name, tensor in weights:
+                view = writer.get_view(name)
+                if view is not None:
+                    view.copy_(tensor.to(self.device))
+                loaded += 1
+        else:
+            loaded = 0
+            for name, tensor in weights:
+                model.load_weights([(name, tensor.to(self.device))])
+                loaded += 1
+
+        return self._build_result(start, mem_before, "ipc_shm", loaded)
+
+    def load_weights_cuda_ipc(self, ipc_payload: dict) -> dict:
+        """Load weights from CUDA IPC handles (zero-copy, same GPU).
+
+        The sender (DeepSpeed worker) creates IPC handles via
+        ``torch.multiprocessing.reductions.reduce_tensor`` and sends
+        them as a pickled dict.  We open each handle to get a direct
+        view of the sender's GPU memory and copy into our model params.
+
+        Uses model.load_weights() which handles TP sharding natively
+        via AutoWeightsLoader (column/row parallel slicing).
+
+        NOTE: TP>1 has a known issue with the embedding layer weight_loader
+        assertion in some vLLM model implementations.  Verified working
+        with TP=1.  TP>1 colocated mode also requires placement group
+        changes (see PR comment).
+
+        Works even when model weights were offloaded (params are empty) —
+        model.load_weights re-allocates as needed.
+        """
+        import base64
+        import pickle
+
+        start = time.time()
+        model = self.model_runner.model
+        torch.cuda.reset_peak_memory_stats(self.device)
+        mem_before = torch.cuda.memory_allocated(self.device)
+
+        names = ipc_payload["names"]
+        handles_list = pickle.loads(
+            base64.b64decode(ipc_payload["ipc_handles_pickled"]))
+
+        device_index = torch.cuda.current_device()
+        physical_gpu_id = str(
+            torch.cuda.get_device_properties(device_index).uuid)
+
+        self._offloaded_state = {}
+
+        loaded = 0
+        for name, handle_dict in zip(names, handles_list):
+            if physical_gpu_id not in handle_dict:
+                continue
+            func, args = handle_dict[physical_gpu_id]
+            args_list = list(args)
+            args_list[6] = device_index
+            src_tensor = func(*args_list)
+            model.load_weights([(name, src_tensor)])
+            loaded += 1
+
+        torch.cuda.synchronize()
+        return self._build_result(start, mem_before, "cuda_ipc", loaded)
+
+    def load_weights_from_shm_path(self, path: str) -> dict:
+        """Load weights from a shared memory file path."""
+        weights = torch.load(path, map_location="cpu", weights_only=True)
+        return self._load_cpu_weights_into_model(weights)
+
+    def _load_cpu_weights_into_model(self, weights: list) -> dict:
+        """Common logic for loading CPU weight list into vLLM model.
+
+        Uses model.load_weights() which handles TP-aware sharding via
+        vLLM's weight_loader. Params must be properly shaped (not offloaded)
+        before calling this — use backload_model_weights first if needed.
+        """
+        start = time.time()
+        model = self.model_runner.model
+        torch.cuda.reset_peak_memory_stats(self.device)
+        mem_before = torch.cuda.memory_allocated(self.device)
+
+        self._offloaded_state = {}
+
+        loaded = 0
+        for name, cpu_tensor in weights:
+            model.load_weights([(name, cpu_tensor.to(self.device))])
+            loaded += 1
+
+        torch.cuda.synchronize()
+        return self._build_result(start, mem_before, "cpu_to_gpu", loaded)
+
+    def load_weights_from_cpu(self, weights_bytes: bytes) -> dict:
+        """Load weights from serialized CPU tensors into the vLLM model.
+
+        First ensures all parameters have proper GPU storage allocated,
+        then uses _DirectParamWriter for efficient in-place copy.
+        """
+        import io as _io
+
+        start = time.time()
+        model = self.model_runner.model
+        torch.cuda.reset_peak_memory_stats(self.device)
+        mem_before = torch.cuda.memory_allocated(self.device)
+
+        weights = torch.load(
+            _io.BytesIO(weights_bytes), map_location="cpu", weights_only=True)
+
+        weights_offloaded = any(
+            p.untyped_storage().size() == 0 for p in model.parameters())
+
+        if weights_offloaded and hasattr(self, '_offloaded_state') and self._offloaded_state:
+            for name, cpu_tensor in self._offloaded_state.items():
+                parts = name.split(".")
+                mod = model
+                for part in parts[:-1]:
+                    mod = getattr(mod, part)
+                param = getattr(mod, parts[-1])
+                param.data = torch.empty_like(cpu_tensor, device=self.device)
+            self._offloaded_state = {}
+
+        from arctic_inference.server.weight_sync.utils import _DirectParamWriter
+        writer = _DirectParamWriter(model, self.device)
+        loaded = 0
+        for name, cpu_tensor in weights:
+            view = writer.get_view(name)
+            if view is not None:
+                view.copy_(cpu_tensor.to(self.device))
+                loaded += 1
+
+        torch.cuda.synchronize()
+        return self._build_result(start, mem_before, "cpu_to_gpu", loaded)
+
+    # ------------------------------------------------------------------
+    # Model weight offload/backload for colocated mode
+    # ------------------------------------------------------------------
+
+    def offload_model_weights(self) -> dict:
+        """Move vLLM model weights to CPU to free GPU for training.
+
+        Saves CPU copies, then replaces param data with tiny CPU placeholders
+        to release the GPU memory. The original shapes are preserved in
+        _offloaded_state for re-allocation during load.
+        """
+        model = self.model_runner.model
+        self._offloaded_state = {}
+        for name, p in model.named_parameters():
+            self._offloaded_state[name] = p.data.to("cpu")
+            p.data = torch.zeros(1, dtype=p.dtype, device="cpu")
+
+        import gc
+        gc.collect()
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        mem_mb = torch.cuda.memory_allocated(self.device) / 1e6
+        logger.info("vLLM model weights offloaded to CPU (%.0f MB GPU remaining)", mem_mb)
+        return {"status": "offloaded", "gpu_mb": mem_mb}
+
+    def backload_model_weights(self) -> dict:
+        """Restore vLLM model weights from CPU.
+
+        Restores param.data directly from _offloaded_state which has the
+        correct TP-sharded shapes saved before offload.
+        """
+        if not hasattr(self, '_offloaded_state') or not self._offloaded_state:
+            return {"status": "nothing_to_restore"}
+        model = self.model_runner.model
+        param_dict = dict(model.named_parameters())
+        loaded = 0
+        for name, cpu_tensor in self._offloaded_state.items():
+            if name in param_dict:
+                param_dict[name].data = cpu_tensor.to(self.device)
+                loaded += 1
+        self._offloaded_state = {}
+        torch.cuda.synchronize()
+        logger.info("vLLM model weights restored to GPU (%d params)", loaded)
+        return {"status": "restored", "loaded": loaded}
+
+    # ------------------------------------------------------------------
     # Cleanup
     # ------------------------------------------------------------------
 
