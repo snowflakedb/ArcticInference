@@ -113,6 +113,7 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     _orig_bookkeeping_sync = GPUModelRunner._bookkeeping_sync
     _orig_sample_tokens = GPUModelRunner.sample_tokens
     _orig_initialize_kv_cache = GPUModelRunner.initialize_kv_cache
+    _orig_model_forward = GPUModelRunner._model_forward
     # _orig_pad_for_sequence_parallelism = GPUModelRunner._pad_for_sequence_parallelism
 
     def __init__(
@@ -604,6 +605,215 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         self._update_states_after_model_execute(
             sampler_output.sampled_token_ids)
         return sampler_output
+
+    # ------------------------------------------------------------------
+    # Multi-cache dynamic NTK RoPE plumbing
+    #
+    # When any rotary layer in ``self.model`` is an instance of
+    # :class:`MultiCacheDynamicNTKRotaryEmbedding` (installed via
+    # ``rope_type="multi_cache_ntk"`` in the HF config, or auto-promoted
+    # via ``ARCTIC_INFERENCE_MULTI_CACHE_ROPE=1``), we must refresh its
+    # per-token offset buffer on every real forward.
+    #
+    # We write directly into the module's ``runtime_bucket_offsets``
+    # buffer *before* invoking the model.  That design has two important
+    # properties:
+    #
+    # 1. CUDA graph safe.  The rotary forward has no Python-level
+    #    control flow on tensor values and reads offsets from the
+    #    buffer via a fixed-shape slice.  Graph capture records the
+    #    load; graph replay picks up whatever was most recently
+    #    written into the buffer.  No graph breaks, no re-capture.
+    # 2. No host sync.  The per-token seq-len tensor is built on the
+    #    CPU side from ``self.seq_lens`` + ``self.query_start_loc`` (both
+    #    maintained by vLLM anyway) and pushed to GPU non-blocking.  The
+    #    seq_len -> offset translation happens on-device inside
+    #    :meth:`MultiCacheDynamicNTKRotaryEmbedding.update_runtime_seq_lens`.
+    #
+    # We cache the list of multi-cache rotary modules per model identity
+    # so shift-model swaps don't leak into each other.
+    # ------------------------------------------------------------------
+
+    def _build_rope_seq_lens_per_token_gpu(
+        self, num_tokens_padded: int
+    ) -> Optional[torch.Tensor]:
+        """Return a GPU int32 tensor of per-token seq-lens.
+
+        Shape is ``[num_tokens_padded]``.  Padding tokens (if any) are
+        assigned a seq-len of ``1`` so the bucket router picks factor-1
+        (the unscaled cache).  Padding tokens are masked out by
+        attention so the exact offset is irrelevant, but we want the
+        routing to land in a numerically safe bucket.
+
+        Routing pinning: the effective seq-len is
+        ``max(projected_max, num_computed + num_scheduled)``, where
+        ``projected_max = num_prompt_tokens + sampling_params.max_tokens``
+        (falls through to ``num_prompt_tokens`` for pooling requests
+        that have no sampling params).  This keeps the rotary basis
+        uniform across both prefill AND the entire decode for a given
+        request:
+
+        * **Chunked prefill** -- using only ``self.seq_lens``
+          (``num_computed + num_scheduled`` -- the end-of-current-chunk
+          position) would leave early chunks of a long prompt routed
+          to a smaller factor while later chunks route to a larger
+          factor, producing a KV cache that holds keys rotated under
+          multiple rope bases for a single request.  Pinning to the
+          full prompt length guarantees every chunk sees the same
+          basis.
+        * **Decode-boundary crossing** -- a request with prompt=30k
+          and ``max_tokens=15k`` reaches total length 45k by the end
+          of generation, which crosses F=1 into F=2.  Without
+          projecting ``max_tokens`` into the routing, prefill keys
+          would be stored under F=1 and the late-decode queries /
+          keys would flip to F=2, recreating the same basis mismatch
+          at the decode boundary that chunked prefill creates at a
+          chunk boundary.  Projecting ``max_tokens`` from the start
+          pins the request to the factor that covers its final length
+          for the request's entire lifetime.
+
+        During decode, ``raw_seq_lens`` may still exceed
+        ``projected_max`` (e.g. the request generated slightly past
+        the projection due to spec decode or reused slots).  The
+        ``max`` fall-through keeps routing monotone in that edge
+        case.
+        """
+        input_batch = getattr(self, "input_batch", None)
+        num_reqs = getattr(input_batch, "num_reqs", 0)
+        if not num_reqs:
+            return None
+
+        raw_seq_lens = self.seq_lens.np[:num_reqs]
+        num_prompt_tokens = getattr(input_batch, "num_prompt_tokens", None)
+        if num_prompt_tokens is not None:
+            # Per-request projection = prompt + max_tokens. For pooling
+            # requests (no sampling_params) or missing attributes, the
+            # projection collapses to prompt-only, preserving the
+            # prefill-only chunked-prefill guarantee.
+            projected_max = num_prompt_tokens[:num_reqs].astype(
+                np.int64, copy=True,
+            )
+            req_ids = getattr(input_batch, "req_ids", None)
+            requests = getattr(self, "requests", None)
+            if req_ids is not None and requests is not None:
+                for i in range(num_reqs):
+                    req_id = req_ids[i]
+                    if req_id is None:
+                        continue
+                    req_state = requests.get(req_id)
+                    if req_state is None:
+                        continue
+                    sampling_params = getattr(
+                        req_state, "sampling_params", None,
+                    )
+                    if sampling_params is None:
+                        continue
+                    max_tokens = getattr(sampling_params, "max_tokens", None)
+                    if max_tokens is None:
+                        continue
+                    projected_max[i] = (
+                        int(num_prompt_tokens[i]) + int(max_tokens)
+                    )
+            seq_lens_cpu = np.maximum(
+                projected_max,
+                raw_seq_lens.astype(np.int64, copy=False),
+            )
+        else:
+            # Defensive fallback: if input_batch doesn't expose the
+            # prompt-length array (older vLLM shapes), fall back to the
+            # raw seq_lens. This preserves the old behaviour and the
+            # unit tests for the multi-cache math still pass; the
+            # chunked-prefill guarantee just weakens to "best-effort".
+            seq_lens_cpu = raw_seq_lens
+
+        # query_start_loc stores cumulative token counts per request in
+        # slots [0..num_reqs].  diff() gives per-request scheduled tokens.
+        qsl = self.query_start_loc.np[: num_reqs + 1]
+        num_scheduled_per_req = np.diff(qsl).astype(np.int64, copy=False)
+        num_tokens_unpadded = int(num_scheduled_per_req.sum())
+        if num_tokens_unpadded <= 0:
+            return None
+
+        per_token_cpu = np.empty(num_tokens_padded, dtype=np.int32)
+        per_token_cpu[:num_tokens_unpadded] = np.repeat(
+            seq_lens_cpu.astype(np.int32, copy=False),
+            num_scheduled_per_req,
+        )
+        if num_tokens_padded > num_tokens_unpadded:
+            # Padding tokens: seq_len=1 routes to factor-1 (unscaled).
+            per_token_cpu[num_tokens_unpadded:] = 1
+
+        cpu_tensor = torch.from_numpy(per_token_cpu)
+        return cpu_tensor.to(
+            self.device, dtype=torch.int32, non_blocking=True,
+        )
+
+    def _runtime_rope_modules(self) -> list:
+        """Return the list of :class:`MultiCacheDynamicNTKRotaryEmbedding`
+        instances inside ``self.model``.
+
+        Cached per model identity so shift-model swaps don't return a
+        stale list.  The list is empty when the model uses no multi-cache
+        rope, which is the fast path we check first in ``_model_forward``.
+        """
+        model = getattr(self, "model", None)
+        if model is None:
+            return []
+        cache = getattr(self, "_arctic_runtime_rope_modules", None)
+        cache_id = getattr(self, "_arctic_runtime_rope_modules_id", None)
+        if cache is not None and cache_id == id(model):
+            return cache
+        found: list = []
+        try:
+            from arctic_inference.vllm.rope import (
+                MultiCacheDynamicNTKRotaryEmbedding,
+            )
+
+            for module in model.modules():
+                if isinstance(module, MultiCacheDynamicNTKRotaryEmbedding):
+                    found.append(module)
+        except Exception:
+            found = []
+        self._arctic_runtime_rope_modules = found
+        self._arctic_runtime_rope_modules_id = id(model)
+        return found
+
+    def _model_forward(
+        self,
+        input_ids: Optional[torch.Tensor] = None,
+        positions: Optional[torch.Tensor] = None,
+        intermediate_tensors: Optional[IntermediateTensors] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+        **model_kwargs,
+    ):
+        rope_modules = self._runtime_rope_modules()
+        if rope_modules:
+            # Write per-token seq-lens (which the module translates to
+            # offsets) into each multi-cache rope module's buffer
+            # *before* the model is invoked.  The in-place write is
+            # what makes this CUDA-graph safe: captured graphs read
+            # the buffer's storage, and each replay sees the latest
+            # values.  If we can't materialise a seq-lens tensor (e.g.
+            # empty batch) we leave the buffer alone -- the rotary will
+            # then use whatever was written previously (or the init
+            # value of 0, which is the unscaled factor-1 offset).
+            num_tokens_padded = (
+                int(positions.shape[-1]) if positions is not None else 0
+            )
+            gpu_seq_lens = self._build_rope_seq_lens_per_token_gpu(
+                num_tokens_padded,
+            )
+            if gpu_seq_lens is not None:
+                for rope_mod in rope_modules:
+                    rope_mod.update_runtime_seq_lens(gpu_seq_lens)
+
+        return self._orig_model_forward(
+            input_ids=input_ids,
+            positions=positions,
+            intermediate_tensors=intermediate_tensors,
+            inputs_embeds=inputs_embeds,
+            **model_kwargs,
+        )
 
     @torch.inference_mode()
     def execute_model(

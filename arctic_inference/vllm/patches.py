@@ -27,6 +27,7 @@ from arctic_inference.vllm.config import (ParallelConfigPatch,
                                           SpeculativeConfigPatch,
                                           VllmConfigPatch,
                                           MLPSpeculatorConfigPatch)
+from arctic_inference.vllm.rope import apply_rope_runtime_patches
 from arctic_inference.vllm.stats import (SpecDecodingStatsPatch, 
                                          SpecDecodingLoggingPatch)
 from arctic_inference.vllm.structured_output import XgrammarBackendPatch
@@ -297,6 +298,14 @@ def apply_arctic_patches():
     VllmConfigPatch.apply_patch()
     XgrammarBackendPatch.apply_patch()
     MLPSpeculatorConfigPatch.apply_patch()
+
+    # Multi-cache dynamic NTK RoPE (per-factor static caches concatenated;
+    # per-token bucket routing picks the factor whose cache best covers
+    # each request's seq_len).  Installs a wrapper around vLLM's get_rope
+    # so that rope_type="multi_cache_ntk" is dispatched to
+    # arctic_inference.vllm.rope.MultiCacheDynamicNTKRotaryEmbedding.
+    # Must run before any model loads.
+    apply_rope_runtime_patches()
 
     # Main optimization patches.
     apply_shift_parallel_patches()
