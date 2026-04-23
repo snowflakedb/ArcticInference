@@ -345,6 +345,326 @@ def test_update_runtime_seq_lens_handles_empty_batch(device):
 
 
 # --------------------------------------------------------------------------
+# Model-runner hook: chunked-prefill seq-len derivation
+# --------------------------------------------------------------------------
+
+
+def _call_build_rope_seq_lens_per_token_gpu(
+    *,
+    device: torch.device,
+    num_prompt_tokens: list[int] | None,
+    seq_lens: list[int],
+    num_scheduled_per_req: list[int],
+    num_tokens_padded: int,
+    max_tokens_per_req: list[int | None] | None = None,
+    expose_req_ids: bool = True,
+    expose_requests: bool = True,
+) -> torch.Tensor:
+    """Invoke the patched helper on a minimal fake-``self`` object.
+
+    The method reads ``input_batch.num_reqs``,
+    ``input_batch.num_prompt_tokens``, ``input_batch.req_ids``,
+    ``self.requests``, ``self.seq_lens.np``,
+    ``self.query_start_loc.np``, and ``self.device``.  We build
+    ``SimpleNamespace`` objects with exactly those attributes and call
+    the method unbound.  This keeps the test narrow and avoids booting
+    a real vLLM engine.
+
+    Args:
+        max_tokens_per_req: if provided, each non-``None`` entry stocks
+            a fake ``CachedRequestState.sampling_params.max_tokens``
+            under ``self.requests[req_id]`` so the projection code
+            path is exercised.  ``None`` entries simulate pooling
+            requests (no ``sampling_params``).
+        expose_req_ids / expose_requests: when ``False``, omit the
+            corresponding attribute from the fake namespaces to
+            exercise defensive fallback branches.
+    """
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from arctic_inference.vllm.model_runner import GPUModelRunnerPatch
+
+    num_reqs = len(seq_lens)
+    assert num_reqs == len(num_scheduled_per_req)
+    if max_tokens_per_req is not None:
+        assert len(max_tokens_per_req) == num_reqs
+
+    qsl = np.zeros(num_reqs + 1, dtype=np.int32)
+    qsl[1:] = np.cumsum(num_scheduled_per_req)
+
+    input_batch = SimpleNamespace(num_reqs=num_reqs)
+    if num_prompt_tokens is not None:
+        assert len(num_prompt_tokens) == num_reqs
+        input_batch.num_prompt_tokens = np.asarray(
+            num_prompt_tokens, dtype=np.int32,
+        )
+    req_ids = [f"req_{i}" for i in range(num_reqs)]
+    if expose_req_ids:
+        input_batch.req_ids = req_ids
+
+    requests: dict | None = {}
+    if max_tokens_per_req is not None and expose_requests:
+        for i, rid in enumerate(req_ids):
+            max_toks = max_tokens_per_req[i]
+            if max_toks is None:
+                requests[rid] = SimpleNamespace(sampling_params=None)
+            else:
+                requests[rid] = SimpleNamespace(
+                    sampling_params=SimpleNamespace(max_tokens=int(max_toks))
+                )
+    if not expose_requests:
+        requests = None
+
+    fake_self = SimpleNamespace(
+        input_batch=input_batch,
+        seq_lens=SimpleNamespace(np=np.asarray(seq_lens, dtype=np.int32)),
+        query_start_loc=SimpleNamespace(np=qsl),
+        device=device,
+    )
+    if requests is not None:
+        fake_self.requests = requests
+    return GPUModelRunnerPatch._build_rope_seq_lens_per_token_gpu(
+        fake_self, num_tokens_padded,
+    )
+
+
+def test_chunked_prefill_pins_seq_len_to_full_prompt_length(device):
+    """Under chunked prefill, all chunks of a long request must see the
+    request's full prompt length, not the end-of-chunk position.
+
+    This is the regression guard for the KV-cache basis pollution bug:
+    ``vllm.v1.worker.gpu_model_runner`` sets ``seq_lens[i] =
+    num_computed_tokens[i] + num_scheduled_tokens[i]`` -- the end of
+    the current chunk, not the total prompt length.  If we route by
+    that value, a 130k-token prompt processed over multiple 8k chunks
+    would see seq_len=8k on the first chunk (→ F=1) and only eventually
+    cross into F=4 on a later chunk, leaving the KV cache holding keys
+    rotated under inconsistent rope bases for a single request.
+
+    Concretely we simulate two requests sharing one forward:
+      * req0: short prompt (4000 tokens), all in this chunk.
+      * req1: long prompt (130000 tokens), only 4192 tokens scheduled
+        this chunk (the rest of max_num_batched_tokens=8192).
+    ``seq_lens`` reported by the scheduler is ``[4000, 4192]`` -- the
+    end-of-chunk positions.  Routing by that would pin req1 to F=1.
+    After the fix, req1's per-token seq-lens must be 130000 across
+    all 4192 of its tokens in this chunk, so it routes to F=4.
+    """
+    num_prompt_tokens = [4000, 130_000]
+    num_scheduled_per_req = [4000, 4192]
+    seq_lens = [4000, 4192]  # end-of-chunk positions from vLLM scheduler
+    num_tokens_unpadded = sum(num_scheduled_per_req)
+    num_tokens_padded = num_tokens_unpadded
+
+    out = _call_build_rope_seq_lens_per_token_gpu(
+        device=device,
+        num_prompt_tokens=num_prompt_tokens,
+        seq_lens=seq_lens,
+        num_scheduled_per_req=num_scheduled_per_req,
+        num_tokens_padded=num_tokens_padded,
+    )
+
+    assert out is not None
+    assert out.shape == (num_tokens_padded,)
+    expected = torch.tensor(
+        [4000] * 4000 + [130_000] * 4192,
+        dtype=torch.int32, device=device,
+    )
+    torch.testing.assert_close(out, expected)
+
+
+def test_decode_seq_len_exceeds_prompt_and_keeps_growing(device):
+    """During decode, ``seq_lens`` > ``num_prompt_tokens`` and the
+    effective seq-len we route on should track decode growth.  The
+    ``max(num_prompt_tokens, seq_lens)`` form must fall through to
+    ``seq_lens`` in that regime so factor upgrades during long decode
+    still happen."""
+    num_prompt_tokens = [40_000]
+    seq_lens = [41_005]  # prompt done + 1005 decode tokens generated
+    out = _call_build_rope_seq_lens_per_token_gpu(
+        device=device,
+        num_prompt_tokens=num_prompt_tokens,
+        seq_lens=seq_lens,
+        num_scheduled_per_req=[1],
+        num_tokens_padded=1,
+    )
+    assert out is not None
+    # Must be the larger of the two (41005), not pinned to 40000.
+    assert int(out.item()) == 41_005
+
+
+def test_fallback_path_when_num_prompt_tokens_missing(device):
+    """If the input_batch doesn't expose ``num_prompt_tokens`` (older
+    vLLM shapes), the helper must still work using ``seq_lens`` only.
+    This preserves the pre-fix behaviour for environments where the
+    new field isn't available."""
+    out = _call_build_rope_seq_lens_per_token_gpu(
+        device=device,
+        num_prompt_tokens=None,
+        seq_lens=[8192],
+        num_scheduled_per_req=[8192],
+        num_tokens_padded=8192,
+    )
+    assert out is not None
+    expected = torch.full(
+        (8192,), 8192, dtype=torch.int32, device=device,
+    )
+    torch.testing.assert_close(out, expected)
+
+
+# --------------------------------------------------------------------------
+# Routing must project max_tokens so the rope basis is uniform across
+# prefill + decode, not just within prefill.
+# --------------------------------------------------------------------------
+
+
+def test_projected_seq_len_pins_factor_to_prompt_plus_max_tokens(device):
+    """A 30k-prompt request with ``max_tokens=15k`` can reach total
+    length 45k during decode, crossing F=1 (max_len=40960) into F=2.
+
+    Without max_tokens projection, the first decode step (seq_len =
+    30001) would route to F=1, so prefill + early decode keys are
+    stored under F=1.  Late-decode queries/keys at seq_len=45000 flip
+    to F=2 and attend back to F=1 keys → basis mismatch and attention
+    corruption, exactly analogous to the chunked-prefill bug.
+
+    With projection, even at prefill time we already route to F=2
+    (projected_max = 30k + 15k = 45k), so the entire request's
+    keys/queries share a single F=2 basis.
+    """
+    # Decode step: prefill finished, 1 decode token scheduled.
+    out = _call_build_rope_seq_lens_per_token_gpu(
+        device=device,
+        num_prompt_tokens=[30_000],
+        seq_lens=[30_001],
+        num_scheduled_per_req=[1],
+        num_tokens_padded=1,
+        max_tokens_per_req=[15_000],
+    )
+    assert out is not None
+    # Projected max dominates over seq_lens=30001 and over
+    # num_prompt_tokens=30000, routing the decode step to the factor
+    # that covers the request's final length (45000 → F=2).
+    assert int(out.item()) == 45_000
+
+
+def test_projected_seq_len_pins_prefill_to_same_factor_as_decode(device):
+    """Prefill of the same 30k-prompt + 15k-max_tokens request must
+    also route to F=2, not F=1.  This is the uniformity guarantee:
+    every token of the request's lifetime (prefill chunks + decode
+    steps) picks the same factor."""
+    # Prefill chunk: first 8192 tokens of the 30k prompt.
+    out = _call_build_rope_seq_lens_per_token_gpu(
+        device=device,
+        num_prompt_tokens=[30_000],
+        seq_lens=[8192],  # end-of-chunk position
+        num_scheduled_per_req=[8192],
+        num_tokens_padded=8192,
+        max_tokens_per_req=[15_000],
+    )
+    assert out is not None
+    # All tokens of the prefill chunk must see the projected 45k,
+    # not the end-of-chunk 8192 and not just the prompt length 30000.
+    assert torch.all(out == 45_000).item()
+
+
+def test_projected_seq_len_leaves_short_requests_alone(device):
+    """A short request (prompt=5k, max_tokens=2k → projected=7k) must
+    stay in F=1.  Projection should not artificially escalate factors
+    for requests that never cross a boundary."""
+    out = _call_build_rope_seq_lens_per_token_gpu(
+        device=device,
+        num_prompt_tokens=[5_000],
+        seq_lens=[5_000],
+        num_scheduled_per_req=[5_000],
+        num_tokens_padded=5_000,
+        max_tokens_per_req=[2_000],
+    )
+    assert out is not None
+    assert torch.all(out == 7_000).item()
+
+
+def test_projected_seq_len_handles_pooling_request_without_sampling_params(
+    device,
+):
+    """Pooling requests have ``sampling_params=None`` (they don't
+    generate).  Projection must fall through to prompt-only for them,
+    leaving the pre-projection chunked-prefill behaviour intact."""
+    out = _call_build_rope_seq_lens_per_token_gpu(
+        device=device,
+        num_prompt_tokens=[130_000],
+        seq_lens=[8192],  # chunked-prefill chunk position
+        num_scheduled_per_req=[8192],
+        num_tokens_padded=8192,
+        max_tokens_per_req=[None],  # no sampling_params
+    )
+    assert out is not None
+    # No max_tokens → projection = prompt = 130k. All tokens should
+    # see 130k (not 8192, the chunk position).
+    assert torch.all(out == 130_000).item()
+
+
+def test_projected_seq_len_falls_back_when_requests_dict_absent(device):
+    """If ``self.requests`` isn't attached to the runner (defensive
+    path), the helper must still work and emit prompt-length routing
+    rather than crashing on attribute access."""
+    out = _call_build_rope_seq_lens_per_token_gpu(
+        device=device,
+        num_prompt_tokens=[30_000],
+        seq_lens=[8192],
+        num_scheduled_per_req=[8192],
+        num_tokens_padded=8192,
+        max_tokens_per_req=[15_000],
+        expose_requests=False,
+    )
+    assert out is not None
+    # Without the requests dict we can't read max_tokens, so we fall
+    # back to prompt-length routing (30k).
+    assert torch.all(out == 30_000).item()
+
+
+def test_projected_seq_len_mixed_batch_routes_each_request_independently(
+    device,
+):
+    """Two requests in the same forward with different projected
+    lengths must each get their own per-token routing signal, not a
+    batch-wide value."""
+    # req_0: short prompt + small max_tokens → stays in F=1 regime (7k).
+    # req_1: medium prompt + large max_tokens → crosses into F=2 (95k).
+    out = _call_build_rope_seq_lens_per_token_gpu(
+        device=device,
+        num_prompt_tokens=[5_000, 80_000],
+        seq_lens=[5_000, 8192],  # req_1 is in chunked prefill
+        num_scheduled_per_req=[5_000, 8192],
+        num_tokens_padded=5_000 + 8192,
+        max_tokens_per_req=[2_000, 15_000],
+    )
+    assert out is not None
+    assert torch.all(out[:5_000] == 7_000).item()  # 5k+2k projection
+    assert torch.all(out[5_000:] == 95_000).item()  # 80k+15k projection
+
+
+def test_projected_seq_len_respects_late_decode_past_projection(device):
+    """Edge: if ``seq_lens`` has somehow grown past
+    ``prompt + max_tokens`` (e.g. reused batch slot, spec decode
+    overshoot), the max fall-through must still pick the larger
+    value so routing is monotone non-decreasing through the request's
+    lifetime."""
+    out = _call_build_rope_seq_lens_per_token_gpu(
+        device=device,
+        num_prompt_tokens=[30_000],
+        seq_lens=[50_000],  # past projection
+        num_scheduled_per_req=[1],
+        num_tokens_padded=1,
+        max_tokens_per_req=[15_000],  # projection = 45_000
+    )
+    assert out is not None
+    assert int(out.item()) == 50_000
+
+
+# --------------------------------------------------------------------------
 # Forward correctness vs static DynamicNTK reference
 # --------------------------------------------------------------------------
 

@@ -644,12 +644,88 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         (the unscaled cache).  Padding tokens are masked out by
         attention so the exact offset is irrelevant, but we want the
         routing to land in a numerically safe bucket.
+
+        Routing pinning: the effective seq-len is
+        ``max(projected_max, num_computed + num_scheduled)``, where
+        ``projected_max = num_prompt_tokens + sampling_params.max_tokens``
+        (falls through to ``num_prompt_tokens`` for pooling requests
+        that have no sampling params).  This keeps the rotary basis
+        uniform across both prefill AND the entire decode for a given
+        request:
+
+        * **Chunked prefill** -- using only ``self.seq_lens``
+          (``num_computed + num_scheduled`` -- the end-of-current-chunk
+          position) would leave early chunks of a long prompt routed
+          to a smaller factor while later chunks route to a larger
+          factor, producing a KV cache that holds keys rotated under
+          multiple rope bases for a single request.  Pinning to the
+          full prompt length guarantees every chunk sees the same
+          basis.
+        * **Decode-boundary crossing** -- a request with prompt=30k
+          and ``max_tokens=15k`` reaches total length 45k by the end
+          of generation, which crosses F=1 into F=2.  Without
+          projecting ``max_tokens`` into the routing, prefill keys
+          would be stored under F=1 and the late-decode queries /
+          keys would flip to F=2, recreating the same basis mismatch
+          at the decode boundary that chunked prefill creates at a
+          chunk boundary.  Projecting ``max_tokens`` from the start
+          pins the request to the factor that covers its final length
+          for the request's entire lifetime.
+
+        During decode, ``raw_seq_lens`` may still exceed
+        ``projected_max`` (e.g. the request generated slightly past
+        the projection due to spec decode or reused slots).  The
+        ``max`` fall-through keeps routing monotone in that edge
+        case.
         """
-        num_reqs = getattr(getattr(self, "input_batch", None), "num_reqs", 0)
+        input_batch = getattr(self, "input_batch", None)
+        num_reqs = getattr(input_batch, "num_reqs", 0)
         if not num_reqs:
             return None
 
-        seq_lens_cpu = self.seq_lens.np[:num_reqs]
+        raw_seq_lens = self.seq_lens.np[:num_reqs]
+        num_prompt_tokens = getattr(input_batch, "num_prompt_tokens", None)
+        if num_prompt_tokens is not None:
+            # Per-request projection = prompt + max_tokens. For pooling
+            # requests (no sampling_params) or missing attributes, the
+            # projection collapses to prompt-only, preserving the
+            # prefill-only chunked-prefill guarantee.
+            projected_max = num_prompt_tokens[:num_reqs].astype(
+                np.int64, copy=True,
+            )
+            req_ids = getattr(input_batch, "req_ids", None)
+            requests = getattr(self, "requests", None)
+            if req_ids is not None and requests is not None:
+                for i in range(num_reqs):
+                    req_id = req_ids[i]
+                    if req_id is None:
+                        continue
+                    req_state = requests.get(req_id)
+                    if req_state is None:
+                        continue
+                    sampling_params = getattr(
+                        req_state, "sampling_params", None,
+                    )
+                    if sampling_params is None:
+                        continue
+                    max_tokens = getattr(sampling_params, "max_tokens", None)
+                    if max_tokens is None:
+                        continue
+                    projected_max[i] = (
+                        int(num_prompt_tokens[i]) + int(max_tokens)
+                    )
+            seq_lens_cpu = np.maximum(
+                projected_max,
+                raw_seq_lens.astype(np.int64, copy=False),
+            )
+        else:
+            # Defensive fallback: if input_batch doesn't expose the
+            # prompt-length array (older vLLM shapes), fall back to the
+            # raw seq_lens. This preserves the old behaviour and the
+            # unit tests for the multi-cache math still pass; the
+            # chunked-prefill guarantee just weakens to "best-effort".
+            seq_lens_cpu = raw_seq_lens
+
         # query_start_loc stores cumulative token counts per request in
         # slots [0..num_reqs].  diff() gives per-request scheduled tokens.
         qsl = self.query_start_loc.np[: num_reqs + 1]
