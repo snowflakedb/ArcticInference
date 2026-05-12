@@ -53,7 +53,7 @@ class ReplicaPool:
         self._scheduler: Scheduler | None = None
         self._lock = asyncio.Lock()
         self._stop_monitoring = False
-        self._health_task: asyncio.Task | None = None
+        # self._health_task: asyncio.Task | None = None
         self._updating_workers: set[int] = set()
         self._cached_weights_info: list[dict] | None = None
         self._cached_spec_weights_info: list[dict] | None = None
@@ -200,7 +200,7 @@ class ReplicaPool:
         self._scheduler = Scheduler(workers=self._workers, initial_concurrency=64)
 
         self._stop_monitoring = False
-        self._health_task = asyncio.create_task(self._monitor_health())
+        # self._health_task = asyncio.create_task(self._monitor_health())
 
         logger.info(f"ReplicaPool ready: {n} workers")
         return n
@@ -208,12 +208,12 @@ class ReplicaPool:
     async def shutdown(self, model_id: str | None = None) -> None:
         self._check_model_id(model_id)
         self._stop_monitoring = True
-        if self._health_task and not self._health_task.done():
-            self._health_task.cancel()
-            try:
-                await self._health_task
-            except asyncio.CancelledError:
-                pass
+        # if self._health_task and not self._health_task.done():
+        #     self._health_task.cancel()
+        #     try:
+        #         await self._health_task
+        #     except asyncio.CancelledError:
+        #         pass
 
         if self._scheduler:
             await self._scheduler.shutdown()
