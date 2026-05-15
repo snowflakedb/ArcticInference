@@ -12,6 +12,61 @@ import torch
 logger = logging.getLogger("arctic_inference.server")
 
 
+async def _gather_mem(llm) -> dict[str, float]:
+    """Read GPU memory from inside the vLLM engine worker process.
+
+    ``InferenceWorker`` is a thin Ray actor that never allocates CUDA
+    tensors, so a local ``torch.cuda.memory_allocated()`` is always ``0``.
+    Real numbers must come from the ``EngineCore`` worker, reached via
+    ``collective_rpc``. vLLM rejects raw function callables in
+    ``collective_rpc`` (``VLLM_ALLOW_INSECURE_SERIALIZATION`` gate), so we
+    call the ``probe_engine_mem`` method defined on the
+    ``WeightSyncExtension`` (the worker_extension_cls below) by name.
+    """
+    try:
+        results = await llm.collective_rpc("probe_engine_mem")
+    except Exception as exc:  # noqa: BLE001 — diagnostic path, must not break sleep/wake
+        logger.warning("Worker %d: memory probe failed: %s", os.getpid(), exc)
+        return {}
+    if not results:
+        return {}
+    return results[0]
+
+
+def _fmt_mem_delta(label: str, before: dict[str, float], after: dict[str, float]) -> str:
+    if not before or not after:
+        return f"{label}: <probe unavailable>"
+
+    def _fmt_pool(v) -> str:
+        if v is None:
+            return "?"
+        if isinstance(v, (int, float)):
+            return f"{v:.0f}"
+        return str(v)
+
+    msg = (
+        f"{label}: alloc {before['alloc_mb']:.0f}->{after['alloc_mb']:.0f} MB, "
+        f"reserved {before['reserved_mb']:.0f}->{after['reserved_mb']:.0f} MB, "
+        f"device_free {before['free_mb']:.0f}->{after['free_mb']:.0f} MB "
+        f"/ {after['total_mb']:.0f} MB total"
+    )
+
+    pool_before = _fmt_pool(before.get("pool_mb"))
+    pool_after = _fmt_pool(after.get("pool_mb"))
+    msg += f", cumem_pool {pool_before}->{pool_after} MB"
+
+    extras = []
+    sleep_on = after.get("sleep_mode_on")
+    if sleep_on is not None:
+        extras.append(f"sleep_mode_on={sleep_on}")
+    worker_patched = after.get("worker_patched")
+    if worker_patched is not None:
+        extras.append(f"Worker.load_model from {worker_patched}")
+    extras.append(f"engine pid={int(after['pid'])}")
+    msg += f" ({'; '.join(extras)})"
+    return msg
+
+
 def _serialize_logprobs_position(pos_data: dict | None) -> dict[int, dict] | None:
     """Convert a single position's {token_id: Logprob} to {token_id: dict}.
 
@@ -131,14 +186,27 @@ class InferenceWorker:
         """
         if self.state != WorkerLifecycleState.READY:
             raise RuntimeError(f"Cannot sleep: worker state is {self.state.value}")
-        await self.llm.collective_rpc("sleep", kwargs={"level": level})
+
+        before = await _gather_mem(self.llm)
         if offload_weights:
             await self.llm.collective_rpc("offload_model_weights")
+        await self.llm.collective_rpc("sleep", kwargs={"level": level})
         self.state = WorkerLifecycleState.SLEEPING
-        mem_mb = torch.cuda.memory_allocated() / 1e6
-        logger.info("Worker %d sleeping (level=%d, offload_weights=%s, %.0f MB remaining)",
-                     os.getpid(), level, offload_weights, mem_mb)
-        return {"status": "sleeping", "level": level, "gpu_mb": mem_mb}
+        after = await _gather_mem(self.llm)
+
+        print(
+            f"Worker {os.getpid()} sleeping (level={level}, "
+            f"offload_weights={offload_weights}) | "
+            + _fmt_mem_delta("sleep", before, after),
+            flush=True,
+        )
+        return {
+            "status": "sleeping",
+            "level": level,
+            "gpu_mb": after.get("alloc_mb"),
+            "free_mb": after.get("free_mb"),
+            "reserved_mb": after.get("reserved_mb"),
+        }
 
     async def wake_up(self, tags: list[str] | None = None, restore_weights: bool = False) -> dict[str, Any]:
         """Restore GPU memory (reverse of :meth:`sleep`).
@@ -153,15 +221,30 @@ class InferenceWorker:
             if self.state == WorkerLifecycleState.READY:
                 return {"status": "already_ready"}
             raise RuntimeError(f"Cannot wake up: worker state is {self.state.value}")
+        print(f"Worker {os.getpid()} waking up (tags={tags}, restore_weights={restore_weights})")
+        before = await _gather_mem(self.llm)
         if restore_weights:
             await self.llm.collective_rpc("backload_model_weights")
         kwargs: dict[str, Any] = {}
         if tags is not None:
             kwargs["tags"] = tags
+
         await self.llm.collective_rpc("wake_up", kwargs=kwargs)
         self.state = WorkerLifecycleState.READY
-        logger.info("Worker %d awake", os.getpid())
-        return {"status": "ready"}
+        after = await _gather_mem(self.llm)
+
+        print(
+            f"Worker {os.getpid()} awake (tags={tags}, "
+            f"restore_weights={restore_weights}) | "
+            + _fmt_mem_delta("wake", before, after),
+            flush=True,
+        )
+        return {
+            "status": "ready",
+            "gpu_mb": after.get("alloc_mb"),
+            "free_mb": after.get("free_mb"),
+            "reserved_mb": after.get("reserved_mb"),
+        }
 
     # ------------------------------------------------------------------
     # Weight sync

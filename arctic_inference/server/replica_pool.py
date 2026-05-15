@@ -364,6 +364,16 @@ class ReplicaPool:
             logger.info("ReplicaPool awake (%d workers)", len(self._workers))
             return {"status": "ready", "workers": per_worker}
 
+    async def reset_prefix_cache(self, model_id: str | None = None) -> dict[str, Any]:
+        """Reset the prefix cache on all workers."""
+        self._check_model_id(model_id)
+        if self._scheduler is None:
+            raise RuntimeError("ReplicaPool not initialized")
+        async with self._lock:
+            results = await asyncio.gather(*[w.reset_prefix_cache.remote() for w in self._workers], return_exceptions=True)
+            logger.info("ReplicaPool reset prefix cache (%d workers)", len(self._workers))
+            return {"status": "prefix_cache_reset"}
+
     # ------------------------------------------------------------------
     # Status
     # ------------------------------------------------------------------

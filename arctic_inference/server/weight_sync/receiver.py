@@ -507,6 +507,70 @@ class WeightSyncExtension:
     # Cleanup
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Diagnostics
+    # ------------------------------------------------------------------
+
+    def probe_engine_mem(self) -> dict:
+        """Report GPU memory state from inside the vLLM engine worker.
+
+        Called via ``collective_rpc("probe_engine_mem")`` from the host-side
+        ``InferenceWorker``. The host-side Ray actor itself never allocates
+        CUDA tensors, so its local ``torch.cuda.memory_allocated()`` is
+        always ``0``; this method is the only way to see what the actual
+        engine worker is holding.
+
+        Also reports two diagnostic fields that are specific to the
+        colocate / sleep story:
+          * ``sleep_mode_on``  — whether ``ModelConfig.enable_sleep_mode``
+            actually reached the engine. If this is False, the pool path
+            is a no-op even with patches applied.
+          * ``pool_mb``        — total bytes currently tracked by
+            ``CuMemAllocator.get_current_usage()``. If this stays near
+            zero while ``alloc_mb`` is ~the full reservation, weights
+            and KV cache are not being routed through the pluggable
+            allocator and ``sleep`` will never free them.
+          * ``worker_patched`` — whether the running ``Worker.load_model``
+            is the ArcticInference patched version (i.e. defined in
+            ``arctic_inference.vllm.patches``). The engine runs in a
+            ``spawn`` child process, so patches applied in the parent
+            don't necessarily carry over.
+        """
+        import os
+        free_b, total_b = torch.cuda.mem_get_info()
+        out: dict = {
+            "pid": os.getpid(),
+            "alloc_mb": torch.cuda.memory_allocated() / 1e6,
+            "reserved_mb": torch.cuda.memory_reserved() / 1e6,
+            "free_mb": free_b / 1e6,
+            "total_mb": total_b / 1e6,
+            "sleep_mode_on": None,
+            "pool_mb": None,
+            "worker_patched": None,
+        }
+        try:
+            vllm_config = getattr(self, "vllm_config", None)
+            if vllm_config is not None:
+                out["sleep_mode_on"] = bool(getattr(
+                    vllm_config.model_config, "enable_sleep_mode", False))
+        except Exception as exc:  # noqa: BLE001
+            out["sleep_mode_on"] = f"err:{exc}"
+
+        try:
+            from vllm.device_allocator.cumem import CuMemAllocator
+            out["pool_mb"] = CuMemAllocator.get_instance().get_current_usage() / 1e6
+        except Exception as exc:  # noqa: BLE001
+            out["pool_mb"] = f"err:{exc}"
+
+        try:
+            from vllm.v1.worker.gpu_worker import Worker as _BaseWorker
+            mod = getattr(_BaseWorker.load_model, "__module__", "?")
+            out["worker_patched"] = mod
+        except Exception as exc:  # noqa: BLE001
+            out["worker_patched"] = f"err:{exc}"
+
+        return out
+
     def close_weight_sync(self) -> dict:
         """Destroy persistent NCCLEngine instances."""
         for attr, key_attr in [
