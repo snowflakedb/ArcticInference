@@ -76,6 +76,9 @@ class DummyWorker:
         self.state = WorkerLifecycleState.READY
         return {"status": "ready"}
 
+    async def reset_prefix_cache(self) -> dict[str, Any]:
+        return {"status": "prefix_cache_reset"}
+
     async def sync_weights(
         self, master_addr: str, master_port: int, rank_offset: int,
         world_size: int, bucket_size: int = 256 * 1024 * 1024,

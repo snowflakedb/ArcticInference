@@ -246,6 +246,20 @@ class InferenceWorker:
             "reserved_mb": after.get("reserved_mb"),
         }
 
+    async def reset_prefix_cache(self) -> dict[str, Any]:
+        """Invalidate the engine's prefix cache.
+
+        Used after an in-place weight swap (e.g. `sync_weights` / colocated
+        sleep level 1) so that KV blocks computed under the previous policy
+        are not reused by subsequent generations.
+        """
+        if self.state not in (WorkerLifecycleState.READY, WorkerLifecycleState.SLEEPING):
+            raise RuntimeError(
+                f"Cannot reset prefix cache: worker state is {self.state.value}"
+            )
+        await self.llm.reset_prefix_cache()
+        return {"status": "prefix_cache_reset"}
+
     # ------------------------------------------------------------------
     # Weight sync
     # ------------------------------------------------------------------
