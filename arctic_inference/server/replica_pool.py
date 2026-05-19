@@ -47,7 +47,7 @@ class ReplicaPool:
         self._config: ModelConfig | None = None
         self._model_id: str | None = None
         self._ray_num_gpus: float | int | None = None
-        self._placement_group: PlacementGroup | None = None
+        self._placement_groups: list[PlacementGroup] | None = None
         self._bundle_indices: list[int] | None = None
         self._workers: list[ray.actor.ActorHandle] = []
         self._scheduler: Scheduler | None = None
@@ -80,8 +80,16 @@ class ReplicaPool:
     def _worker_ray_options(self, replica_idx: int | None = None) -> dict[str, Any]:
         """Build ``ray.remote().options()`` kwargs for a worker actor."""
         opts: dict[str, Any] = {"max_concurrency": 2048}
+        # `placement_groups` may be length 1 (shared PG for every replica, the
+        # legacy single-PG behavior) or length `num_replicas` (one PG per
+        # replica, used to STRICT_PACK each TP group on a single node).  Modulo
+        # indexing covers both.
+        pg: PlacementGroup | None = None
+        if self._placement_groups and replica_idx is not None:
+            pg = self._placement_groups[replica_idx % len(self._placement_groups)]
+
         if (
-            self._placement_group is not None
+            pg is not None
             and self._bundle_indices is not None
             and replica_idx is not None
             and replica_idx < len(self._bundle_indices)
@@ -90,9 +98,19 @@ class ReplicaPool:
                 opts["num_gpus"] = 0
             else:
                 opts["num_gpus"] = self._ray_num_gpus
+            # For TP>1 the env-var path (see `initialize`) uses
+            # `bundle_indices[i] * tp + t` as the local bundles for the
+            # vLLM TP workers.  The actor itself reserves num_gpus=0, so it
+            # only needs to land on a valid bundle of `pg`; pinning it to the
+            # start of the TP group keeps the actor on the same node as its
+            # children.
+            if self.tp_size > 1:
+                actor_bundle = self._bundle_indices[replica_idx] * self.tp_size
+            else:
+                actor_bundle = self._bundle_indices[replica_idx]
             opts["scheduling_strategy"] = PlacementGroupSchedulingStrategy(
-                placement_group=self._placement_group,
-                placement_group_bundle_index=self._bundle_indices[replica_idx],
+                placement_group=pg,
+                placement_group_bundle_index=actor_bundle,
             )
         else:
             opts["num_gpus"] = self._ray_num_gpus
@@ -115,7 +133,7 @@ class ReplicaPool:
         model_id: str | None = None,
         num_replicas: int | None = None,
         ray_num_gpus: float | int | None = None,
-        placement_group: PlacementGroup | None = None,
+        placement_groups: list[PlacementGroup] | None = None,
         bundle_indices: list[int] | None = None,
         extra_env: dict[str, str] | None = None,
     ) -> int:
@@ -129,11 +147,20 @@ class ReplicaPool:
             ray_num_gpus: ``num_gpus`` passed to ``ray.remote().options()``.
                 Defaults to ``tensor_parallel_size``. Use a fractional
                 value to colocate workers on the same physical GPUs.
-            placement_group: Optional Ray placement group for colocated
-                scheduling.  When provided together with *bundle_indices*,
-                each worker is pinned to a specific PG bundle.
-            bundle_indices: Per-replica bundle indices into *placement_group*.
-                Must have length ``num_replicas``.
+            placement_groups: Optional Ray placement groups for colocated
+                scheduling.  Two layouts are supported:
+
+                * length 1: ``placement_groups[0]`` is shared by every
+                  replica (legacy single-PG behavior).
+                * length ``num_replicas``: each replica uses its own PG,
+                  intended for per-replica STRICT_PACK groups that pin a
+                  whole TP group onto a single physical node.
+
+                Must be paired with *bundle_indices* of length ``num_replicas``.
+            bundle_indices: Per-replica bundle indices into each replica's
+                resolved PG.  For TP>1 this acts as the TP-group index within
+                that PG, so the vLLM TP workers occupy local bundles
+                ``[bundle_indices[r]*tp .. *tp+tp-1]``.
             extra_env: Extra environment variables passed to workers on init.
                 Used for TP>1 colocated mode (VLLM_RAY_PER_WORKER_GPUS, etc).
 
@@ -146,7 +173,11 @@ class ReplicaPool:
         self._model_id = model_id
         self._extra_env = extra_env
 
-        if ray_num_gpus is not None and self.tp_size > 1 and placement_group is None:
+        if (
+            ray_num_gpus is not None
+            and self.tp_size > 1
+            and not placement_groups
+        ):
             raise ValueError(
                 f"ray_num_gpus={ray_num_gpus} is not supported with "
                 f"tensor_parallel_size={self.tp_size}. "
@@ -154,7 +185,7 @@ class ReplicaPool:
             )
 
         self._ray_num_gpus = ray_num_gpus if ray_num_gpus is not None else self.tp_size
-        self._placement_group = placement_group
+        self._placement_groups = placement_groups
         self._bundle_indices = bundle_indices
 
         if num_replicas is None:
@@ -170,6 +201,11 @@ class ReplicaPool:
             raise ValueError(
                 f"bundle_indices length ({len(bundle_indices)}) must match "
                 f"num_replicas ({num_replicas})"
+            )
+        if placement_groups is not None and len(placement_groups) not in (1, num_replicas):
+            raise ValueError(
+                f"placement_groups length ({len(placement_groups)}) must be "
+                f"either 1 (shared) or num_replicas ({num_replicas}) (per-replica)"
             )
 
         n = num_replicas
@@ -228,6 +264,8 @@ class ReplicaPool:
         self._config = None
         self._model_id = None
         self._ray_num_gpus = None
+        self._placement_groups = None
+        self._bundle_indices = None
         self._cached_weights_info = None
         self._cached_spec_weights_info = None
 
