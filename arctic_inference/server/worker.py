@@ -105,14 +105,29 @@ class InferenceWorker:
         if extra_env:
             os.environ.update(extra_env)
 
+        # invariance setup
+        #print(f"{os.environ.get('VLLM_BATCH_INVARIANT')=}")
+        #print(f"{os.environ.get('VLLM_ENABLE_V1_MULTIPROCESSING')=}")
+        # os.environ["VLLM_BATCH_INVARIANT"]="1"
+        # os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"]="0"
+        if os.environ.get("VLLM_BATCH_INVARIANT", "0") == "1" and "attention_config" not in engine_kwargs:
+            engine_kwargs["attention_config"] = dict(backend="FLASH_ATTN")
+
         engine_kwargs.setdefault(
             "worker_extension_cls",
             "arctic_inference.server.weight_sync.WeightSyncExtension",
         )
+
         engine_args = AsyncEngineArgs(**engine_kwargs)
         logger.info("Worker %d engine_args.enable_sleep_mode=%s",
                      os.getpid(), getattr(engine_args, 'enable_sleep_mode', 'N/A'))
         vllm_config = engine_args.create_engine_config()
+
+
+        #print(f"{vllm_config.attention_config=}")
+        #vllm_config.model_config.seed=20
+        #print(vllm_config)
+
         self.llm = AsyncLLM.from_vllm_config(vllm_config)
         self.state = WorkerLifecycleState.READY
         logger.info("Worker %d initialized: model=%s", os.getpid(), engine_kwargs.get("model"))
