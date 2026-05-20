@@ -47,7 +47,7 @@ packages = [
 
 [project.optional-dependencies]
 vllm = [
-    'vllm==0.14.1',
+    'vllm==0.18.0',
 ]
 
 docs = [
