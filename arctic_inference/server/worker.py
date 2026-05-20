@@ -111,6 +111,8 @@ class InferenceWorker:
         # os.environ["VLLM_BATCH_INVARIANT"]="1"
         # os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"]="0"
         if os.environ.get("VLLM_BATCH_INVARIANT", "0") == "1" and "attention_config" not in engine_kwargs:
+            # I'm not sure why vllm doesn't choose the best backend by itself, it has a list of preferences for the best backend here https://github.com/vllm-project/vllm/blob/363fc84407f8c966c1cee6786e45e9e6ab289684/docs/design/attention_backends.md#standard-attention-mha-mqa-gqa so backend="auto" should work, but it fails so for now specifying FA but it may not the fastest/preferred backend
+            #engine_kwargs["attention_config"] = dict(backend="auto")
             engine_kwargs["attention_config"] = dict(backend="FLASH_ATTN")
 
         engine_kwargs.setdefault(
