@@ -377,12 +377,37 @@ class ReplicaPool:
                         len(self._workers), level, offload_weights)
             return {"status": "sleeping", "level": level, "workers": per_worker}
 
+    @staticmethod
+    def _wake_finalize(tags: list[str] | None) -> bool:
+        """True when generate() may run after this wake (KV cache restored)."""
+        if tags is None:
+            return True
+        return "kv_cache" in tags
+
+    @staticmethod
+    def _check_wake_worker_results(results: list, finalize: bool) -> None:
+        errors = [r for r in results if isinstance(r, Exception)]
+        if not errors:
+            return
+        msg = f"wake_up failed on {len(errors)} worker(s): {errors[0]}"
+        if finalize:
+            raise RuntimeError(msg)
+        logger.error(msg)
+
     async def wake_up(self, model_id: str | None = None, tags: list[str] | None = None,
-                      restore_weights: bool = False) -> dict[str, Any]:
-        """Restore GPU memory on every worker, then resume scheduling."""
+                      restore_weights: bool = False,
+                      finalize: bool | None = None) -> dict[str, Any]:
+        """Restore GPU memory on workers.
+
+        For colocated weight sync, use ``tags=['weights']`` first (keeps the pool
+        asleep and the scheduler paused), load weights, then ``tags=['kv_cache']``
+        to allocate KV and resume scheduling.
+        """
         self._check_model_id(model_id)
         if self._scheduler is None:
             raise RuntimeError("ReplicaPool not initialized")
+        if finalize is None:
+            finalize = self._wake_finalize(tags)
         if not self._sleeping:
             return {"status": "already_ready"}
 
@@ -392,15 +417,28 @@ class ReplicaPool:
                   for w in self._workers],
                 return_exceptions=True,
             )
-            self._sleeping = False
-            self._scheduler.resume()
+            self._check_wake_worker_results(results, finalize=finalize)
 
             per_worker = [
                 {"status": "error", "message": str(r)} if isinstance(r, Exception) else r
                 for r in results
             ]
-            logger.info("ReplicaPool awake (%d workers)", len(self._workers))
-            return {"status": "ready", "workers": per_worker}
+            if finalize:
+                self._sleeping = False
+                self._scheduler.resume()
+                logger.info(
+                    "ReplicaPool awake (%d workers, tags=%s)",
+                    len(self._workers),
+                    tags,
+                )
+                return {"status": "ready", "tags": tags, "workers": per_worker}
+
+            logger.info(
+                "ReplicaPool weights stage (%d workers, tags=%s); KV wake pending",
+                len(self._workers),
+                tags,
+            )
+            return {"status": "weights_ready", "tags": tags, "workers": per_worker}
 
     async def reset_prefix_cache(self, model_id: str | None = None) -> dict[str, Any]:
         """Reset the prefix cache on all workers."""

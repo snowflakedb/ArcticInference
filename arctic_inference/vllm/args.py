@@ -54,11 +54,9 @@ class EngineArgsPatch(ArcticPatch[EngineArgs]):
     _orig_create_engine_config = EngineArgs.create_engine_config
 
     def __new__(cls, *args, **kwargs):
-        # Override __new__ to return an ArcticEngineArgs instead of an
-        # EngineArgs when creating a new instance of the class.
+        # Construct ArcticEngineArgs so ArcticArgs fields are initialized.
         if cls is EngineArgs:
-            return ArcticEngineArgs.__new__(ArcticEngineArgs,
-                                            *args, **kwargs)
+            return ArcticEngineArgs(*args, **kwargs)
         return super(EngineArgs, cls).__new__(cls)
 
     def __post_init__(self):
@@ -157,10 +155,51 @@ class EngineArgsPatch(ArcticPatch[EngineArgs]):
 
 class AsyncEngineArgsPatch(ArcticPatch[AsyncEngineArgs]):
 
+    _orig_post_init = AsyncEngineArgs.__post_init__
+    _orig_create_engine_config = AsyncEngineArgs.create_engine_config
+
     def __new__(cls, *args, **kwargs):
-        # Override __new__ to return an ArcticAsyncEngineArgs instead of an
-        # AsyncEngineArgs when creating a new instance of the class.
+        # Construct ArcticAsyncEngineArgs so ArcticArgs fields are initialized.
         if cls is AsyncEngineArgs:
-            return ArcticAsyncEngineArgs.__new__(ArcticAsyncEngineArgs,
-                                                 *args, **kwargs)
+            return ArcticAsyncEngineArgs(*args, **kwargs)
         return super(AsyncEngineArgs, cls).__new__(cls)
+
+    def __post_init__(self):
+        if (self.ulysses_sequence_parallel_size > 1 and
+                self.distributed_executor_backend is None):
+            self.distributed_executor_backend = "mp"
+        self._orig_post_init()
+
+    def create_engine_config(self, *args, **kwargs):
+        if (self.ulysses_sequence_parallel_size > 1 and
+                self.distributed_executor_backend is None):
+            self.distributed_executor_backend = "mp"
+
+        from arctic_inference.vllm import ulysses
+        ulysses._ulysses_sp_size = self.ulysses_sequence_parallel_size
+
+        vllm_config = self._orig_create_engine_config(*args, **kwargs)
+        kwargs = {f.name: getattr(vllm_config.parallel_config, f.name)
+                  for f in fields(vllm_config.parallel_config) if f.init}
+        kwargs["ulysses_sequence_parallel_size"] = (
+            self.ulysses_sequence_parallel_size)
+        kwargs["enable_shift_parallel"] = self.enable_shift_parallel
+        kwargs["shift_parallel_threshold"] = self.shift_parallel_threshold
+        vllm_config.parallel_config = ArcticParallelConfig(**kwargs)
+
+        if self.forest_cascade_attn_configs is not None:
+            try:
+                fca_cfg = json.loads(self.forest_cascade_attn_configs)
+            except json.JSONDecodeError as e:
+                raise ValueError(
+                    f"--forest-cascade-attn-configs must be valid JSON: {e}"
+                ) from e
+            if not isinstance(fca_cfg, dict):
+                raise ValueError(
+                    "--forest-cascade-attn-configs must be a JSON object"
+                )
+            vllm_config._forest_cascade_attn_config = fca_cfg
+        else:
+            vllm_config._forest_cascade_attn_config = None
+
+        return vllm_config

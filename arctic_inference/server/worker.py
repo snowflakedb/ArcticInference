@@ -88,6 +88,27 @@ class WorkerLifecycleState(str, Enum):
     UNINITIALIZED = "uninitialized"
     READY = "ready"
     SLEEPING = "sleeping"
+    # Weights cuMem remapped; KV cache not allocated yet (staged wake for colocated sync).
+    WEIGHTS_READY = "weights_ready"
+
+
+def _normalize_wake_tags(tags: list[str] | None) -> set[str] | None:
+    if tags is None:
+        return None
+    return set(tags)
+
+
+def _is_full_wake(tags: list[str] | None) -> bool:
+    tag_set = _normalize_wake_tags(tags)
+    return tag_set is None or tag_set >= {"weights", "kv_cache"}
+
+
+def _is_weights_only_wake(tags: list[str] | None) -> bool:
+    return _normalize_wake_tags(tags) == {"weights"}
+
+
+def _is_kv_only_wake(tags: list[str] | None) -> bool:
+    return _normalize_wake_tags(tags) == {"kv_cache"}
 
 
 @ray.remote
@@ -100,7 +121,7 @@ class InferenceWorker:
 
     async def initialize(self, engine_kwargs: dict[str, Any], extra_env: dict[str, str] | None = None) -> None:
         from vllm.v1.engine.async_llm import AsyncLLM
-        from vllm.engine.arg_utils import AsyncEngineArgs
+        from arctic_inference.vllm.args import ArcticAsyncEngineArgs
 
         if extra_env:
             os.environ.update(extra_env)
@@ -120,7 +141,7 @@ class InferenceWorker:
             "arctic_inference.server.weight_sync.WeightSyncExtension",
         )
 
-        engine_args = AsyncEngineArgs(**engine_kwargs)
+        engine_args = ArcticAsyncEngineArgs(**engine_kwargs)
         logger.info("Worker %d engine_args.enable_sleep_mode=%s",
                      os.getpid(), getattr(engine_args, 'enable_sleep_mode', 'N/A'))
         vllm_config = engine_args.create_engine_config()
@@ -176,7 +197,9 @@ class InferenceWorker:
 
     def is_healthy(self) -> bool:
         return self.llm is not None and self.state in (
-            WorkerLifecycleState.READY, WorkerLifecycleState.SLEEPING,
+            WorkerLifecycleState.READY,
+            WorkerLifecycleState.SLEEPING,
+            WorkerLifecycleState.WEIGHTS_READY,
         )
 
     def get_state(self) -> str:
@@ -201,7 +224,10 @@ class InferenceWorker:
                 after vLLM sleep (for colocated mode where CuMemAllocator
                 doesn't manage model weight allocations).
         """
-        if self.state != WorkerLifecycleState.READY:
+        if self.state not in (
+            WorkerLifecycleState.READY,
+            WorkerLifecycleState.WEIGHTS_READY,
+        ):
             raise RuntimeError(f"Cannot sleep: worker state is {self.state.value}")
 
         before = await _gather_mem(self.llm)
@@ -234,11 +260,54 @@ class InferenceWorker:
             restore_weights: If True, also restore manually offloaded model
                 weights before the vLLM wake_up.
         """
+        if self.state == WorkerLifecycleState.READY:
+            return {"status": "already_ready"}
+
+        if self.state == WorkerLifecycleState.WEIGHTS_READY:
+            if _is_weights_only_wake(tags):
+                return {"status": "already_weights_ready"}
+            if not (_is_kv_only_wake(tags) or _is_full_wake(tags)):
+                raise RuntimeError(
+                    f"Cannot wake up from weights_ready with tags={tags!r}; "
+                    "use tags=['kv_cache'] or a full wake"
+                )
+            return await self._wake_collective(
+                tags=["kv_cache"],
+                restore_weights=False,
+                target_state=WorkerLifecycleState.READY,
+            )
+
         if self.state != WorkerLifecycleState.SLEEPING:
-            if self.state == WorkerLifecycleState.READY:
-                return {"status": "already_ready"}
             raise RuntimeError(f"Cannot wake up: worker state is {self.state.value}")
-        print(f"Worker {os.getpid()} waking up (tags={tags}, restore_weights={restore_weights})")
+
+        if _is_kv_only_wake(tags):
+            raise RuntimeError(
+                "Cannot wake kv_cache only from sleeping; wake weights first "
+                "(tags=['weights'])"
+            )
+
+        target = (
+            WorkerLifecycleState.READY
+            if _is_full_wake(tags)
+            else WorkerLifecycleState.WEIGHTS_READY
+        )
+        return await self._wake_collective(
+            tags=tags,
+            restore_weights=restore_weights,
+            target_state=target,
+        )
+
+    async def _wake_collective(
+        self,
+        tags: list[str] | None,
+        restore_weights: bool,
+        target_state: WorkerLifecycleState,
+    ) -> dict[str, Any]:
+        print(
+            f"Worker {os.getpid()} waking up (tags={tags}, "
+            f"restore_weights={restore_weights}, target={target_state.value})",
+            flush=True,
+        )
         before = await _gather_mem(self.llm)
         if restore_weights:
             await self.llm.collective_rpc("backload_model_weights")
@@ -247,17 +316,17 @@ class InferenceWorker:
             kwargs["tags"] = tags
 
         await self.llm.collective_rpc("wake_up", kwargs=kwargs)
-        self.state = WorkerLifecycleState.READY
+        self.state = target_state
         after = await _gather_mem(self.llm)
 
         print(
-            f"Worker {os.getpid()} awake (tags={tags}, "
-            f"restore_weights={restore_weights}) | "
+            f"Worker {os.getpid()} wake stage done (tags={tags}, state={self.state.value}) | "
             + _fmt_mem_delta("wake", before, after),
             flush=True,
         )
+        status = "ready" if target_state == WorkerLifecycleState.READY else "weights_ready"
         return {
-            "status": "ready",
+            "status": status,
             "gpu_mb": after.get("alloc_mb"),
             "free_mb": after.get("free_mb"),
             "reserved_mb": after.get("reserved_mb"),
@@ -270,7 +339,11 @@ class InferenceWorker:
         sleep level 1) so that KV blocks computed under the previous policy
         are not reused by subsequent generations.
         """
-        if self.state not in (WorkerLifecycleState.READY, WorkerLifecycleState.SLEEPING):
+        if self.state not in (
+            WorkerLifecycleState.READY,
+            WorkerLifecycleState.SLEEPING,
+            WorkerLifecycleState.WEIGHTS_READY,
+        ):
             raise RuntimeError(
                 f"Cannot reset prefix cache: worker state is {self.state.value}"
             )
