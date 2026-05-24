@@ -141,8 +141,11 @@ class InferenceWorker:
         if not arctic_inference_effective_enabled():
             engine_kwargs.pop("forest_cascade_attn_configs", None)
 
+        # from vllm.v1.engine.async_llm import AsyncLLM
+        # from vllm.engine.arg_utils import AsyncEngineArgs
+
         from vllm.v1.engine.async_llm import AsyncLLM
-        from vllm.engine.arg_utils import AsyncEngineArgs
+        from arctic_inference.vllm.args import ArcticAsyncEngineArgs
 
         # invariance setup
         #print(f"{os.environ.get('VLLM_BATCH_INVARIANT')=}")
