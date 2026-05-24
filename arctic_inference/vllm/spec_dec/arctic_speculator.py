@@ -347,6 +347,7 @@ class ArcticMLPSpeculator(nn.Module, SpeculatorTPInit):
             else:
                 next_tokens_tensors[head_index].copy_(last_tokens)
 
+    @torch._dynamo.disable
     def generate_proposals(
         self,
         input_ids: torch.Tensor,
@@ -381,6 +382,14 @@ class ArcticMLPSpeculator(nn.Module, SpeculatorTPInit):
 
             if g is None:
                 device = torch.cuda.current_device()
+                self.generate_token_ids(
+                    padded_size,
+                    num_predict_tokens,
+                    static_last_tokens,
+                    static_hidden_states,
+                    static_next_tokens,
+                )
+                torch.cuda.synchronize()
                 with graph_capture(device=device) as capture_context:
                     g = torch.cuda.CUDAGraph()
                     with torch.cuda.graph(g, stream=capture_context.stream):
@@ -858,6 +867,7 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
 
         return next_tokens_tensors
 
+    @torch._dynamo.disable
     def generate_proposals(
         self,
         input_ids: torch.Tensor,
@@ -928,6 +938,24 @@ class ArcticLSTMSpeculator(nn.Module, SpeculatorTPInit):
                 for i in range(num_predict_tokens):
                     self.static_cuda_buffers["next_tokens"][i][:padded_size] = torch.zeros(
                         (padded_size, 1), dtype=torch.long, device=device)
+                if self.method == "sum_lstm":
+                    self.generate_token_ids(
+                        padded_size,
+                        num_predict_tokens,
+                        static_last_tokens,
+                        static_hidden_states,
+                        static_next_tokens,
+                        cell_states=static_cell_states,
+                    )
+                else:
+                    self.generate_token_ids(
+                        padded_size,
+                        num_predict_tokens,
+                        static_last_tokens,
+                        static_hidden_states,
+                        static_next_tokens,
+                    )
+                torch.cuda.synchronize()
                 with graph_capture(device=device) as capture_context:
                     g = torch.cuda.CUDAGraph()
                     with torch.cuda.graph(g, stream=capture_context.stream):

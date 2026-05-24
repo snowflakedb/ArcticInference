@@ -1,63 +1,95 @@
 import argparse
 import json
 import multiprocessing
+import os
+import signal
+import subprocess
+import sys
 import tempfile
 import time
 
 import pytest
 import requests
-import uvloop
 from vllm.entrypoints.openai.api_server import (
-    make_arg_parser, run_server, validate_parsed_serve_args)
+    make_arg_parser, validate_parsed_serve_args)
 from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 from .benchmark_utils import (ACCURACY_TASKS, PERFORMANCE_TASKS, VLLM_CONFIGS,
-                              JSON_MODE_TASKS, update_benchmark_summary)                  
+                              JSON_MODE_TASKS, update_benchmark_summary)
 
 CUSTOM_PORT = 8080
 
+
+def _build_server_cli(config: dict, port: int) -> list[str]:
+    """Build the CLI arguments for vllm.entrypoints.openai.api_server."""
+    cmd = [
+        sys.executable, "-m", "vllm.entrypoints.openai.api_server",
+        "--port", str(port),
+        "--no-enable-log-requests",
+    ]
+    for key, value in config.items():
+        flag = f"--{key.replace('_', '-')}"
+        if isinstance(value, bool):
+            cmd.append(flag if value else f"--no-{key.replace('_', '-')}")
+        elif isinstance(value, dict):
+            cmd.extend([flag, json.dumps(value)])
+        elif hasattr(value, 'model_dump'):
+            cmd.extend([flag, json.dumps(value.model_dump(mode='json'))])
+        else:
+            cmd.extend([flag, str(value)])
+    return cmd
+
+
 @pytest.fixture(scope="module", params=list(VLLM_CONFIGS.keys()))
 def vllm_server(request):
-    """
-    Fixture to start the OpenAI API server for testing.
-    """
+    """Start the OpenAI API server as an isolated subprocess."""
+    config = VLLM_CONFIGS[request.param]
+
     parser = FlexibleArgumentParser()
     parser = make_arg_parser(parser)
-
     args = parser.parse_args([])
-    args.disable_log_requests = True
-    args.disable_uvicorn_access_log = True
-
+    args.enable_log_requests = False
     setattr(args, 'port', CUSTOM_PORT)
-
-    for key, value in VLLM_CONFIGS[request.param].items():
+    for key, value in config.items():
         setattr(args, key, value)
-
     validate_parsed_serve_args(args)
 
-    def _run_process():
-        uvloop.run(run_server(args))
+    cmd = _build_server_cli(config, CUSTOM_PORT)
+    env = {**os.environ, "ARCTIC_INFERENCE_ENABLED": "1"}
+    server_log = tempfile.NamedTemporaryFile(
+        mode='w', prefix=f"vllm_{request.param}_", suffix=".log", delete=False)
+    process = subprocess.Popen(
+        cmd, env=env, stdout=server_log, stderr=subprocess.STDOUT,
+        preexec_fn=os.setsid,
+    )
 
-    # Start server process
-    process = multiprocessing.Process(target=_run_process)
-    process.start()
-
-    print("Waiting for server to start...")
+    print(f"Waiting for server to start (pid={process.pid})...")
+    print(f"Server cmd: {' '.join(cmd)}")
     timeout = 3600
     interval = 5
     start = time.time()
 
     health_check_url = f"http://localhost:{CUSTOM_PORT}/v1/models"
+    expected_model = config["model"]
 
     while True:
         try:
             r = requests.get(health_check_url)
             if r.status_code == 200:
-                break
+                models = r.json().get("data", [])
+                served = [m["id"] for m in models]
+                if expected_model in served:
+                    break
+                print(f"Server up but model not ready yet (served: {served})")
         except requests.exceptions.ConnectionError:
             pass
-        if not process.is_alive():
-            raise RuntimeError("Server process terminated unexpectedly")
+        if process.poll() is not None:
+            server_log.flush()
+            with open(server_log.name) as f:
+                stdout = f.read()
+            raise RuntimeError(
+                f"Server process terminated unexpectedly "
+                f"(exit={process.returncode}):\n{stdout[-4000:]}")
         if time.time() - start > timeout:
             raise TimeoutError(f"Server didn't start after {timeout} seconds")
         time.sleep(interval)
@@ -65,11 +97,22 @@ def vllm_server(request):
 
     yield request.param, args
 
-    # Stop server process
     print("Terminating server process")
-    if process.is_alive():
-        process.terminate()
-        process.join()
+    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+    try:
+        process.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        process.wait()
+    server_log.close()
+    print(f"Server log: {server_log.name}")
+
+    for _ in range(30):
+        try:
+            r = requests.get(f"http://localhost:{CUSTOM_PORT}/v1/models")
+            time.sleep(1)
+        except requests.exceptions.ConnectionError:
+            break
     print("Server process terminated")
 
 
@@ -125,8 +168,6 @@ def test_accuracy(request, vllm_server, task_name):
     q = multiprocessing.Queue()
 
     def _run_process():
-        # Run lm_eval in a separate process because it imports torch and
-        # initializes CUDA, which breaks process forking in later tests.
         try:
             from lm_eval import evaluator
             from lm_eval.utils import handle_non_serializable, make_table
@@ -149,11 +190,8 @@ def test_accuracy(request, vllm_server, task_name):
             with open(tmpfile, "w") as f:
                 json.dump(result, f, indent=4, default=handle_non_serializable)
         except Exception as exc:
-            # If an exception occurs, put it in the queue to be raised later
             q.put(exc)
         else:
-            # Send back the temporary file path instead of the result object
-            # since multiprocessing queue can hang on large objects.
             q.put(tmpfile)
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -213,7 +251,7 @@ def test_json_mode(request, vllm_server, task_name):
             result = json.load(f)
 
     result_data = result.get("results", {})
-    
+
     metrics = {
         name: key(result_data) if callable(key) else result_data.get(key, {}).get('score')
         for name, key in task.metrics.items()

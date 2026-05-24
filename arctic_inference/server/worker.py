@@ -9,6 +9,9 @@ from uuid import uuid4
 import ray
 import torch
 
+from arctic_inference.envs import arctic_inference_effective_enabled
+from arctic_inference.server.metrics import RingStatLogger, get_collector
+
 logger = logging.getLogger("arctic_inference.server")
 
 
@@ -120,11 +123,26 @@ class InferenceWorker:
         self.state = WorkerLifecycleState.UNINITIALIZED
 
     async def initialize(self, engine_kwargs: dict[str, Any], extra_env: dict[str, str] | None = None) -> None:
-        from vllm.v1.engine.async_llm import AsyncLLM
-        from arctic_inference.vllm.args import ArcticAsyncEngineArgs
-
         if extra_env:
             os.environ.update(extra_env)
+
+        # Force-load vLLM general_plugins before constructing AsyncEngineArgs.
+        # vLLM normally calls load_general_plugins() in
+        # AsyncEngineArgs.__post_init__, which runs *after* __init__ has
+        # already validated kwargs against the un-patched field set.  By
+        # pre-loading we let the arctic_inference plugin register
+        # ArcticAsyncEngineArgs first (forest_cascade_attn_configs,
+        # ulysses_sequence_parallel_size, etc.), so those keys flow through
+        # AsyncEngineArgs(**engine_kwargs) without raising
+        # "unexpected keyword argument".
+        import vllm.plugins
+        vllm.plugins.load_general_plugins()
+
+        if not arctic_inference_effective_enabled():
+            engine_kwargs.pop("forest_cascade_attn_configs", None)
+
+        from vllm.v1.engine.async_llm import AsyncLLM
+        from vllm.engine.arg_utils import AsyncEngineArgs
 
         # invariance setup
         #print(f"{os.environ.get('VLLM_BATCH_INVARIANT')=}")
@@ -151,7 +169,10 @@ class InferenceWorker:
         #vllm_config.model_config.seed=20
         #print(vllm_config)
 
-        self.llm = AsyncLLM.from_vllm_config(vllm_config)
+        self.llm = AsyncLLM.from_vllm_config(
+            vllm_config,
+            stat_loggers=[RingStatLogger],
+        )
         self.state = WorkerLifecycleState.READY
         logger.info("Worker %d initialized: model=%s", os.getpid(), engine_kwargs.get("model"))
 
@@ -177,10 +198,18 @@ class InferenceWorker:
             raise RuntimeError("Empty generation output")
 
         choice = final_output.outputs[0]
+        prompt_token_ids = final_output.prompt_token_ids or []
+        num_cached = getattr(final_output, "num_cached_tokens", None)
         result: dict[str, Any] = {
             "text": choice.text,
             "token_ids": list(choice.token_ids),
             "finish_reason": choice.finish_reason,
+            # Per-request metric fields. These are read by the scheduler to
+            # populate `RequestRecord` and are silently ignored by callers
+            # that don't care about metrics.
+            "prompt_len": len(prompt_token_ids),
+            "generation_len": len(choice.token_ids),
+            "prefix_cache_len": int(num_cached) if num_cached is not None else 0,
         }
 
         if final_output.prompt_logprobs is not None:
@@ -206,7 +235,32 @@ class InferenceWorker:
         return self.state.value
 
     def get_stats(self) -> dict[str, Any]:
-        return {"state": self.state.value, "pid": os.getpid()}
+        """Return the latest scheduler stats, plus liveness metadata.
+
+        Used by the per-replica concurrency-adjust loop in
+        :class:`arctic_inference.server.scheduler.Scheduler`. The keys
+        ``gpu_cache_usage`` / ``num_requests_running`` /
+        ``num_requests_waiting`` are read by the scheduler to drive the
+        ``utilization_based_concurrency`` heuristic.
+        """
+        latest = get_collector().latest()
+        return {
+            "state": self.state.value,
+            "pid": os.getpid(),
+            **latest,
+        }
+
+    def drain_metrics(self) -> dict[str, Any]:
+        """Return and clear the buffered per-step replica snapshots."""
+        return {
+            "pid": os.getpid(),
+            "snapshots": get_collector().drain_snapshots(),
+        }
+
+    def set_replica_id(self, replica_id: int) -> None:
+        """Tell this worker its position in the replica pool so that the
+        snapshots it emits carry a stable replica identifier."""
+        get_collector().set_replica_id(int(replica_id))
 
     def pid(self) -> int:
         return os.getpid()

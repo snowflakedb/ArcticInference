@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 import time
 from dataclasses import dataclass, field
@@ -9,7 +10,15 @@ from typing import Any, Callable
 
 import ray
 
+from arctic_inference.server.metrics import (
+    ConcurrencyHistory,
+    RequestRecord,
+    _BoundedDeque,
+)
+
 logger = logging.getLogger("arctic_inference.server")
+
+_LOG_AFFINITY = os.environ.get("ARCTIC_LOG_AFFINITY", "") == "1"
 
 
 @dataclass
@@ -20,6 +29,8 @@ class _Request:
     future: asyncio.Future
     worker_idx: int | None = None
     created_at: float = field(default_factory=time.time)
+    prefix_hash: int | None = None
+    strict: bool = False
 
 
 @dataclass
@@ -37,6 +48,13 @@ RoutingFn = Callable[[_Request, list[WorkerState]], int]
 ConcurrencyFn = Callable[[list[WorkerState]], list[int]]
 
 
+def _compute_prefix_hash(prompt: str | list[int]) -> int:
+    """Hash the full prompt for affinity routing."""
+    if isinstance(prompt, str):
+        return hash(prompt)
+    return hash(tuple(prompt))
+
+
 def least_loaded_routing(request: _Request, workers: list[WorkerState]) -> int:
     """Route to the worker with the lowest load ratio."""
     candidates = [i for i, ws in enumerate(workers) if ws.available and ws.concurrency_limit > 0]
@@ -46,6 +64,59 @@ def least_loaded_routing(request: _Request, workers: list[WorkerState]) -> int:
         candidates,
         key=lambda i: workers[i].active_requests / max(workers[i].concurrency_limit, 1),
     )
+
+
+_PREFIX_LOAD_THRESHOLD = 0.85
+
+
+def prefix_affinity_routing(request: _Request, workers: list[WorkerState]) -> int:
+    """Route requests with the same prefix hash to the same worker.
+
+    Falls back through a hash ring on overload and ultimately to
+    ``least_loaded_routing`` when all candidates exceed the load threshold.
+    """
+    candidates = [
+        i for i, ws in enumerate(workers)
+        if ws.available and ws.concurrency_limit > 0
+    ]
+    if not candidates:
+        return least_loaded_routing(request, workers)
+
+    if request.prefix_hash is None:
+        return least_loaded_routing(request, workers)
+
+    preferred = candidates[request.prefix_hash % len(candidates)]
+    ws = workers[preferred]
+    if ws.active_requests < ws.concurrency_limit * _PREFIX_LOAD_THRESHOLD:
+        return preferred
+
+    for offset in range(1, len(candidates)):
+        alt = candidates[(request.prefix_hash + offset) % len(candidates)]
+        ws_alt = workers[alt]
+        if ws_alt.active_requests < ws_alt.concurrency_limit * _PREFIX_LOAD_THRESHOLD:
+            return alt
+
+    return least_loaded_routing(request, workers)
+
+
+def strict_affinity_routing(request: _Request, workers: list[WorkerState]) -> int:
+    """Always route to the worker keyed by ``request.prefix_hash``, no ringing.
+
+    Unlike :func:`prefix_affinity_routing`, this never spills to alternate
+    workers when the preferred one is overloaded; the scheduler's outer loop
+    backs off and retries until capacity opens up on the pinned worker. Used
+    for multi-turn rollouts where cache reuse is more valuable than throughput
+    smoothing.
+    """
+    candidates = [
+        i for i, ws in enumerate(workers)
+        if ws.available and ws.concurrency_limit > 0
+    ]
+    if not candidates:
+        return least_loaded_routing(request, workers)
+    if request.prefix_hash is None:
+        return least_loaded_routing(request, workers)
+    return candidates[request.prefix_hash % len(candidates)]
 
 
 def utilization_based_concurrency(workers: list[WorkerState]) -> list[int]:
@@ -100,6 +171,8 @@ class Scheduler:
         concurrency_fn: ConcurrencyFn = utilization_based_concurrency,
         poll_interval: float = 0.5,
         adjust_interval: float = 0.5,
+        enable_prefix_hash: bool = False,
+        max_request_records: int = 100_000,
     ) -> None:
         if not workers:
             raise ValueError("Scheduler requires at least one worker")
@@ -110,6 +183,7 @@ class Scheduler:
         ]
         self._routing_fn = routing_fn
         self._concurrency_fn = concurrency_fn
+        self._enable_prefix_hash = enable_prefix_hash
         self._poll_interval = poll_interval
         self._adjust_interval = adjust_interval
         self._next_id = 0
@@ -119,11 +193,49 @@ class Scheduler:
         self._adjust_task: asyncio.Task | None = None
         self._inflight_tasks: dict[int, set] = {i: set() for i in range(len(workers))}
 
+        # Per-request metric ring (drained by `drain_metrics`).
+        self._request_records: _BoundedDeque = _BoundedDeque(max_request_records)
+        # Per-replica `concurrency_limit` history; used to back-fill
+        # `max_concurrency` on per-step worker snapshots when draining.
+        self._concurrency_history: list[ConcurrencyHistory] = [
+            ConcurrencyHistory() for _ in workers
+        ]
+        # Seed the history so the first drain has something to look up.
+        for h, ws in zip(self._concurrency_history, self._workers):
+            h.record(ws.concurrency_limit)
+        # Best-effort: tell each worker its index so snapshots are
+        # tagged with the right replica_id.
+        for idx, w in enumerate(workers):
+            try:
+                w.set_replica_id.remote(idx)
+            except Exception:
+                pass
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def submit(self, prompt: str | list[int], sampling_params: dict[str, Any]) -> asyncio.Future:
+    def submit(
+        self,
+        prompt: str | list[int],
+        sampling_params: dict[str, Any],
+        routing_key: str | None = None,
+        strict: bool = False,
+    ) -> asyncio.Future:
+        """Submit a single prompt for generation.
+
+        Args:
+            routing_key: Optional opaque string used as the affinity key for
+                routing. When provided, ``hash(routing_key)`` replaces the
+                prompt hash as the request's ``prefix_hash``, so any two
+                requests sharing the key land on the same worker. Intended
+                for multi-turn rollouts where turn N+1 must hit the same
+                replica as turn N to reuse its KV cache.
+            strict: When True, use :func:`strict_affinity_routing` instead of
+                the pool's configured routing function, pinning the request
+                to the keyed worker even under load. Ignored if no
+                ``routing_key`` (and no prefix hash) is available.
+        """
         if self._stopped:
             raise RuntimeError("Scheduler is stopped")
         if self._paused:
@@ -133,11 +245,19 @@ class Scheduler:
 
         loop = asyncio.get_running_loop()
         future = loop.create_future()
+        if routing_key is not None:
+            prefix_hash: int | None = hash(routing_key)
+        elif self._enable_prefix_hash:
+            prefix_hash = _compute_prefix_hash(prompt)
+        else:
+            prefix_hash = None
         req = _Request(
             id=self._next_id,
             prompt=prompt,
             sampling_params=sampling_params,
             future=future,
+            prefix_hash=prefix_hash,
+            strict=strict,
         )
         self._next_id += 1
         asyncio.create_task(self._process_request(req))
@@ -147,8 +267,22 @@ class Scheduler:
         self,
         prompts: list[str | list[int]],
         sampling_params: dict[str, Any],
+        routing_key: str | list[str | None] | None = None,
+        strict: bool = False,
     ) -> list[dict[str, Any]]:
-        futures = [self.submit(p, sampling_params) for p in prompts]
+        if isinstance(routing_key, list):
+            if len(routing_key) != len(prompts):
+                raise ValueError(
+                    f"routing_key list length ({len(routing_key)}) must match "
+                    f"prompts length ({len(prompts)})"
+                )
+            keys: list[str | None] = list(routing_key)
+        else:
+            keys = [routing_key] * len(prompts)
+        futures = [
+            self.submit(p, sampling_params, routing_key=k, strict=strict)
+            for p, k in zip(prompts, keys)
+        ]
         return list(await asyncio.gather(*futures))
 
     async def drain(self) -> None:
@@ -195,6 +329,10 @@ class Scheduler:
     def update_worker_handle(self, idx: int, new_handle: ray.actor.ActorHandle) -> None:
         self._check_idx(idx)
         self._workers[idx].handle = new_handle
+        try:
+            new_handle.set_replica_id.remote(idx)
+        except Exception:
+            pass
 
     def cancel_worker_inflight(self, idx: int) -> int:
         """Cancel all in-flight tasks for worker *idx*. Returns count cancelled."""
@@ -210,8 +348,16 @@ class Scheduler:
     def add_worker(self, handle: ray.actor.ActorHandle, concurrency_limit: int = 64) -> None:
         """Add a new worker to the scheduler."""
         idx = len(self._workers)
-        self._workers.append(WorkerState(handle=handle, concurrency_limit=max(1, concurrency_limit)))
+        new_limit = max(1, concurrency_limit)
+        self._workers.append(WorkerState(handle=handle, concurrency_limit=new_limit))
         self._inflight_tasks[idx] = set()
+        history = ConcurrencyHistory()
+        history.record(new_limit)
+        self._concurrency_history.append(history)
+        try:
+            handle.set_replica_id.remote(idx)
+        except Exception:
+            pass
 
     def remove_last_worker(self) -> None:
         """Remove the last worker. Raises if no workers remain."""
@@ -223,6 +369,8 @@ class Scheduler:
                 task.cancel()
         self._inflight_tasks.pop(idx, None)
         self._workers.pop()
+        if self._concurrency_history:
+            self._concurrency_history.pop()
 
     async def shutdown(self) -> None:
         self._stopped = True
@@ -253,14 +401,35 @@ class Scheduler:
         ws: WorkerState | None = None
         current_task = asyncio.current_task()
         tracked_worker_idx: int | None = None
+        submitted_time: float = 0.0
+        result: Any = None
+
+        routing_fn = (
+            strict_affinity_routing
+            if req.strict and req.prefix_hash is not None
+            else self._routing_fn
+        )
 
         try:
             while not self._stopped:
-                idx = self._routing_fn(req, self._workers)
+                idx = routing_fn(req, self._workers)
                 ws = self._workers[idx]
                 if ws.active_requests < ws.concurrency_limit:
                     ws.active_requests += 1
                     req.worker_idx = idx
+                    submitted_time = time.time()
+                    if _LOG_AFFINITY:
+                        # Opt-in audit trail: every dispatched request emits
+                        # one line so we can grep '(prefix_hash, worker)' and
+                        # confirm same-keyed requests land on the same worker.
+                        # Emit at WARNING since the env var is the gate and
+                        # the default Python logger threshold drops INFO.
+                        logger.warning(
+                            "AFFINITY req=%d worker=%d prefix_hash=%s "
+                            "strict=%s routing_fn=%s",
+                            req.id, idx, req.prefix_hash,
+                            req.strict, routing_fn.__name__,
+                        )
                     break
                 await asyncio.sleep(0.005)
             else:
@@ -291,6 +460,24 @@ class Scheduler:
                 self._inflight_tasks[tracked_worker_idx].discard(current_task)
             if ws is not None:
                 ws.active_requests = max(0, ws.active_requests - 1)
+            # Record the per-request metric — only if we successfully
+            # submitted to a worker. Skipping cancelled / failed requests
+            # keeps the buffer clean for downstream analysis.
+            if (
+                tracked_worker_idx is not None
+                and submitted_time > 0.0
+                and isinstance(result, dict)
+            ):
+                self._request_records.push(RequestRecord(
+                    request_id=req.id,
+                    replica_id=tracked_worker_idx,
+                    arrival_time=req.created_at,
+                    submitted_time=submitted_time,
+                    completion_time=time.time(),
+                    prompt_len=int(result.get("prompt_len", 0) or 0),
+                    generation_len=int(result.get("generation_len", 0) or 0),
+                    prefix_cache_len=int(result.get("prefix_cache_len", 0) or 0),
+                ))
 
     async def _utilization_poll_loop(self) -> None:
         while not self._stopped:
@@ -312,7 +499,69 @@ class Scheduler:
             await asyncio.sleep(self._adjust_interval)
             try:
                 new_limits = self._concurrency_fn(self._workers)
-                for ws, limit in zip(self._workers, new_limits):
-                    ws.concurrency_limit = max(1, int(limit))
+                for idx, (ws, limit) in enumerate(zip(self._workers, new_limits)):
+                    new_limit = max(1, int(limit))
+                    ws.concurrency_limit = new_limit
+                    if idx < len(self._concurrency_history):
+                        self._concurrency_history[idx].record(new_limit)
             except Exception as e:
                 logger.error(f"Concurrency adjustment failed: {e}")
+
+    # ------------------------------------------------------------------
+    # Metrics
+    # ------------------------------------------------------------------
+
+    async def drain_metrics(self) -> dict[str, Any]:
+        """Drain per-replica snapshots and per-request records.
+
+        Returns a dict with two top-level keys:
+
+          * ``requests``: list of :class:`RequestRecord` dicts (one per
+            generation call completed since the last drain).
+          * ``replicas``: list of ``{replica_id, snapshots: [...]}`` — each
+            snapshot is a :class:`ReplicaSnapshot` dict with
+            ``max_concurrency`` back-filled from the scheduler's per-replica
+            concurrency-limit history.
+
+        Calling this is idempotent and does not block scheduling.
+        """
+        # Pull snapshots from each worker. Drains the worker-side ring as a
+        # side effect.
+        replicas_payload: list[dict[str, Any]] = []
+        # Resolve handles to current ones so worker-restart doesn't strand
+        # us holding a dead actor.
+        worker_handles = [(idx, ws.handle) for idx, ws in enumerate(self._workers)]
+        results = await asyncio.gather(
+            *[h.drain_metrics.remote() for _, h in worker_handles],
+            return_exceptions=True,
+        )
+        for (idx, _), res in zip(worker_handles, results):
+            if isinstance(res, Exception):
+                replicas_payload.append({
+                    "replica_id": idx,
+                    "snapshots": [],
+                    "error": str(res),
+                })
+                continue
+            snaps = res.get("snapshots", []) if isinstance(res, dict) else []
+            history = (
+                self._concurrency_history[idx]
+                if idx < len(self._concurrency_history)
+                else None
+            )
+            for s in snaps:
+                # Worker doesn't know its own concurrency_limit; back-fill
+                # from the scheduler's per-replica history.
+                s["replica_id"] = idx
+                if history is not None:
+                    s["max_concurrency"] = history.at(s.get("timestamp", 0.0))
+            replicas_payload.append({
+                "replica_id": idx,
+                "snapshots": snaps,
+            })
+
+        requests_payload = [r.to_dict() for r in self._request_records.drain()]
+        return {
+            "requests": requests_payload,
+            "replicas": replicas_payload,
+        }

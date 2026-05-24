@@ -14,6 +14,7 @@ def _init_distributed():
     if not torch.distributed.is_initialized():
         torch.distributed.init_process_group(
             backend="nccl", world_size=1, rank=0)
+    from vllm.config import VllmConfig, set_current_vllm_config
     from vllm.distributed.parallel_state import (
         init_distributed_environment,
         ensure_model_parallel_initialized,
@@ -22,10 +23,11 @@ def _init_distributed():
         world_size=1, rank=0, local_rank=0,
         distributed_init_method="env://",
     )
-    ensure_model_parallel_initialized(
-        tensor_model_parallel_size=1,
-        pipeline_model_parallel_size=1,
-    )
+    with set_current_vllm_config(VllmConfig()):
+        ensure_model_parallel_initialized(
+            tensor_model_parallel_size=1,
+            pipeline_model_parallel_size=1,
+        )
 
 
 def test():

@@ -6,6 +6,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from arctic_inference.envs import arctic_inference_effective_enabled
+
 _QUANT_SUFFIXES = re.compile(r"-(FP8|NVFP4|FP4)$", re.IGNORECASE)
 
 
@@ -37,12 +39,27 @@ class ModelConfig(BaseModel):
     enable_expert_parallel: bool = False
     trust_remote_code: bool = True
 
+    # Forest Cascade Attention: groups concurrent requests by shared KV-cache
+    # prefix and runs one prefix FA call + per-request suffix FA + log-sum-exp
+    # merge, eliminating redundant KV reads when many requests share long
+    # prompt prefixes (e.g. multi-turn rollouts pinned to the same replica
+    # via routing_key).  Default-on with `'{}'` (all backend defaults); FCA
+    # transparently falls back to standard FlashAttention when batch
+    # conditions don't apply (see attention/README.md).  Set to ``None`` to
+    # disable.  Only passed to vLLM when ARCTIC_INFERENCE_ENABLED=1 in the
+    # process or ``extra_env`` (otherwise omitted so vanilla AsyncEngineArgs
+    # does not error).
+    forest_cascade_attn_configs: str | None = "{}"
+
     extra_engine_kwargs: dict[str, Any] = Field(default_factory=dict, exclude=True)
     extra_env: dict[str, str] = Field(default_factory=dict, exclude=True)
+    ray_num_gpus: float | None = Field(default=None, exclude=True)
 
     def to_engine_kwargs(self) -> dict[str, Any]:
         kwargs = {k: v for k, v in self.model_dump().items() if v is not None}
         kwargs.update(self.extra_engine_kwargs)
+        if not arctic_inference_effective_enabled(self.extra_env):
+            kwargs.pop("forest_cascade_attn_configs", None)
         return kwargs
 
     @classmethod

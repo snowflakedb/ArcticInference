@@ -40,6 +40,9 @@ class DummyWorker:
             "text": text,
             "token_ids": token_ids,
             "finish_reason": "stop",
+            "prompt_len": num_prompt_tokens,
+            "generation_len": len(token_ids),
+            "prefix_cache_len": 0,
         }
 
         top_k = sampling_params.get("prompt_logprobs")
@@ -63,7 +66,19 @@ class DummyWorker:
         return self.state.value
 
     def get_stats(self) -> dict[str, Any]:
-        return {"state": self.state.value, "pid": os.getpid()}
+        return {
+            "state": self.state.value,
+            "pid": os.getpid(),
+            "gpu_cache_usage": 0.0,
+            "num_requests_running": 0,
+            "num_requests_waiting": 0,
+        }
+
+    def drain_metrics(self) -> dict[str, Any]:
+        return {"pid": os.getpid(), "snapshots": []}
+
+    def set_replica_id(self, replica_id: int) -> None:
+        return None
 
     def pid(self) -> int:
         return os.getpid()

@@ -37,6 +37,12 @@ class ForestFlashAttentionBackend(FlashAttentionBackend):
     this is a drop-in replacement even when forest cascade is not enabled.
     """
 
+    # FCA impl performs reshape_and_cache_flash inline in forward(),
+    # matching the v0.14 behavior.  In v0.18 the default changed to
+    # False (split into do_kv_cache_update), so we explicitly opt-in
+    # to the old path here.
+    forward_includes_kv_cache_update: bool = True
+
     @staticmethod
     def get_impl_cls():
         from .flash_attn_forest_cascade import FlashAttentionImpl

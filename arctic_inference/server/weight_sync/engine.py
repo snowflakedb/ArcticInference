@@ -66,6 +66,16 @@ class NCCLEngine:
             torch.zeros(bucket_size, dtype=torch.uint8, device=device),
             torch.zeros(bucket_size, dtype=torch.uint8, device=device),
         ]
+        if self._data_bufs[0].numel() != bucket_size:
+            logger.warning(
+                "NCCLEngine bucket buffer allocated %d bytes but requested %d",
+                self._data_bufs[0].numel(), bucket_size,
+            )
+        else:
+            logger.info(
+                "NCCLEngine port=%d bucket_size=%d (%.1f MB)",
+                master_port, bucket_size, bucket_size / (1024 * 1024),
+            )
         self._send_events = [torch.cuda.Event() for _ in range(2)]
         self._op_count = 0
 
@@ -206,9 +216,13 @@ class NCCLEngine:
         ``is_last=False``) then the raw bytes.  After the last weight,
         send a sentinel meta with ``is_last=True`` and no tensor entries.
 
-        This consumes the *weights* iterable lazily, so FSDP generators
-        that call ``full_tensor()`` per parameter work without holding
-        more than one full parameter in GPU memory at a time.
+        This consumes the *weights* iterable lazily, so per-param
+        gather generators (e.g. FSDP ``full_tensor()`` or DeepSpeed
+        ZeRO-3 ``GatheredParameters``) can yield one gathered tensor
+        at a time -- the caller sends it, issues ``nccl_stream.synchronize()``
+        before requesting the next item, and the generator resharding
+        happens between yields.  Peak extra GPU memory is one full
+        parameter.
         """
         assert self.is_sender, "Only rank 0 can send"
 
@@ -218,17 +232,7 @@ class NCCLEngine:
 
         for name, weight in weights:
             w = weight.contiguous()
-            w_bytes = w.view(-1).view(torch.uint8)
-            if w_bytes.device != self.device:
-                w_bytes = w_bytes.to(self.device, non_blocking=True)
-                torch.cuda.current_stream(self.device).synchronize()
-
-            entry = {"name": name, "shape": list(w.shape),
-                     "dtype": str(w.dtype), "nbytes": w.nbytes}
-            self._write_meta(0, [entry], is_last=False)
-            self._send_buf(self._meta_bufs[0], nccl_s)
-            self._send_buf(w_bytes, nccl_s)
-            nccl_s.synchronize()
+            self._send_one_direct(name, w, nccl_s)
             n_params += 1
 
         self._write_meta(0, [], is_last=True)
@@ -274,20 +278,60 @@ class NCCLEngine:
             for entry in metadata["tensors"]:
                 name = entry["name"]
                 nbytes = entry["nbytes"]
+                sender_shape = torch.Size(entry["shape"])
+                sender_dtype = getattr(
+                    torch, entry["dtype"].replace("torch.", "")
+                )
                 view = param_views.get(name)
                 if view is not None and view.nbytes == nbytes:
                     recv_buf = view.view(-1).view(torch.uint8)
                     self._recv_buf(recv_buf, nccl_s)
                 else:
-                    scratch = self._data_bufs[0][:nbytes]
+                    # Fall back to a scratch buffer.  The permanent
+                    # ``_data_bufs[0]`` is sized for bucket mode; for
+                    # oversized tensors (rare: large embeddings with
+                    # padded receiver views) allocate on demand instead
+                    # of silently slicing short.
+                    if nbytes <= self._data_bufs[0].numel():
+                        scratch = self._data_bufs[0][:nbytes]
+                    else:
+                        logger.warning(
+                            "receive_weights_direct: %s nbytes=%d exceeds "
+                            "bucket_size=%d; allocating temp scratch",
+                            name, nbytes, self._data_bufs[0].numel(),
+                        )
+                        scratch = torch.empty(
+                            nbytes, dtype=torch.uint8, device=self.device,
+                        )
                     self._recv_buf(scratch, nccl_s)
                     if view is not None:
                         nccl_s.synchronize()
-                        view.copy_(
-                            scratch.view(
-                                getattr(torch, entry["dtype"].replace("torch.", ""))
-                            ).reshape(torch.Size(entry["shape"]))
-                        )
+                        sender_tensor = scratch.view(
+                            sender_dtype
+                        ).reshape(sender_shape)
+                        if view.shape == sender_shape:
+                            view.copy_(sender_tensor)
+                        elif (
+                            view.ndim == sender_tensor.ndim
+                            and all(
+                                vs >= ss for vs, ss in zip(
+                                    view.shape, sender_tensor.shape
+                                )
+                            )
+                        ):
+                            # Receiver view is padded (e.g. vLLM's
+                            # padded vocab).  Copy sender into the
+                            # leading slice and zero any trailing pad.
+                            slicer = tuple(
+                                slice(0, s) for s in sender_tensor.shape
+                            )
+                            view[slicer].copy_(sender_tensor)
+                        else:
+                            raise RuntimeError(
+                                f"{name}: view.shape={tuple(view.shape)} "
+                                f"incompatible with sender.shape="
+                                f"{tuple(sender_tensor.shape)}"
+                            )
                     else:
                         orphan += 1
                 loaded += 1
@@ -303,6 +347,45 @@ class NCCLEngine:
     # ------------------------------------------------------------------
     # Low-level helpers
     # ------------------------------------------------------------------
+
+    def _send_one_direct(
+        self, name: str, w: torch.Tensor, nccl_s: torch.cuda.Stream,
+    ) -> None:
+        """Send a single (already-full) tensor via direct-mode protocol.
+
+        Issues the meta + data NCCL sends and synchronizes ``nccl_s``
+        before returning, so callers can safely let ``w``'s storage be
+        freed (e.g. ZeRO-3 reshard on ``GatheredParameters`` exit).
+        """
+        w_bytes = w.view(-1).view(torch.uint8)
+        if w_bytes.device != self.device:
+            w_bytes = w_bytes.to(self.device, non_blocking=True)
+            torch.cuda.current_stream(self.device).synchronize()
+
+        # Shape-vs-nbytes sanity check: under DeepSpeed ZeRO-3 it's
+        # possible (seen in practice) for ``p.data`` inside
+        # ``GatheredParameters`` to be a partially-gathered / padded
+        # buffer whose byte length disagrees with the logical shape.
+        # Catch that early with a clear error instead of letting the
+        # receiver blow up on a mysterious reshape failure.
+        expected_nbytes = w.numel() * w.element_size()
+        if w_bytes.numel() != expected_nbytes:
+            raise RuntimeError(
+                f"{name}: w.shape={tuple(w.shape)} implies "
+                f"nbytes={expected_nbytes} but tensor has "
+                f"{w_bytes.numel()} bytes (tensor not fully gathered?)"
+            )
+
+        entry = {
+            "name": name,
+            "shape": list(w.shape),
+            "dtype": str(w.dtype),
+            "nbytes": w_bytes.numel(),
+        }
+        self._write_meta(0, [entry], is_last=False)
+        self._send_buf(self._meta_bufs[0], nccl_s)
+        self._send_buf(w_bytes, nccl_s)
+        nccl_s.synchronize()
 
     def _send_pair(self, idx: int, stream: torch.cuda.Stream) -> None:
         self._op_count += 1

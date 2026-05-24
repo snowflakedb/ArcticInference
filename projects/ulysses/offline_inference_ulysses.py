@@ -19,31 +19,32 @@ from vllm import LLM, SamplingParams
 
 vllm.plugins.load_general_plugins()
 
-llm = LLM(
-    model="meta-llama/Llama-3.1-8B-Instruct",
-    tensor_parallel_size=1,
-    ulysses_sequence_parallel_size=4,
-)
+if __name__ == "__main__":
+    llm = LLM(
+        model="RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic",
+        tensor_parallel_size=1,
+        ulysses_sequence_parallel_size=4,
+    )
 
-print("=" * 80)
+    print("=" * 80)
 
-conversation = [
-    {
-        "role": "user",
-        "content": "Hello"
-    },
-    {
-        "role": "assistant",
-        "content": "Hello! How can I assist you today?"
-    },
-    {
-        "role": "user",
-        "content": "Write an essay about the importance of higher education.",
-    },
-]
+    conversation = [
+        {
+            "role": "user",
+            "content": "Hello"
+        },
+        {
+            "role": "assistant",
+            "content": "Hello! How can I assist you today?"
+        },
+        {
+            "role": "user",
+            "content": "Write an essay about the importance of higher education.",
+        },
+    ]
 
-sampling_params = SamplingParams(temperature=0.1, max_tokens=800)
+    sampling_params = SamplingParams(temperature=0.1, max_tokens=800)
 
-outputs = llm.chat(conversation, sampling_params=sampling_params)
+    outputs = llm.chat(conversation, sampling_params=sampling_params)
 
-print(outputs[0].outputs[0].text)
+    print(outputs[0].outputs[0].text)

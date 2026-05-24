@@ -69,7 +69,13 @@ class Driver:
             target = plan[mid]
             if target > p.num_replicas:
                 logger.info(f"Scaling up {mid!r}: {p.num_replicas} -> {target} replicas (background)")
-                asyncio.ensure_future(p.scale_up(target))
+                # Cancel any earlier in-flight scale before starting a new one,
+                # and register the new task on the pool so pool.shutdown() can
+                # cancel it cleanly if the model is torn down before scaling
+                # finishes.
+                if p._scale_task and not p._scale_task.done():
+                    p._scale_task.cancel()
+                p._scale_task = asyncio.ensure_future(p.scale_up(target))
 
     def _get_pool(self, model_id: str | None) -> ReplicaPool:
         if model_id is None:
@@ -96,21 +102,23 @@ class Driver:
         if model_id in self._pools:
             raise ValueError(f"model_id {model_id!r} already loaded")
 
-        tp_sizes = {mid: p.tp_size for mid, p in self._pools.items()}
-        tp_sizes[model_id] = config.tensor_parallel_size
-        plan = self._compute_even_share(tp_sizes)
+        if num_replicas is None:
+            tp_sizes = {mid: p.tp_size for mid, p in self._pools.items()}
+            tp_sizes[model_id] = config.tensor_parallel_size
+            plan = self._compute_even_share(tp_sizes)
 
-        for mid, pool in self._pools.items():
-            target = plan[mid]
-            if target < pool.num_replicas:
-                logger.info(f"Rebalancing {mid!r}: {pool.num_replicas} -> {target} replicas")
-                await pool.scale_down(target)
+            for mid, pool in self._pools.items():
+                target = plan[mid]
+                if target < pool.num_replicas:
+                    logger.info(f"Rebalancing {mid!r}: {pool.num_replicas} -> {target} replicas")
+                    await pool.scale_down(target)
 
-        new_replicas = plan[model_id]
+            num_replicas = plan[model_id]
+
         pool = ReplicaPool(worker_cls=self._worker_cls)
-        await pool.initialize(config, num_replicas=new_replicas)
+        await pool.initialize(config, num_replicas=num_replicas)
         self._pools[model_id] = pool
-        return new_replicas
+        return num_replicas
 
     async def shutdown(self, model_id: str | None = None) -> None:
         if model_id is not None:
@@ -133,8 +141,20 @@ class Driver:
         prompts: str | list[int] | list[str | list[int]],
         sampling_params: dict[str, Any] | None = None,
         model_id: str | None = None,
+        routing_key: str | list[str | None] | None = None,
+        strict: bool = False,
     ) -> list[dict[str, Any]]:
-        return await self._get_pool(model_id).generate(prompts, sampling_params)
+        """Route a /generate to the pool for *model_id*.
+
+        ``routing_key`` and ``strict`` are forwarded to
+        :meth:`ReplicaPool.generate` so multi-turn rollouts can pin
+        same-keyed prompts to one replica for KV cache reuse. See the
+        scheduler module for the full affinity contract.
+        """
+        return await self._get_pool(model_id).generate(
+            prompts, sampling_params,
+            routing_key=routing_key, strict=strict,
+        )
 
     # ------------------------------------------------------------------
     # Weight sync  (route by model_id, delegate to pool)
@@ -197,6 +217,23 @@ class Driver:
             "available_gpus": self._available_gpus,
             "models": models,
         }
+
+    # ------------------------------------------------------------------
+    # Metrics
+    # ------------------------------------------------------------------
+
+    async def drain_metrics(
+        self, model_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Drain metrics for one model (when ``model_id`` is set) or all."""
+        if model_id is not None:
+            payload = await self._get_pool(model_id).drain_metrics()
+            payload["model_id"] = model_id
+            return payload
+        models: dict[str, Any] = {}
+        for mid, pool in self._pools.items():
+            models[mid] = await pool.drain_metrics()
+        return {"models": models}
 
 
 # Swap backend and reuse the app — no endpoint duplication.

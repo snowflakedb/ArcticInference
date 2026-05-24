@@ -99,7 +99,11 @@ class WeightSender:
     def connect(self) -> None:
         """Create NCCL connections to all assigned targets.
 
-        Blocks until each receiver joins the rendezvous.
+        Blocks until each receiver joins the rendezvous.  When the
+        group has no targets (can happen under ZeRO-3 when T > R*TP),
+        no NCCL rendezvous is performed but ``self._engines`` is still
+        initialized to an empty list so :meth:`send` knows the group
+        is "participate only".
         """
         if self._engines is not None:
             return
@@ -144,6 +148,14 @@ class WeightSender:
         Returns
         -------
         dict with ``status``, ``elapsed``, ``max_target_elapsed``, etc.
+
+        Notes
+        -----
+        When the group has no targets (ZeRO-3 with T > R*TP), this
+        still consumes the ``weights`` iterable once so that any
+        ``GatheredParameters`` collectives owned by the caller run in
+        lockstep with the actual sender ranks.  No NCCL ops are
+        performed in that case.
         """
         if self._engines is None:
             self.connect()
@@ -154,6 +166,25 @@ class WeightSender:
         max_elapsed = 0.0
         n_targets = len(self._engines)
         results_per_target: list[dict] = []
+
+        if n_targets == 0:
+            n_params = 0
+            for _ in weights:
+                n_params += 1
+            total = time.time() - start
+            logger.info(
+                "WeightSender group=%d participate_only: %d params iterated, %.2fs",
+                self._group.group_id, n_params, total,
+            )
+            return {
+                "status": "participate_only",
+                "group_id": self._group.group_id,
+                "n_targets": 0,
+                "params_iterated": n_params,
+                "max_target_elapsed": 0.0,
+                "elapsed": total,
+                "targets": [],
+            }
 
         for i, eng in enumerate(self._engines):
             weight_iter = _replayable_iter(weights) if i > 0 else weights

@@ -16,17 +16,13 @@
 import os
 
 import torch
-import vllm
-from vllm.config import set_current_vllm_config
 from vllm.logger import init_logger
 from vllm.v1.core.sched.async_scheduler import AsyncScheduler
 from vllm.v1.core.sched.scheduler import Scheduler
-from vllm.v1.engine import EngineCoreOutputs
-from vllm.v1.engine.core import EngineCoreProc
-from vllm.v1.engine.core_client import InprocClient
 from vllm.v1.worker.gpu_worker import Worker
 from vllm.v1.worker.worker_base import WorkerBase
 
+import arctic_inference.envs as envs
 from arctic_inference.patching import ArcticPatch
 from arctic_inference.utils import get_compatible_vllm_version
 from arctic_inference.vllm.args import EngineArgsPatch, AsyncEngineArgsPatch
@@ -34,7 +30,9 @@ from arctic_inference.vllm.config import (ParallelConfigPatch,
                                           SpeculativeConfigPatch,
                                           VllmConfigPatch,
                                           MLPSpeculatorConfigPatch)
-from arctic_inference.vllm.stats import (SpecDecodingStatsPatch, 
+from arctic_inference.vllm.fp32_lm_head import (
+    apply_fp32_lm_head_patches, set_fp32_lm_head_enabled)
+from arctic_inference.vllm.stats import (SpecDecodingStatsPatch,
                                          SpecDecodingLoggingPatch)
 from arctic_inference.vllm.structured_output import XgrammarBackendPatch
 from arctic_inference.vllm.attention import apply_forest_cascade_patches
@@ -59,12 +57,10 @@ class AsyncSchedulerPatch(ArcticPatch[AsyncScheduler]):
     _orig_update_after_schedule = AsyncScheduler._update_after_schedule
 
     def _update_after_schedule(self, scheduler_output):
-        # Call the base Scheduler._update_after_schedule (NOT the
-        # AsyncScheduler override which we are replacing).
+        # Call Scheduler._update_after_schedule (the grandparent),
+        # skipping the base AsyncScheduler override which we are replacing.
         Scheduler._update_after_schedule(self, scheduler_output)
 
-        has_structured_output_requests = False
-        pending_structured_output_tokens = False
         spec_decode_tokens = scheduler_output.scheduled_spec_decode_tokens
 
         # Respect disable_by_batch_size: only add spec token placeholders
@@ -77,54 +73,43 @@ class AsyncSchedulerPatch(ArcticPatch[AsyncScheduler]):
         decode_with_spec_count = 0
         for req_id in scheduler_output.num_scheduled_tokens:
             request = self.requests[req_id]
-            has_structured_output_requests |= request.use_structured_output
-            pending_structured_output_tokens |= (
+            if request.is_prefill_chunk:
+                continue
+
+            scheduler_output.pending_structured_output_tokens |= (
                 request.use_structured_output
                 and request.num_output_placeholders > 0
             )
+
             cur_num_spec_tokens = len(spec_decode_tokens.get(req_id, ()))
             # Store the originally-scheduled spec count so that
             # update_from_output can compensate for worker-side trimming.
             request._scheduled_spec_count = cur_num_spec_tokens
 
-            if (
-                request.num_computed_tokens
-                == request.num_tokens
-                + request.num_output_placeholders
-                + cur_num_spec_tokens
-            ):
-                # The request will generate a new token + spec tokens.
-                request.num_output_placeholders += 1 + cur_num_spec_tokens
+            request.num_output_placeholders += 1 + cur_num_spec_tokens
 
-                # Check if beyond the disable_by_batch_size limit.
-                decode_with_spec_count += 1
-                if disable_bs and decode_with_spec_count > disable_bs:
-                    # Beyond limit: no spec token placeholders.
-                    request.spec_token_ids = []
-                    continue
+            decode_with_spec_count += 1
+            if disable_bs and decode_with_spec_count > disable_bs:
+                request.spec_token_ids = []
+                continue
 
-                # Use previous step's actual draft length to size
-                # placeholders.  When suffix had a good match (actual
-                # > n_predict), allocate the full width so the next
-                # step can verify all suffix tokens.  When suffix
-                # didn't match (actual = n_predict from arctic),
-                # allocate only that many to avoid wasting attention
-                # compute on zero-padded positions.
-                # Cold start: allocate full width (generous).
-                prev_actual = getattr(
-                    request, '_prev_actual_draft_len', None)
-                if prev_actual is not None:
-                    num_placeholders = min(
-                        max(prev_actual, 1), self.num_spec_tokens)
-                else:
-                    num_placeholders = self.num_spec_tokens
+            # Use previous step's actual draft length to size
+            # placeholders.  When suffix had a good match (actual
+            # > n_predict), allocate the full width so the next
+            # step can verify all suffix tokens.  When suffix
+            # didn't match (actual = n_predict from arctic),
+            # allocate only that many to avoid wasting attention
+            # compute on zero-padded positions.
+            # Cold start: allocate full width (generous).
+            prev_actual = getattr(
+                request, '_prev_actual_draft_len', None)
+            if prev_actual is not None:
+                num_placeholders = min(
+                    max(prev_actual, 1), self.num_spec_tokens)
+            else:
+                num_placeholders = self.num_spec_tokens
 
-                request.spec_token_ids = [-1] * num_placeholders
-
-        scheduler_output.has_structured_output_requests = (
-            has_structured_output_requests)
-        scheduler_output.pending_structured_output_tokens = (
-            pending_structured_output_tokens)
+            request.spec_token_ids = [-1] * num_placeholders
 
     def update_from_output(self, scheduler_output, model_runner_output):
         """Wrap Scheduler.update_from_output to store actual draft counts.
@@ -147,6 +132,8 @@ class AsyncSchedulerPatch(ArcticPatch[AsyncScheduler]):
            growth — when all drafted tokens are accepted, double the
            allocation so suffix decoding reaches full capacity in
            O(log n) steps instead of O(n).
+
+        In v0.18, ``update_from_output`` returns ``dict[int, EngineCoreOutputs]``.
         """
         sampled_token_ids = model_runner_output.sampled_token_ids
         req_id_to_index = model_runner_output.req_id_to_index
@@ -231,19 +218,6 @@ class AsyncSchedulerPatch(ArcticPatch[AsyncScheduler]):
         return result
 
 
-class EngineCoreProcPatch(ArcticPatch[EngineCoreProc]):
-
-    _orig_run_engine_core = EngineCoreProc.run_engine_core
-
-    @staticmethod
-    def run_engine_core(*args, **kwargs):
-        # When starting the API server, it will spawn a new process to run the
-        # EngineCore. We need to load the plugins in the new process before it
-        # initializes the Executor.
-        vllm.plugins.load_general_plugins()
-        return EngineCoreProcPatch._orig_run_engine_core(*args, **kwargs)
-
-
 class WorkerBasePatch(ArcticPatch[WorkerBase]):
 
     _orig_init = WorkerBase.__init__
@@ -264,11 +238,9 @@ class WorkerBasePatch(ArcticPatch[WorkerBase]):
 class WorkerPatch(ArcticPatch[Worker]):
     """Fix weights offloading for sleep mode and add drafter support.
 
-    load_model: The upstream ``load_model`` incorrectly chains two context
-    managers with ``and``, so the memory-pool context is never entered and
-    weights are not tracked for offloading.  This patch nests them properly.
-    Backport of https://github.com/vllm-project/vllm/pull/32947.
-    Remove this patch when vllm is upgraded past v0.14.1.
+    The upstream ``load_model`` context-manager chaining bug was fixed in
+    v0.18 (see https://github.com/vllm-project/vllm/pull/32947); we no
+    longer patch ``load_model`` here.
 
     sleep/wake_up: Level-2 sleep discards all GPU weights as designed.
     On wake-up the main model is reloaded from disk via the upstream
@@ -286,15 +258,6 @@ class WorkerPatch(ArcticPatch[Worker]):
 
     _orig_sleep = Worker.sleep
     _orig_wake_up = Worker.wake_up
-
-    def load_model(self) -> None:
-        eep_scale_up = (
-            os.environ.get("VLLM_ELASTIC_EP_SCALE_UP_LAUNCH") == "1")
-        with (
-            self._maybe_get_memory_pool_context(tag="weights"),
-            set_current_vllm_config(self.vllm_config),
-        ):
-            self.model_runner.load_model(eep_scale_up=eep_scale_up)
 
     @staticmethod
     def _save_module_state(module) -> dict[str, torch.Tensor]:
@@ -347,19 +310,6 @@ class WorkerPatch(ArcticPatch[Worker]):
             self._sleep_level = 0
 
 
-class InprocClientPatch(ArcticPatch[InprocClient]):
-    """Ensure InprocClient.get_output() calls post_step() after step_fn(),
-    required for speculative decoding when VLLM_ENABLE_V1_MULTIPROCESSING=0.
-
-    See https://github.com/vllm-project/vllm/issues/27287
-    """
-
-    def get_output(self) -> EngineCoreOutputs:
-        outputs, model_executed = self.engine_core.step_fn()
-        self.engine_core.post_step(model_executed=model_executed)
-        return outputs and outputs.get(0) or EngineCoreOutputs()
-
-
 def apply_arctic_patches():
 
     from transformers import AutoConfig
@@ -369,7 +319,6 @@ def apply_arctic_patches():
     AutoConfig.register("llama_swiftkv", LlamaSwiftKVConfig)
 
     from vllm import ModelRegistry
-    #from arctic_inference.vllm.swiftkv import LlamaSwiftKVForCausalLM
 
     # Register SwiftKV model definitions to vLLM.
     ModelRegistry.register_model(
@@ -388,7 +337,6 @@ def apply_arctic_patches():
                                  ArcticLSTMSpeculator)
 
     # Patches that make later patches work properly.
-    EngineCoreProcPatch.apply_patch()
     WorkerBasePatch.apply_patch()
 
     # Async scheduler patches for spec decode (disable_by_batch_size
@@ -406,12 +354,24 @@ def apply_arctic_patches():
     XgrammarBackendPatch.apply_patch()
     MLPSpeculatorConfigPatch.apply_patch()
 
-    # InprocClient spec decode fix (vLLM #27287).
-    InprocClientPatch.apply_patch()
-
     # Forest Cascade Attention backend (always registered; runtime-gated
     # by --forest-cascade-attn-configs).
     apply_forest_cascade_patches()
 
     # Main optimization patches.
     apply_shift_parallel_patches()
+
+    # FP32 LM head: run the lm_head matmul in fp32 (weights stay in
+    # their native dtype, on-the-fly upcast). The patch is always
+    # installed but is a no-op unless ARCTIC_FP32_LM_HEAD=1 (or the
+    # --fp32-lm-head CLI flag) is set before model construction.
+    if envs.ARCTIC_FP32_LM_HEAD:
+        set_fp32_lm_head_enabled(True)
+    apply_fp32_lm_head_patches()
+
+    # kvcached prefix-cache patches (only when kvcached autopatch is active).
+    if os.environ.get("KVCACHED_AUTOPATCH", "").lower() in ("1", "true"):
+        from arctic_inference.vllm.kvcached.patches import (
+            apply_kvcached_prefix_cache_patches,
+        )
+        apply_kvcached_prefix_cache_patches()

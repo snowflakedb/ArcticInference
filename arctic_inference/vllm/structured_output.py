@@ -29,10 +29,11 @@ class XgrammarBackendPatch(ArcticPatch[XgrammarBackend]):
     def __post_init__(self):
         self._orig_post_init()
 
-        if self.vllm_config.speculative_config is not None:
-            self.num_speculative_tokens = \
-                max(self.vllm_config.speculative_config.num_speculative_tokens,
-                    self.vllm_config.speculative_config.suffix_speculative_tokens)
+        spec_cfg = self.vllm_config.speculative_config
+        if spec_cfg is not None:
+            suffix_tokens = getattr(spec_cfg, 'suffix_speculative_tokens', 0)
+            base_tokens = spec_cfg.num_speculative_tokens or 0
+            self.num_speculative_tokens = max(base_tokens, suffix_tokens)
 
-        logger.info(f"XgrammarBackendPatch: num_speculative_tokens="
-                    f"{self.num_speculative_tokens}")
+        logger.info("XgrammarBackendPatch: num_speculative_tokens=%d",
+                    self.num_speculative_tokens)

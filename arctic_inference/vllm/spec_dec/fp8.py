@@ -17,10 +17,11 @@ from vllm.model_executor.layers.quantization.utils.marlin_utils_fp8 import (
 from vllm.model_executor.layers.quantization.utils.quant_utils import (
     is_layer_skipped)
 from vllm.model_executor.layers.quantization.utils.w8a8_utils import (
-    Fp8LinearOp, convert_to_channelwise,
+    convert_to_channelwise,
     cutlass_block_fp8_supported, cutlass_fp8_supported,
-    maybe_create_device_identity, normalize_e4m3fn_to_e4m3fnuz,
+    normalize_e4m3fn_to_e4m3fnuz,
     requantize_with_max_scale)
+from vllm.model_executor.kernels.linear import init_fp8_linear_kernel
 from vllm.model_executor.parameter import (BlockQuantScaleParameter,
                                            ModelWeightParameter,
                                            PerTensorScaleParameter)
@@ -63,10 +64,20 @@ class OriginalFp8LinearMethod(LinearMethodBase):
 
         self.block_quant = self.quant_config.weight_block_size is not None
         if self.block_quant:
-            # Marlin doesn't support block-wise fp8
             self.use_marlin = False
 
-        self.fp8_linear = Fp8LinearOp(act_quant_static=False)
+        if not self.block_quant:
+            from vllm.model_executor.layers.quantization.utils.quant_utils import (
+                kFp8DynamicTokenSym, kFp8DynamicTensorSym, kFp8StaticTensorSym)
+            if cutlass_fp8_supported():
+                activation_quant_key = kFp8DynamicTokenSym
+            else:
+                activation_quant_key = kFp8DynamicTensorSym
+            self.fp8_linear = init_fp8_linear_kernel(
+                activation_quant_key=activation_quant_key,
+                weight_quant_key=kFp8StaticTensorSym,
+                out_dtype=torch.get_default_dtype(),
+            )
 
     def create_weights(
         self,
@@ -78,8 +89,6 @@ class OriginalFp8LinearMethod(LinearMethodBase):
         params_dtype: torch.dtype,
         **extra_weight_attrs,
     ):
-        maybe_create_device_identity()
-
         output_size_per_partition = sum(output_partition_sizes)
         weight_loader = extra_weight_attrs.get("weight_loader")
 
@@ -267,8 +276,7 @@ class OriginalFp8LinearMethod(LinearMethodBase):
                                               requires_grad=False)
 
         if self.use_marlin:
-            prepare_fp8_layer_for_marlin(layer)
-            # Activations not quantized for marlin.
+            prepare_fp8_layer_for_marlin(layer, size_k_first=True)
             del layer.input_scale
 
     def apply(self,
@@ -298,12 +306,7 @@ class OriginalFp8LinearMethod(LinearMethodBase):
                 cutlass_block_fp8_supported=self.cutlass_block_fp8_supported,
             )
 
-        return self.fp8_linear.apply(input=x,
-                                     weight=layer.weight,
-                                     weight_scale=layer.weight_scale,
-                                     out_dtype=self.out_dtype,
-                                     input_scale=layer.input_scale,
-                                     bias=bias)
+        return self.fp8_linear.apply_weights(layer, x, bias)
 
 class Fp8LinearMethodEmbedding(OriginalFp8LinearMethod):
     def __init__(self, config: Fp8Config):
@@ -319,7 +322,7 @@ class Fp8ConfigWithEmbedding(Fp8Config):
 
     def get_quant_method_patch(self, layer: torch.nn.Module,
                                prefix: str) -> Optional["QuantizeMethodBase"]:
-        from vllm.attention.layer import Attention  # Avoid circular import
+        from vllm.model_executor.layers.attention import Attention
         from vllm.model_executor.layers.vocab_parallel_embedding import VocabParallelEmbedding
     
         if isinstance(layer, LinearBase):

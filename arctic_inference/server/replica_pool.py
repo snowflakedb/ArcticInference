@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from typing import Any
 
@@ -10,7 +11,11 @@ from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 import torch
 from arctic_inference.server.config import ModelConfig
-from arctic_inference.server.scheduler import Scheduler
+from arctic_inference.server.scheduler import (
+    RoutingFn,
+    Scheduler,
+    prefix_affinity_routing,
+)
 from arctic_inference.server.worker import InferenceWorker
 
 logger = logging.getLogger("arctic_inference.server")
@@ -18,7 +23,7 @@ logger = logging.getLogger("arctic_inference.server")
 
 def ensure_ray() -> int:
     """Initialize Ray and return the total number of GPUs in the cluster."""
-    ray.init(ignore_reinit_error=True, log_to_driver=False)
+    ray.init(ignore_reinit_error=True, log_to_driver=True)
     nodes = [n for n in ray.nodes() if n["Alive"]]
     if not nodes:
         raise RuntimeError("No alive Ray nodes")
@@ -42,8 +47,25 @@ class ReplicaPool:
         worker_cls: Ray actor class for inference workers.
     """
 
-    def __init__(self, worker_cls=InferenceWorker) -> None:
+    def __init__(
+        self,
+        worker_cls=InferenceWorker,
+        routing_fn: RoutingFn | None = None,
+        enable_prefix_hash: bool | None = None,
+    ) -> None:
         self._worker_cls = worker_cls
+        _opt_out = os.environ.get(
+            "ARCTIC_PREFIX_ROUTING_DISABLED", ""
+        ).lower() in ("1", "true", "yes")
+        if _opt_out:
+            self._routing_fn = None
+            self._enable_prefix_hash = False
+        elif enable_prefix_hash is None and routing_fn is None:
+            self._routing_fn = prefix_affinity_routing
+            self._enable_prefix_hash = True
+        else:
+            self._routing_fn = routing_fn
+            self._enable_prefix_hash = bool(enable_prefix_hash)
         self._config: ModelConfig | None = None
         self._model_id: str | None = None
         self._ray_num_gpus: float | int | None = None
@@ -53,7 +75,12 @@ class ReplicaPool:
         self._scheduler: Scheduler | None = None
         self._lock = asyncio.Lock()
         self._stop_monitoring = False
-        # self._health_task: asyncio.Task | None = None
+        self._health_task: asyncio.Task | None = None
+        # Background scale_up task scheduled by Driver._rebalance_up. Tracked
+        # so shutdown() can cancel it before worker init finishes — otherwise
+        # the task races with shutdown and tries to add_worker on a None
+        # scheduler.
+        self._scale_task: asyncio.Task | None = None
         self._updating_workers: set[int] = set()
         self._cached_weights_info: list[dict] | None = None
         self._cached_spec_weights_info: list[dict] | None = None
@@ -126,6 +153,14 @@ class ReplicaPool:
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
+
+    def _make_scheduler(self, workers: list[ray.actor.ActorHandle]) -> Scheduler:
+        kwargs: dict[str, Any] = {"workers": workers, "initial_concurrency": 64}
+        if self._routing_fn is not None:
+            kwargs["routing_fn"] = self._routing_fn
+        if self._enable_prefix_hash:
+            kwargs["enable_prefix_hash"] = True
+        return Scheduler(**kwargs)
 
     async def initialize(
         self,
@@ -233,7 +268,7 @@ class ReplicaPool:
             init_tasks.append(w.initialize.remote(engine_kwargs, env or None))
         await asyncio.gather(*init_tasks)
 
-        self._scheduler = Scheduler(workers=self._workers, initial_concurrency=64)
+        self._scheduler = self._make_scheduler(self._workers)
 
         self._stop_monitoring = False
         # self._health_task = asyncio.create_task(self._monitor_health())
@@ -244,12 +279,24 @@ class ReplicaPool:
     async def shutdown(self, model_id: str | None = None) -> None:
         self._check_model_id(model_id)
         self._stop_monitoring = True
-        # if self._health_task and not self._health_task.done():
-        #     self._health_task.cancel()
-        #     try:
-        #         await self._health_task
-        #     except asyncio.CancelledError:
-        #         pass
+
+        # Cancel any background scale_up before tearing down the scheduler;
+        # otherwise the in-flight scale_up will finish loading a worker and
+        # then try to add_worker on a None scheduler.
+        if self._scale_task and not self._scale_task.done():
+            self._scale_task.cancel()
+            try:
+                await self._scale_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._scale_task = None
+
+        if self._health_task and not self._health_task.done():
+            self._health_task.cancel()
+            try:
+                await self._health_task
+            except asyncio.CancelledError:
+                pass
 
         if self._scheduler:
             await self._scheduler.shutdown()
@@ -278,6 +325,8 @@ class ReplicaPool:
         prompts: str | list[int] | list[str | list[int]],
         sampling_params: dict[str, Any] | None = None,
         model_id: str | None = None,
+        routing_key: str | list[str | None] | None = None,
+        strict: bool = False,
     ) -> list[dict[str, Any]]:
         """Generate completions for one or more prompts.
 
@@ -286,6 +335,13 @@ class ReplicaPool:
                 batch of prompts (``list[str | list[int]]``).
             sampling_params: vLLM sampling parameters (dict or SamplingParams).
             model_id: Ignored in single-model mode.
+            routing_key: Optional per-batch affinity key. A single string
+                applies to every prompt in the batch; a list must match the
+                batch size element-wise. Hashed by the scheduler and used in
+                place of the prompt hash to pin same-keyed requests to the
+                same worker (e.g. all turns of one multi-turn rollout).
+            strict: When True, enforce hard pinning to the keyed worker even
+                under load, instead of ringing to the next worker on overload.
         """
         self._check_model_id(model_id)
         if self._scheduler is None:
@@ -293,11 +349,27 @@ class ReplicaPool:
         if self._sleeping:
             raise RuntimeError("Model is sleeping; call /wake_up first")
         params = sampling_params or {}
+
+        def _single_key() -> str | None:
+            if routing_key is None or isinstance(routing_key, str):
+                return routing_key
+            if len(routing_key) != 1:
+                raise ValueError(
+                    f"Got {len(routing_key)} routing keys for a single prompt"
+                )
+            return routing_key[0]
+
         if isinstance(prompts, str):
-            return [await self._scheduler.submit(prompts, params)]
+            return [await self._scheduler.submit(
+                prompts, params, routing_key=_single_key(), strict=strict,
+            )]
         if prompts and isinstance(prompts[0], int):
-            return [await self._scheduler.submit(prompts, params)]
-        return await self._scheduler.submit_batch(prompts, params)
+            return [await self._scheduler.submit(
+                prompts, params, routing_key=_single_key(), strict=strict,
+            )]
+        return await self._scheduler.submit_batch(
+            prompts, params, routing_key=routing_key, strict=strict,
+        )
 
     # ------------------------------------------------------------------
     # Scaling
@@ -324,7 +396,11 @@ class ReplicaPool:
                 logger.info(f"Scaled down: removed worker {idx}")
 
     async def scale_up(self, target_count: int) -> None:
-        """Add workers until *target_count* are running."""
+        """Add workers until *target_count* are running.
+
+        Safe to cancel mid-flight: any half-built actor is killed and the
+        pool's worker list is left consistent.
+        """
         if self._scheduler is None:
             raise RuntimeError("ReplicaPool not initialized")
 
@@ -336,7 +412,35 @@ class ReplicaPool:
                 idx = len(self._workers)
                 opts = self._worker_ray_options(replica_idx=idx)
                 worker = self._worker_cls.options(**opts).remote()
-                await worker.initialize.remote(engine_kwargs, extra_env)
+                try:
+                    await worker.initialize.remote(engine_kwargs, extra_env)
+                except asyncio.CancelledError:
+                    try:
+                        ray.kill(worker)
+                    except Exception:
+                        pass
+                    raise
+                except Exception:
+                    try:
+                        ray.kill(worker)
+                    except Exception:
+                        pass
+                    raise
+
+                # The pool may have been torn down while we awaited the
+                # (slow) worker init. Don't touch the now-None scheduler;
+                # discard the freshly-built worker.
+                if self._scheduler is None:
+                    try:
+                        ray.kill(worker)
+                    except Exception:
+                        pass
+                    logger.info(
+                        "scale_up aborted: pool was shut down during worker init"
+                    )
+                    return
+
+
                 self._workers.append(worker)
                 self._scheduler.add_worker(worker)
                 logger.info(f"Scaled up: added worker {idx}")
@@ -464,6 +568,30 @@ class ReplicaPool:
             "sleeping": self._sleeping,
             "replica_states": list(states),
         }
+
+    # ------------------------------------------------------------------
+    # Metrics
+    # ------------------------------------------------------------------
+
+    async def drain_metrics(self, model_id: str | None = None) -> dict[str, Any]:
+        """Drain per-replica snapshots and per-request records.
+
+        See :meth:`Scheduler.drain_metrics` for the payload shape; the
+        ``model`` field is added at this level so consumers tagging metrics
+        by ``model_id`` don't have to look it up separately.
+        """
+        self._check_model_id(model_id)
+        if self._scheduler is None:
+            return {
+                "model": self._config.model if self._config else None,
+                "drained_at": time.time(),
+                "requests": [],
+                "replicas": [],
+            }
+        payload = await self._scheduler.drain_metrics()
+        payload["model"] = self._config.model if self._config else None
+        payload["drained_at"] = time.time()
+        return payload
 
     # ------------------------------------------------------------------
     # Weight sync

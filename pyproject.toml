@@ -8,7 +8,7 @@ requires = [
     # uv pip install vllm==0.9.1 --dry-run 2>&1 | grep protobuf | sed 's/^ + //'
     "protobuf==5.29.5",
     "grpcio-tools",
-    "torch==2.9.1", # need to be same as user env.
+    "torch==2.10.0", # need to be same as user env.
 ]
 build-backend = "setuptools.build_meta"
 
@@ -33,9 +33,12 @@ packages = [
     "arctic_inference.suffix_decoding",
     "arctic_inference.vllm",
     "arctic_inference.vllm.swiftkv",
+    "arctic_inference.vllm.attention",
     "arctic_inference.vllm.spec_dec",
+    "arctic_inference.vllm.attention",
     "arctic_inference.embedding",
     "arctic_inference.server",
+    "arctic_inference.server.weight_sync",
     "arctic_inference.csrc",
 ]
 
@@ -75,6 +78,7 @@ server = [
     "uvicorn",
     "pydantic>=2.0",
     "tqdm",
+    "kvcached==0.1.4",
 ]
 
 dynasor = [

@@ -14,7 +14,7 @@ from typing import ClassVar
 import numpy as np
 import torch
 
-from vllm.attention.layer import Attention
+from vllm.model_executor.layers.attention import Attention
 from vllm.v1.attention.backend import (
     AttentionBackend,
     AttentionImpl,
@@ -350,8 +350,13 @@ class FlashAttentionMetadataBuilder(
         )
 
         if self.use_full_cuda_graph and self.aot_schedule:
+            from vllm.utils.math_utils import round_up
+            max_batch_size = max(
+                vllm_config.scheduler_config.max_num_seqs,
+                self.max_cudagraph_size or 0,
+            )
             self.scheduler_metadata = torch.zeros(
-                vllm_config.scheduler_config.max_num_seqs + 1,
+                1 + round_up(max_batch_size, 4) * 4,
                 dtype=torch.int32,
                 device=self.device,
             )

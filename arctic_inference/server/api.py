@@ -18,12 +18,15 @@ from arctic_inference.server.config import ModelConfig
 class InitRequest(BaseModel):
     config: ModelConfig
     model_id: str | None = None
+    num_replicas: int | None = None
 
 
 class GenerateRequest(BaseModel):
     model_id: str | None = None
     prompts: list[str | list[int]]
     sampling_params: dict[str, Any] = Field(default_factory=dict)
+    routing_key: str | list[str | None] | None = None
+    strict: bool = False
 
 
 class GroupConfig(BaseModel):
@@ -83,7 +86,10 @@ app = FastAPI(title="Arctic Inference", lifespan=lifespan)
 @app.post("/init")
 async def init_endpoint(request: InitRequest):
     try:
-        n = await backend.initialize(request.config, model_id=request.model_id)
+        n = await backend.initialize(
+            request.config, model_id=request.model_id,
+            num_replicas=request.num_replicas,
+        )
         return {"status": "ready", "model_id": request.model_id, "num_replicas": n}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -150,6 +156,19 @@ async def close_weight_sync_endpoint(model_id: str | None = None):
 async def status_endpoint():
     try:
         return await backend.get_status()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/metrics")
+async def metrics_endpoint(model_id: str | None = None):
+    """Drain per-replica snapshots and per-request records.
+
+    Each call empties the server-side ring buffers, so consumers see only
+    metrics produced since their previous call.
+    """
+    try:
+        return await backend.drain_metrics(model_id=model_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

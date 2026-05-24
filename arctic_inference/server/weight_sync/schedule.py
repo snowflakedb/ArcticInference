@@ -69,8 +69,17 @@ class TransferSchedule:
         For **FSDP** every rank calls ``full_tensor()`` (collective
         all-gather) per parameter, so after the gather each rank holds
         the full parameter and can independently send to its assigned
-        inference targets.  In both cases, the number of active senders
-        is ``min(training_gpus, total_tp_workers)``.
+        inference targets.  For **dp** and **fsdp**, the number of
+        active senders is ``min(training_gpus, total_tp_workers)``.
+
+        For **zero3** every training rank must participate in the
+        DeepSpeed ``GatheredParameters`` all-gather collective, so
+        ``n_senders = training_gpus`` even when ``T > R*TP``.  Extra
+        ranks get an empty ``targets`` list but still iterate
+        parameters in lockstep to keep the collective in sync.  To
+        keep a single target per sender (so the weights iterable is
+        consumed at most once and never replayed while a gather is
+        resharded), ``training_gpus >= R*TP`` is required.
 
         Example — T=8, R=4, TP=2 (8 senders, 8 TP workers)::
 
@@ -87,10 +96,10 @@ class TransferSchedule:
             Group 2: GPU 2 → (R1,T0), (R3,T0)
             Group 3: GPU 3 → (R1,T1), (R3,T1)
         """
-        if training_sharding not in ("dp", "fsdp"):
+        if training_sharding not in ("dp", "fsdp", "zero3"):
             raise ValueError(
                 f"Unknown training_sharding={training_sharding!r}. "
-                f"Use 'dp' or 'fsdp'."
+                f"Use 'dp', 'fsdp', or 'zero3'."
             )
 
         all_targets = [
@@ -99,7 +108,21 @@ class TransferSchedule:
             for t in range(inference_tp)
         ]
         n_targets = len(all_targets)
-        n_senders = min(training_gpus, n_targets)
+
+        if training_sharding == "zero3":
+            # Every training rank must participate in the ZeRO-3
+            # GatheredParameters collective, so each rank is a "sender"
+            # even if it has no inference targets to send to.
+            if training_gpus < n_targets:
+                raise ValueError(
+                    f"zero3 requires training_gpus ({training_gpus}) >= "
+                    f"inference_replicas * inference_tp ({n_targets}) so "
+                    f"each sender has at most one target and the weights "
+                    f"iterable is never replayed during a gather."
+                )
+            n_senders = training_gpus
+        else:
+            n_senders = min(training_gpus, n_targets)
 
         assignments: list[list[tuple[int, int]]] = [[] for _ in range(n_senders)]
         for i, target in enumerate(all_targets):
