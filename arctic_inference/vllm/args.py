@@ -204,13 +204,17 @@ class AsyncEngineArgsPatch(ArcticPatch[AsyncEngineArgs]):
         ulysses._ulysses_sp_size = self.ulysses_sequence_parallel_size
 
         vllm_config = self._orig_create_engine_config(*args, **kwargs)
-        kwargs = {f.name: getattr(vllm_config.parallel_config, f.name)
-                  for f in fields(vllm_config.parallel_config) if f.init}
-        kwargs["ulysses_sequence_parallel_size"] = (
+        # Recreate the parallel config with Arctic parameters since they might
+        # not be passed to the parallel config __init__ when first initialized.
+        pc_cls = type(vllm_config.parallel_config)
+        kwargs_pc = {f.name: getattr(vllm_config.parallel_config, f.name)
+                     for f in fields(vllm_config.parallel_config)
+                     if is_init_field(pc_cls, f.name)}
+        kwargs_pc["ulysses_sequence_parallel_size"] = (
             self.ulysses_sequence_parallel_size)
-        kwargs["enable_shift_parallel"] = self.enable_shift_parallel
-        kwargs["shift_parallel_threshold"] = self.shift_parallel_threshold
-        vllm_config.parallel_config = ArcticParallelConfig(**kwargs)
+        kwargs_pc["enable_shift_parallel"] = self.enable_shift_parallel
+        kwargs_pc["shift_parallel_threshold"] = self.shift_parallel_threshold
+        vllm_config.parallel_config = ArcticParallelConfig(**kwargs_pc)
 
         if self.forest_cascade_attn_configs is not None:
             try:
