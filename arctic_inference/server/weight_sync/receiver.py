@@ -23,7 +23,9 @@ transiently.
 from __future__ import annotations
 
 import logging
+import os
 import time
+from typing import Iterable
 
 import torch
 
@@ -104,6 +106,88 @@ class WeightSyncExtension:
             "mem_after_bytes": mem_after,
             "mem_extra_bytes": peak_mem - mem_before,
         }
+
+    # ------------------------------------------------------------------
+    # Param-name validation (catches sender/receiver model mismatch)
+    # ------------------------------------------------------------------
+
+    def _validate_weight_sync_names(
+        self,
+        model,
+        sender_names: Iterable[str],
+        *,
+        context: str = "",
+    ) -> None:
+        """Raise if the sender's param names do not match the model's expected
+        HF-style param name set.
+
+        Catches the common failure mode where the training side ships a
+        different architecture than the inference side (e.g. Qwen3 vs.
+        Qwen2.5), or where weights are silently dropped because of a name
+        mismatch.  Names that are legitimately unsynced (rotary inv_freq
+        buffers, FP8/GPTQ quantization metadata) are filtered on both
+        sides before comparison.
+
+        Set ``ARCTIC_WEIGHT_SYNC_STRICT_NAMES=0`` to demote the mismatch
+        from an error to a warning (default: strict).
+        """
+        from arctic_inference.server.weight_sync.utils import (
+            _name_is_non_synced,
+            compute_expected_hf_param_names,
+        )
+
+        sender_set = {n for n in sender_names if not _name_is_non_synced(n)}
+
+        try:
+            expected_set = compute_expected_hf_param_names(model)
+        except Exception as exc:
+            logger.warning(
+                "Weight-sync name check skipped: failed to derive expected "
+                "param names for the receiver model (%s).", exc,
+            )
+            return
+
+        unexpected = sender_set - expected_set
+        missing = expected_set - sender_set
+
+        if not unexpected and not missing:
+            print(
+                f"[weight-sync names validated] context={context or '?'} "
+                f"sender={len(sender_set)} expected={len(expected_set)}",
+                flush=True,
+            )
+            return
+
+        ctx = f" [{context}]" if context else ""
+        msg_parts = [f"Weight-sync param name mismatch{ctx}:"]
+        if unexpected:
+            sample = sorted(unexpected)[:10]
+            tail = ("" if len(unexpected) <= len(sample)
+                    else f" ... (+{len(unexpected) - len(sample)} more)")
+            msg_parts.append(
+                f"  Sender shipped {len(unexpected)} names the model does "
+                f"NOT expect: {', '.join(sample)}{tail}"
+            )
+        if missing:
+            sample = sorted(missing)[:10]
+            tail = ("" if len(missing) <= len(sample)
+                    else f" ... (+{len(missing) - len(sample)} more)")
+            msg_parts.append(
+                f"  Model expects {len(missing)} names the sender did NOT "
+                f"ship: {', '.join(sample)}{tail}"
+            )
+        msg_parts.append(
+            f"  (sender_count={len(sender_set)}, "
+            f"expected_count={len(expected_set)})"
+        )
+        msg = "\n".join(msg_parts)
+
+        if os.environ.get("ARCTIC_WEIGHT_SYNC_STRICT_NAMES", "1") == "0":
+            logger.warning("%s\n(non-strict mode: continuing despite mismatch)",
+                           msg)
+            return
+
+        raise RuntimeError(msg)
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -312,6 +396,9 @@ class WeightSyncExtension:
         mem_before = torch.cuda.memory_allocated(self.device)
 
         weights = load_weights_from_shm(group_id, timeout=timeout)
+        self._validate_weight_sync_names(
+            model, (name for name, _ in weights), context="ipc_shm",
+        )
         tp = get_tensor_model_parallel_world_size()
 
         if self.model_config.quantization:
@@ -367,6 +454,8 @@ class WeightSyncExtension:
         mem_before = torch.cuda.memory_allocated(self.device)
 
         names = ipc_payload["names"]
+        self._validate_weight_sync_names(model, names, context="cuda_ipc")
+
         handles_list = pickle.loads(
             base64.b64decode(ipc_payload["ipc_handles_pickled"]))
 
@@ -406,6 +495,10 @@ class WeightSyncExtension:
         model = self.model_runner.model
         torch.cuda.reset_peak_memory_stats(self.device)
         mem_before = torch.cuda.memory_allocated(self.device)
+
+        self._validate_weight_sync_names(
+            model, (name for name, _ in weights), context="cpu_to_gpu",
+        )
 
         self._offloaded_state = {}
 
