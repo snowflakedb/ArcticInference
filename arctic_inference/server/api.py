@@ -62,6 +62,20 @@ class SyncWeightsRequest(BaseModel):
     world_size: int | None = None
 
 
+class SyncSpecWeightsRequest(BaseModel):
+    model_id: str | None = None
+    groups: list[GroupConfig] | None = None
+    bucket_size: int = 256 * 1024 * 1024
+    strategy: str = "hotswap"
+    engine_only: bool = False
+    reverse: bool = False
+
+    # Legacy flat fields
+    master_addr: str | None = None
+    master_port: int | None = None
+    world_size: int | None = None
+
+
 # ---------------------------------------------------------------------------
 # Backend – a bare ReplicaPool by default, swapped to Driver by multi_model.py
 # ---------------------------------------------------------------------------
@@ -140,6 +154,23 @@ async def weights_info_endpoint(model_id: str | None = None):
 async def sync_weights_endpoint(request: SyncWeightsRequest):
     try:
         return await backend.sync_weights(**request.model_dump())
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/spec_weights_info")
+async def spec_weights_info_endpoint(model_id: str | None = None):
+    try:
+        infos = backend.get_spec_weights_info(model_id=model_id)
+        return {"weights_info": infos, "count": len(infos)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/sync_spec_weights")
+async def sync_spec_weights_endpoint(request: SyncSpecWeightsRequest):
+    try:
+        return await backend.sync_spec_weights(**request.model_dump())
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

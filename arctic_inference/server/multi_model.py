@@ -184,6 +184,28 @@ class Driver:
             world_size=world_size,
         )
 
+    def get_spec_weights_info(self, model_id: str | None = None) -> list[dict]:
+        return self._get_pool(model_id).get_spec_weights_info()
+
+    async def sync_spec_weights(
+        self,
+        groups: list[dict[str, Any]] | None = None,
+        bucket_size: int = 256 * 1024 * 1024,
+        strategy: str = "hotswap",
+        engine_only: bool = False,
+        reverse: bool = False,
+        model_id: str | None = None,
+        master_addr: str | None = None,
+        master_port: int | None = None,
+        world_size: int | None = None,
+    ) -> dict[str, Any]:
+        return await self._get_pool(model_id).sync_spec_weights(
+            groups, bucket_size, strategy=strategy,
+            engine_only=engine_only, reverse=reverse,
+            master_addr=master_addr, master_port=master_port,
+            world_size=world_size,
+        )
+
     async def close_weight_sync(self, model_id: str | None = None) -> dict[str, Any]:
         return await self._get_pool(model_id).close_weight_sync()
 

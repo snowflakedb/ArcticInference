@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import Iterable
+from typing import Iterable, Optional
 
 import torch
 
@@ -232,18 +232,26 @@ class WeightSyncExtension:
 
         tp = get_tensor_model_parallel_world_size()
 
+        received_names: list[str] = []
         if self.model_config.quantization:
             path = "fp8"
-            loaded = self._load_fp8(model, engine)
+            loaded = self._load_fp8(model, engine, received_names)
         elif tp == 1 and direct_mode:
+            # Zero-copy path writes into pre-computed parameter views keyed by
+            # the model's own param names, so it is inherently name-validated.
             path = "direct_zero_copy"
             loaded = self._load_direct_zero_copy(model, engine)
         elif tp == 1:
             path = "direct"
-            loaded = self._load_direct(model, engine)
+            loaded = self._load_direct(model, engine, received_names)
         else:
             path = "batched"
-            loaded = self._load_batched(model, engine)
+            loaded = self._load_batched(model, engine, received_names)
+
+        if received_names:
+            self._validate_weight_sync_names(
+                model, received_names, context=f"nccl:{path}",
+            )
 
         return self._build_result(start, mem_before, path, loaded)
 
@@ -251,7 +259,7 @@ class WeightSyncExtension:
     # Loading strategies
     # ------------------------------------------------------------------
 
-    def _load_fp8(self, model, engine) -> int:
+    def _load_fp8(self, model, engine, received_names: Optional[list] = None) -> int:
         from arctic_inference.server.weight_sync.utils import _FP8InplaceUpdater
 
         updater = _FP8InplaceUpdater(
@@ -259,6 +267,8 @@ class WeightSyncExtension:
         )
         loaded = 0
         for name, tensor in engine.receive_weights():
+            if received_names is not None:
+                received_names.append(name)
             updater.feed(name, tensor)
             loaded += 1
         if updater.pending:
@@ -286,7 +296,7 @@ class WeightSyncExtension:
         result = engine.receive_weights_direct(param_views)
         return result.get("params_loaded", 0)
 
-    def _load_direct(self, model, engine) -> int:
+    def _load_direct(self, model, engine, received_names: Optional[list] = None) -> int:
         """Bucket path for TP=1 non-quantized models.
 
         Copies from the engine's bucket buffer into pre-computed parameter views.
@@ -296,6 +306,8 @@ class WeightSyncExtension:
         writer = _DirectParamWriter(model, self.device)
         loaded = 0
         for name, tensor in engine.receive_weights():
+            if received_names is not None:
+                received_names.append(name)
             view = writer.get_view(name)
             if view is not None:
                 view.copy_(tensor)
@@ -304,7 +316,7 @@ class WeightSyncExtension:
             loaded += 1
         return loaded
 
-    def _load_batched(self, model, engine) -> int:
+    def _load_batched(self, model, engine, received_names: Optional[list] = None) -> int:
         """Batched path for TP>1 models (including FP8+TP>1).
 
         Each received tensor is a full (un-sharded) weight.
@@ -312,6 +324,8 @@ class WeightSyncExtension:
         """
         loaded = 0
         for name, tensor in engine.receive_weights():
+            if received_names is not None:
+                received_names.append(name)
             model.load_weights([(name, tensor)])
             loaded += 1
         return loaded
@@ -466,8 +480,10 @@ class WeightSyncExtension:
         self._offloaded_state = {}
 
         loaded = 0
+        missing = []
         for name, handle_dict in zip(names, handles_list):
             if physical_gpu_id not in handle_dict:
+                missing.append(name)
                 continue
             func, args = handle_dict[physical_gpu_id]
             args_list = list(args)
@@ -475,6 +491,16 @@ class WeightSyncExtension:
             src_tensor = func(*args_list)
             model.load_weights([(name, src_tensor)])
             loaded += 1
+
+        if loaded != len(names):
+            raise RuntimeError(
+                f"CUDA IPC weight sync incomplete on GPU {physical_gpu_id}: "
+                f"loaded {loaded}/{len(names)} tensors "
+                f"({len(missing)} had no IPC handle for this GPU, e.g. "
+                f"{missing[:5]}). This usually indicates a GPU UUID / placement "
+                f"mismatch between sender and receiver and would otherwise "
+                f"silently leave the model with stale weights."
+            )
 
         torch.cuda.synchronize()
         return self._build_result(start, mem_before, "cuda_ipc", loaded)
@@ -510,21 +536,32 @@ class WeightSyncExtension:
         torch.cuda.synchronize()
         return self._build_result(start, mem_before, "cpu_to_gpu", loaded)
 
-    def load_weights_from_cpu(self, weights_bytes: bytes) -> dict:
-        """Load weights from serialized CPU tensors into the vLLM model.
+    def load_weights_from_cpu(self, weights) -> dict:
+        """Load CPU weights into the vLLM model.
+
+        The Ray worker (``InferenceWorker.load_weights_from_cpu``) passes an
+        already-deserialized ``list[(name, cpu_tensor)]`` through the Ray
+        object store, so that is the primary contract. Serialized ``bytes``
+        (legacy callers) are still accepted and deserialized here.
 
         First ensures all parameters have proper GPU storage allocated,
         then uses _DirectParamWriter for efficient in-place copy.
         """
-        import io as _io
-
         start = time.time()
         model = self.model_runner.model
         torch.cuda.reset_peak_memory_stats(self.device)
         mem_before = torch.cuda.memory_allocated(self.device)
 
-        weights = torch.load(
-            _io.BytesIO(weights_bytes), map_location="cpu", weights_only=True)
+        if isinstance(weights, (bytes, bytearray)):
+            import io as _io
+
+            weights = torch.load(
+                _io.BytesIO(weights), map_location="cpu", weights_only=True)
+
+        weights = list(weights)
+        self._validate_weight_sync_names(
+            model, (name for name, _ in weights), context="cpu",
+        )
 
         weights_offloaded = any(
             p.untyped_storage().size() == 0 for p in model.parameters())

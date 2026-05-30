@@ -710,6 +710,20 @@ class ReplicaPool:
             ]
             elapsed = time.time() - t0
             logger.info(f"Weight sync: {n} workers, {len(groups)} group(s) in {elapsed:.2f}s")
+
+            failed = [
+                (i, w) for i, w in enumerate(per_worker)
+                if not isinstance(w, dict) or w.get("status") != "done"
+            ]
+            if failed:
+                raise RuntimeError(
+                    f"Weight sync failed on {len(failed)}/{n} worker(s): "
+                    + "; ".join(
+                        f"worker[{i}]={w.get('message', w) if isinstance(w, dict) else w}"
+                        for i, w in failed
+                    )
+                )
+
             return {
                 "elapsed": elapsed,
                 "num_groups": len(groups),
