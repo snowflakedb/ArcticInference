@@ -505,6 +505,67 @@ class WeightSyncExtension:
         torch.cuda.synchronize()
         return self._build_result(start, mem_before, "cuda_ipc", loaded)
 
+    def load_weights_cuda_ipc_chunk(self, ipc_payload: dict,
+                                    validate_names=None) -> dict:
+        """Load a partial chunk (typically one param) from CUDA IPC handles.
+
+        Streaming counterpart to ``load_weights_cuda_ipc`` used by the
+        low-memory server path. Unlike the full-model loader it does NOT
+        require the payload to cover the whole model, so it can be called
+        once per parameter. Each call copies the param(s) present in
+        ``ipc_payload`` into the model and raises if this GPU has no handle
+        for one of them.
+
+        Pass ``validate_names`` (the complete list of sender param names) on
+        the final chunk to validate the full architecture match in one shot;
+        leave it ``None`` for intermediate chunks.
+        """
+        import base64
+        import pickle
+
+        start = time.time()
+        model = self.model_runner.model
+
+        # First chunk marks the weights resident again (mirrors the full loader).
+        self._offloaded_state = {}
+
+        names = ipc_payload["names"]
+        handles_list = pickle.loads(
+            base64.b64decode(ipc_payload["ipc_handles_pickled"]))
+
+        device_index = torch.cuda.current_device()
+        physical_gpu_id = str(
+            torch.cuda.get_device_properties(device_index).uuid)
+
+        loaded = 0
+        missing = []
+        for name, handle_dict in zip(names, handles_list):
+            if physical_gpu_id not in handle_dict:
+                missing.append(name)
+                continue
+            func, args = handle_dict[physical_gpu_id]
+            args_list = list(args)
+            args_list[6] = device_index
+            src_tensor = func(*args_list)
+            model.load_weights([(name, src_tensor)])
+            loaded += 1
+
+        if missing:
+            raise RuntimeError(
+                f"CUDA IPC streaming sync: {len(missing)} param(s) had no IPC "
+                f"handle for GPU {physical_gpu_id} (e.g. {missing[:5]}). This "
+                f"indicates a GPU UUID / placement mismatch between sender and "
+                f"receiver and would otherwise leave stale weights."
+            )
+
+        if validate_names is not None:
+            self._validate_weight_sync_names(
+                model, validate_names, context="cuda_ipc_stream")
+
+        torch.cuda.synchronize()
+        return {"loaded": loaded, "names": names,
+                "elapsed_s": time.time() - start}
+
     def load_weights_from_shm_path(self, path: str) -> dict:
         """Load weights from a shared memory file path."""
         weights = torch.load(path, map_location="cpu", weights_only=True)

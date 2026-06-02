@@ -450,6 +450,16 @@ class InferenceWorker:
         )
         return results[0] if results else {}
 
+    async def load_weights_cuda_ipc_chunk(
+        self, ipc_payload: dict, validate_names=None,
+    ) -> dict[str, Any]:
+        """Stream a single CUDA IPC param chunk (low-memory weight sync)."""
+        results = await self.llm.collective_rpc(
+            "load_weights_cuda_ipc_chunk",
+            args=(ipc_payload, validate_names),
+        )
+        return results[0] if results else {}
+
     async def load_weights_from_cpu(self, weights: list) -> dict[str, Any]:
         """Load weights from CPU tensors (via Ray object store)."""
         results = await self.llm.collective_rpc(
