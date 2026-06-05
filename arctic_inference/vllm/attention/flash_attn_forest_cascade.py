@@ -349,6 +349,46 @@ class FlashAttentionMetadataBuilder(
             self.compilation_config.max_cudagraph_capture_size
         )
 
+        # One-shot startup banner so operators can confirm whether FCA will
+        # ever fire on this engine. Use print(..., flush=True) because the
+        # InferenceWorker / EngineCore subprocesses only attach a logging
+        # handler to the `vllm.*` namespace — module-level loggers under
+        # `arctic_inference.*` produce no output there. The per-batch gate
+        # also checks num_reqs, max_query_len, causal, and dcp_world_size;
+        # those are still reported at DEBUG level in build() below.
+        if self.forest_cascade_enabled and self.use_full_cuda_graph:
+            print(
+                f"[FCA] Forest Cascade Attention is CONFIGURED "
+                f"(max_query_len={self.forest_max_query_len}, "
+                f"min_group_size={self.forest_min_group_size}, "
+                f"min_additional_prefix_blocks={self.forest_min_additional_prefix_blocks}, "
+                f"min_non_singleton_fraction={self.forest_min_non_singleton_fraction:.3f}, "
+                f"max_non_singleton_groups={self.forest_max_non_singleton_groups}) "
+                f"but will be DISABLED at runtime because "
+                f"cudagraph_mode={self.compilation_config.cudagraph_mode} "
+                f"captures full CUDA graphs. Set "
+                f"compilation_config={{'cudagraph_mode': 'PIECEWISE'}} on "
+                f"the vLLM engine to let FCA fire.",
+                flush=True,
+            )
+        elif self.forest_cascade_enabled:
+            print(
+                f"[FCA] Forest Cascade Attention ENABLED "
+                f"(max_query_len={self.forest_max_query_len}, "
+                f"min_group_size={self.forest_min_group_size}, "
+                f"min_additional_prefix_blocks={self.forest_min_additional_prefix_blocks}, "
+                f"min_non_singleton_fraction={self.forest_min_non_singleton_fraction:.3f}, "
+                f"max_non_singleton_groups={self.forest_max_non_singleton_groups}, "
+                f"cudagraph_mode={self.compilation_config.cudagraph_mode}).",
+                flush=True,
+            )
+        else:
+            print(
+                "[FCA] Forest Cascade Attention DISABLED "
+                "(--forest-cascade-attn-configs not set).",
+                flush=True,
+            )
+
         if self.use_full_cuda_graph and self.aot_schedule:
             from vllm.utils.math_utils import round_up
             max_batch_size = max(
@@ -532,6 +572,16 @@ class FlashAttentionMetadataBuilder(
             use_forest_cascade = True
             use_cascade = True
 
+            # print(
+            #     f"[FCA] path=forest_cascade num_reqs={num_reqs} "
+            #     f"num_groups={int(forest_meta['group_sizes'].numel())} "
+            #     f"max_group_size={int(forest_meta['max_group_size'])} "
+            #     f"max_prefix_len={int(forest_meta['max_prefix_len'])} "
+            #     f"max_suffix_len={int(forest_meta['max_suffix_len'])} "
+            #     f"max_query_len={max_query_len}",
+            #     flush=True,
+            # )
+
             forest_perm = forest_meta["perm"]
             forest_token_perm = forest_meta["token_perm"]
             forest_packed_query_start_loc = forest_meta[
@@ -553,7 +603,12 @@ class FlashAttentionMetadataBuilder(
             scheduler_metadata = None
 
         elif use_cascade:
-            #print("Using single-tree cascade attention")
+            # print(
+            #     f"[FCA] path=single_tree_cascade num_reqs={num_reqs} "
+            #     f"common_prefix_len={common_prefix_len} "
+            #     f"max_query_len={max_query_len}",
+            #     flush=True,
+            # )
             cu_prefix_query_lens = torch.tensor(
                 [0, num_actual_tokens],
                 dtype=torch.int32,
@@ -582,7 +637,12 @@ class FlashAttentionMetadataBuilder(
                 causal=True,
             )
         else:
-            # print("Using standard flash attention")
+            # print(
+            #     f"[FCA] path=standard_flash num_reqs={num_reqs} "
+            #     f"max_query_len={max_query_len} "
+            #     f"want_forest_cascade={want_forest_cascade}",
+            #     flush=True,
+            # )
             scheduler_metadata = schedule(
                 batch_size=num_reqs,
                 cu_query_lens=query_start_loc,
@@ -1587,7 +1647,11 @@ def _try_build_forest_cascade_metadata(
         bt_p, prefix_blocks_req, suffix_blocks_req, max_suffix_blocks
     ).contiguous()
 
-    # print(f"Forest-cascade all group prefix lengths: {prefix_kv_lens.cpu().tolist()}, group sizes: {group_sizes.cpu().tolist()}")
+    # print(
+    #     f"[FCA] groups: prefix_kv_lens={prefix_kv_lens.cpu().tolist()} "
+    #     f"group_sizes={group_sizes.cpu().tolist()}",
+    #     flush=True,
+    # )
 
     return {
         "perm": perm,
