@@ -307,6 +307,8 @@ class FlashAttentionMetadataBuilder(
             fca_cfg = {}
         self.forest_max_query_len = int(
             fca_cfg.get('max_query_len', 16))
+        self.forest_min_batch_size = int(
+            fca_cfg.get('min_batch_size', 8))
         self.forest_min_group_size = int(
             fca_cfg.get('min_group_size', 2))
         self.forest_min_additional_prefix_blocks = int(
@@ -360,6 +362,7 @@ class FlashAttentionMetadataBuilder(
             print(
                 f"[FCA] Forest Cascade Attention is CONFIGURED "
                 f"(max_query_len={self.forest_max_query_len}, "
+                f"min_batch_size={self.forest_min_batch_size}, "
                 f"min_group_size={self.forest_min_group_size}, "
                 f"min_additional_prefix_blocks={self.forest_min_additional_prefix_blocks}, "
                 f"min_non_singleton_fraction={self.forest_min_non_singleton_fraction:.3f}, "
@@ -375,6 +378,7 @@ class FlashAttentionMetadataBuilder(
             print(
                 f"[FCA] Forest Cascade Attention ENABLED "
                 f"(max_query_len={self.forest_max_query_len}, "
+                f"min_batch_size={self.forest_min_batch_size}, "
                 f"min_group_size={self.forest_min_group_size}, "
                 f"min_additional_prefix_blocks={self.forest_min_additional_prefix_blocks}, "
                 f"min_non_singleton_fraction={self.forest_min_non_singleton_fraction:.3f}, "
@@ -518,7 +522,7 @@ class FlashAttentionMetadataBuilder(
             self.forest_cascade_enabled
             and (not self.use_full_cuda_graph)
             and causal
-            and num_reqs >= 8
+            and num_reqs >= int(self.forest_min_batch_size)
             and max_query_len <= int(self.forest_max_query_len)
             and self.dcp_world_size <= 1
         )
