@@ -193,6 +193,13 @@ class Scheduler:
         self._adjust_task: asyncio.Task | None = None
         self._inflight_tasks: dict[int, set] = {i: set() for i in range(len(workers))}
 
+        # Group routing state for _equal_affinity_routing (grouped/uid-keyed
+        # requests). Keeps every member of a group (same prefix_hash) on one
+        # worker while distributing groups evenly. Cleared per rollout via
+        # reset_affinity.
+        self._group_worker: dict[int, int] = {}  # prefix_hash -> worker_idx
+        self._group_counter: int = 0  # dense arrival index for round-robin
+
         # Per-request metric ring (drained by `drain_metrics`).
         self._request_records: _BoundedDeque = _BoundedDeque(max_request_records)
         # Per-replica `concurrency_limit` history; used to back-fill
@@ -397,6 +404,36 @@ class Scheduler:
         if self._adjust_task is None:
             self._adjust_task = loop.create_task(self._concurrency_adjust_loop())
 
+    def _equal_affinity_routing(self, request: _Request, workers: list[WorkerState]) -> int:
+        """Strict mode: deterministic equal assignment via round-robin by arrival.
+
+        Keeps every member of a group (same ``prefix_hash``) on one worker so
+        groups stay intact across the separate submits that share a uid.
+        """
+        # Reuse this group's existing assignment if its worker is still usable.
+        h = request.prefix_hash
+        if h is not None and h in self._group_worker:
+            idx = self._group_worker[h]
+            if workers[idx].available and workers[idx].concurrency_limit > 0:
+                return idx
+        candidates = [
+            i for i, ws in enumerate(workers)
+            if ws.available and ws.concurrency_limit > 0
+        ] or list(range(len(workers)))
+        idx = candidates[self._group_counter % len(candidates)]
+        self._group_counter += 1
+        if request.prefix_hash is not None:
+            self._group_worker[request.prefix_hash] = idx
+        return idx
+
+    def reset_affinity(self) -> None:
+        """Clear group->worker assignments and the round-robin counter.
+
+        Called once per rollout so a new generation batch starts fresh.
+        """
+        self._group_worker.clear()
+        self._group_counter = 0
+
     async def _process_request(self, req: _Request) -> None:
         ws: WorkerState | None = None
         current_task = asyncio.current_task()
@@ -404,11 +441,10 @@ class Scheduler:
         submitted_time: float = 0.0
         result: Any = None
 
-        routing_fn = (
-            strict_affinity_routing
-            if req.strict and req.prefix_hash is not None
-            else self._routing_fn
-        )
+        if req.strict and req.prefix_hash is not None:
+            routing_fn = self._equal_affinity_routing
+        else:
+            routing_fn = self._routing_fn
 
         try:
             while not self._stopped:
