@@ -38,18 +38,8 @@ class ModelConfig(BaseModel):
     kv_cache_dtype: str | None = None
     enable_expert_parallel: bool = False
     trust_remote_code: bool = True
-
-    # Forest Cascade Attention: groups concurrent requests by shared KV-cache
-    # prefix and runs one prefix FA call + per-request suffix FA + log-sum-exp
-    # merge, eliminating redundant KV reads when many requests share long
-    # prompt prefixes (e.g. multi-turn rollouts pinned to the same replica
-    # via routing_key).  Default-on with `'{}'` (all backend defaults); FCA
-    # transparently falls back to standard FlashAttention when batch
-    # conditions don't apply (see attention/README.md).  Set to ``None`` to
-    # disable.  Only passed to vLLM when ARCTIC_INFERENCE_ENABLED=1 in the
-    # process or ``extra_env`` (otherwise omitted so vanilla AsyncEngineArgs
-    # does not error).
-    forest_cascade_attn_configs: str | None = "{}"
+    use_fca: bool = False
+    spec_model: str = ""
 
     extra_engine_kwargs: dict[str, Any] = Field(default_factory=dict, exclude=True)
     extra_env: dict[str, str] = Field(default_factory=dict, exclude=True)
@@ -58,7 +48,22 @@ class ModelConfig(BaseModel):
     def to_engine_kwargs(self) -> dict[str, Any]:
         kwargs = {k: v for k, v in self.model_dump().items() if v is not None}
         kwargs.update(self.extra_engine_kwargs)
-        if not arctic_inference_effective_enabled(self.extra_env):
+
+        # use_fca / spec_model are Arctic-only toggles, not AsyncEngineArgs
+        # fields: translate them into real engine kwargs and drop the raw flags.
+        use_fca = kwargs.pop("use_fca", False)
+        spec_model = kwargs.pop("spec_model", "")
+
+        if arctic_inference_effective_enabled(self.extra_env):
+            if use_fca:
+                kwargs.setdefault("compilation_config", {"cudagraph_mode": "PIECEWISE"})
+                kwargs.setdefault("forest_cascade_attn_configs", "{}")
+            if spec_model:
+                kwargs.setdefault(
+                    "speculative_config",
+                    {"method": "arctic", "model": spec_model, "num_speculative_tokens": 3},
+                )
+        else:
             kwargs.pop("forest_cascade_attn_configs", None)
         return kwargs
 
