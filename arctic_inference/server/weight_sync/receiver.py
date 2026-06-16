@@ -702,6 +702,25 @@ class WeightSyncExtension:
     # Diagnostics
     # ------------------------------------------------------------------
 
+    def compute_weight_norm(self) -> dict:
+        """Sum of squares of this TP worker's live model parameters.
+
+        Called via ``collective_rpc("compute_weight_norm")``. Returns the
+        partial sum of squares (float64) over the params this rank holds; the
+        host aggregates across TP ranks and takes the square root to get the
+        global L2 weight norm. Summing squares is layout-invariant, so it can
+        be compared against the training engine's norm even though vLLM fuses
+        params (e.g. QKV / gate_up) differently. Used by tests to verify a
+        weight sync landed correctly.
+        """
+        model = self.model_runner.model
+        sq_sum = 0.0
+        num_params = 0
+        for _, p in model.named_parameters():
+            sq_sum += p.detach().double().pow(2).sum().item()
+            num_params += 1
+        return {"sq_sum": sq_sum, "num_params": num_params}
+
     def probe_engine_mem(self) -> dict:
         """Report GPU memory state from inside the vLLM engine worker.
 

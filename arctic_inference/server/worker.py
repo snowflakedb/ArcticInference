@@ -499,6 +499,19 @@ class InferenceWorker:
         results = await self.llm.collective_rpc("close_weight_sync")
         return results[0] if results else {}
 
+    async def compute_weight_norm(self) -> dict[str, Any]:
+        """Global L2 norm of the engine's live model weights (all TP ranks).
+
+        Each TP worker returns its partial sum of squares; we add them across
+        ranks and take the square root, so the result is the full-model norm
+        regardless of tensor-parallel sharding. Used by tests to confirm a
+        weight sync landed.
+        """
+        results = await self.llm.collective_rpc("compute_weight_norm")
+        sq_sum = sum(r["sq_sum"] for r in results)
+        num_params = sum(r["num_params"] for r in results)
+        return {"norm": sq_sum**0.5, "sq_sum": sq_sum, "num_params": num_params}
+
     def shutdown(self) -> None:
         if self.llm is not None:
             del self.llm

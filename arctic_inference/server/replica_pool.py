@@ -600,6 +600,17 @@ class ReplicaPool:
     # Weight sync
     # ------------------------------------------------------------------
 
+    async def compute_weight_norm(self, model_id: str | None = None) -> dict[str, Any]:
+        """Global L2 norm of the live model weights on replica 0.
+
+        All replicas hold identical weights, so one replica suffices. Used by
+        tests to confirm a weight sync produced the expected weights.
+        """
+        self._check_model_id(model_id)
+        if not self._workers:
+            raise RuntimeError("ReplicaPool not initialized")
+        return await self._workers[0].compute_weight_norm.remote()
+
     def get_weights_info(self, model_id: str | None = None) -> list[dict]:
         self._check_model_id(model_id)
         if self._config is None:
