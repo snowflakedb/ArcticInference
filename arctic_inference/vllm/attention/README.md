@@ -167,7 +167,7 @@ for a given batch:
 | `num_reqs >= 8` | Too few requests → grouping overhead exceeds benefit |
 | `causal = True` | FCA only applies to causal (decoder) attention |
 | `dcp_world_size <= 1` | Distributed context parallelism has its own KV partitioning |
-| `use_full_cuda_graph = False` | Forest cascade uses variable-shape metadata incompatible with full CUDA graph capture |
+| `cudagraph_mode` includes PIECEWISE (`PIECEWISE` or `FULL_AND_PIECEWISE`) | Forest cascade uses variable-shape metadata incompatible with full CUDA graph replay; with `FULL_AND_PIECEWISE` the cudagraph dispatcher picks PIECEWISE on batches where FCA fires and falls back to the captured FULL graph (regular FA) otherwise |
 | `common_prefix_len` is block-aligned | The global common prefix must align to `block_size` boundaries |
 
 When any condition is not met, the batch transparently falls back to

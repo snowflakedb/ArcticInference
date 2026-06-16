@@ -347,6 +347,9 @@ class FlashAttentionMetadataBuilder(
         self.use_full_cuda_graph = (
             self.compilation_config.cudagraph_mode.has_full_cudagraphs()
         )
+        self.has_piecewise_cuda_graph = (
+            self.compilation_config.cudagraph_mode.has_piecewise_cudagraphs()
+        )
         self.max_cudagraph_size = (
             self.compilation_config.max_cudagraph_capture_size
         )
@@ -358,7 +361,7 @@ class FlashAttentionMetadataBuilder(
         # `arctic_inference.*` produce no output there. The per-batch gate
         # also checks num_reqs, max_query_len, causal, and dcp_world_size;
         # those are still reported at DEBUG level in build() below.
-        if self.forest_cascade_enabled and self.use_full_cuda_graph:
+        if self.forest_cascade_enabled and not self.has_piecewise_cuda_graph:
             print(
                 f"[FCA] Forest Cascade Attention is CONFIGURED "
                 f"(max_query_len={self.forest_max_query_len}, "
@@ -369,9 +372,9 @@ class FlashAttentionMetadataBuilder(
                 f"max_non_singleton_groups={self.forest_max_non_singleton_groups}) "
                 f"but will be DISABLED at runtime because "
                 f"cudagraph_mode={self.compilation_config.cudagraph_mode} "
-                f"captures full CUDA graphs. Set "
-                f"compilation_config={{'cudagraph_mode': 'PIECEWISE'}} on "
-                f"the vLLM engine to let FCA fire.",
+                f"captures no piecewise CUDA graphs. Set "
+                f"compilation_config={{'cudagraph_mode': 'PIECEWISE'}} or "
+                f"'FULL_AND_PIECEWISE' on the vLLM engine to let FCA fire.",
                 flush=True,
             )
         elif self.forest_cascade_enabled:
@@ -409,6 +412,23 @@ class FlashAttentionMetadataBuilder(
             )
 
         self.aot_sliding_window: tuple[int, int] | None = None
+
+    def will_forest_cascade_fire(
+        self, num_reqs: int, max_query_len: int
+    ) -> bool:
+        """Cheap, side-effect-free pre-check used by the model runner to
+        decide whether to set ``invalid_modes={FULL}`` on the cudagraph
+        dispatcher. Mirrors the runtime gate in ``build()`` but uses only
+        inputs that are known before metadata construction (``causal`` and
+        ``common_prefix_len`` are intentionally omitted — false positives
+        just dispatch PIECEWISE when FULL would also have worked).
+        """
+        return (
+            self.forest_cascade_enabled
+            and num_reqs >= int(self.forest_min_batch_size)
+            and max_query_len <= int(self.forest_max_query_len)
+            and self.dcp_world_size <= 1
+        )
 
     def build(
         self,
@@ -517,10 +537,12 @@ class FlashAttentionMetadataBuilder(
         forest_max_prefix_len = None
         forest_max_suffix_len = None
 
-        # Forest-cascade check: disabled when DCP is active.
+        # Forest-cascade check: disabled when DCP is active. When the engine
+        # captures FULL+PIECEWISE graphs, the cudagraph dispatcher selects
+        # PIECEWISE for batches where this gate would be True, so FCA only
+        # ever runs inside a piecewise replay.
         want_forest_cascade = (
             self.forest_cascade_enabled
-            and (not self.use_full_cuda_graph)
             and causal
             and num_reqs >= int(self.forest_min_batch_size)
             and max_query_len <= int(self.forest_max_query_len)

@@ -114,6 +114,8 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
     _orig_sample_tokens = GPUModelRunner.sample_tokens
     _orig_initialize_kv_cache = GPUModelRunner.initialize_kv_cache
     _orig_reload_weights = GPUModelRunner.reload_weights
+    _orig_determine_batch_execution_and_padding = (
+        GPUModelRunner._determine_batch_execution_and_padding)
 
     def __init__(
         self,
@@ -343,6 +345,54 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                     meta.swiftkv_logits_indices = logits_indices
 
         return attn_metadata, spec_decode_common_attn_metadata
+
+    def _iter_fca_metadata_builders(self):
+        """Yield every FCA metadata builder across all kv-cache / attention
+        groups. Cached on the runner after the first call so the per-step
+        wrapper is O(num_fca_groups) without re-walking ``attn_groups``.
+        Returns an empty list when FCA is not configured.
+        """
+        cached = getattr(self, "_fca_metadata_builders_cache", None)
+        if cached is not None:
+            return cached
+        # Lazy import to avoid importing the FCA backend at module load
+        # time (it pulls in CUDA-init-heavy modules).
+        from arctic_inference.vllm.attention.flash_attn_forest_cascade import (
+            FlashAttentionMetadataBuilder as FCAMetadataBuilder,
+        )
+        builders: list[FCAMetadataBuilder] = []
+        if hasattr(self, "attn_groups"):
+            for kv_groups in self.attn_groups:
+                for group in kv_groups:
+                    builder = group.get_metadata_builder()
+                    if isinstance(builder, FCAMetadataBuilder):
+                        builders.append(builder)
+        self._fca_metadata_builders_cache = builders
+        return builders
+
+    def _determine_batch_execution_and_padding(self, *args, **kwargs):
+        # Forest Cascade Attention requires PIECEWISE replay. When the engine
+        # captures FULL+PIECEWISE we OR ``use_cascade_attn`` to True for
+        # batches where FCA will fire so the cudagraph dispatcher passes
+        # ``invalid_modes={FULL}``; other batches keep the FULL-graph fast
+        # path. Both runtime call sites pass these by keyword.
+        #
+        # Skip the cudagraph-capture / dummy-run path: it always passes
+        # ``force_uniform_decode`` (a bool), while the real execution hot path
+        # leaves it None. Flipping ``use_cascade_attn`` during a FULL-graph
+        # capture would make the dispatcher return PIECEWISE and trip the
+        # "Cudagraph runtime mode mismatch" assert in ``_dummy_run``.
+        if (kwargs.get('force_uniform_decode') is None
+                and not kwargs.get('use_cascade_attn', False)):
+            num_reqs = kwargs.get('num_reqs')
+            max_query = kwargs.get('max_num_scheduled_tokens')
+            if num_reqs is not None and max_query is not None:
+                for builder in self._iter_fca_metadata_builders():
+                    if builder.will_forest_cascade_fire(num_reqs, max_query):
+                        kwargs['use_cascade_attn'] = True
+                        break
+        return self._orig_determine_batch_execution_and_padding(
+            *args, **kwargs)
 
     # set padding for SP here
     def _pad_for_sequence_parallelism(self, num_scheduled_tokens: int) -> int:
