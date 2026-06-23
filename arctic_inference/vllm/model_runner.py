@@ -865,12 +865,13 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
         # drafting is fully disabled one step and re-enabled the next.
         batch_size = len(self.input_batch.req_ids)
         draft_limit = batch_size  # default: draft for all
-        if (
-            self.speculative_config
-            and self.speculative_config.disable_by_batch_size
-            and batch_size > self.speculative_config.disable_by_batch_size
-        ):
-            draft_limit = self.speculative_config.disable_by_batch_size
+        if self.speculative_config is not None:
+            # Unified soft (disable_by_batch_size) + hard
+            # (hard_disable_by_batch_size) caps. draft_limit==0 means SD is
+            # hard-gated off this step: we still keep the spec pipeline alive
+            # below and return a zero-filled draft.
+            draft_limit = self.speculative_config.effective_draft_limit(
+                batch_size)
 
         use_async_path = (
             self.speculative_config.method in ("arctic", "mlp_speculator")
@@ -900,6 +901,22 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 sampled_token_ids=sampled_token_ids,
                 spec_decode_metadata=spec_decode_metadata,
             )
+
+            # Hard gate: nobody drafts this step. Return an all-zeros draft
+            # (the scheduler allocates no spec placeholders to match) without
+            # invoking the drafter on an empty [:0] slice, which can choke
+            # cudagraph replay / kernels. The prep calls above still run so
+            # the async one-step-delayed verification state stays consistent.
+            if draft_limit == 0:
+                merged_buf = getattr(self, '_draft_merged_gpu', None)
+                if merged_buf is not None:
+                    draft = merged_buf[:batch_size]
+                    draft.zero_()
+                    return draft
+                return torch.zeros(
+                    batch_size, self.num_spec_tokens,
+                    dtype=next_token_ids.dtype, device=next_token_ids.device,
+                )
 
             # Only draft for the first draft_limit requests.
             raw_draft = self.drafter.propose(
@@ -966,19 +983,23 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 scheduler_output.num_scheduled_tokens,
             )
 
-            # Only draft for the first draft_limit requests.
-            arctic_output_tensor = self.drafter.propose(
-                context_token_ids=next_token_ids[:draft_limit],
-                previous_hidden_states=previous_hidden_states[:draft_limit],
-                num_predict_tokens=self.drafter.model.n_predict,
-            )
-
-            arctic_spec_token_ids = arctic_output_tensor.tolist()
-            # Pad with empty lists for requests beyond draft_limit.
-            if draft_limit < batch_size:
-                arctic_spec_token_ids.extend(
-                    [] for _ in range(batch_size - draft_limit)
+            if draft_limit == 0:
+                # Hard gate: no request drafts this step.
+                arctic_spec_token_ids = [[] for _ in range(batch_size)]
+            else:
+                # Only draft for the first draft_limit requests.
+                arctic_output_tensor = self.drafter.propose(
+                    context_token_ids=next_token_ids[:draft_limit],
+                    previous_hidden_states=previous_hidden_states[:draft_limit],
+                    num_predict_tokens=self.drafter.model.n_predict,
                 )
+
+                arctic_spec_token_ids = arctic_output_tensor.tolist()
+                # Pad with empty lists for requests beyond draft_limit.
+                if draft_limit < batch_size:
+                    arctic_spec_token_ids.extend(
+                        [] for _ in range(batch_size - draft_limit)
+                    )
 
         if self._suffix_cache is not None:
             self._update_suffix_cache(sampled_token_ids_list)
@@ -1351,13 +1372,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 # Track actual draft lengths for next step's allocation.
                 _n_predict = self.drafter.model.n_predict
                 _batch_size = len(self.input_batch.req_ids)
-                _disable_bs = (
-                    self.speculative_config.disable_by_batch_size
-                    if self.speculative_config else None
+                _draft_limit = (
+                    self.speculative_config.effective_draft_limit(_batch_size)
+                    if self.speculative_config else _batch_size
                 )
-                _draft_limit = _batch_size
-                if _disable_bs and _batch_size > _disable_bs:
-                    _draft_limit = _disable_bs
                 self._prev_actual_draft_lens = {
                     req_id: _n_predict if i < _draft_limit else 0
                     for i, req_id in enumerate(self.input_batch.req_ids)
@@ -1493,13 +1511,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                 # Track actual draft lengths for next step's allocation.
                 _n_predict = self.drafter.model.n_predict
                 _batch_size = len(self.input_batch.req_ids)
-                _disable_bs = (
-                    self.speculative_config.disable_by_batch_size
-                    if self.speculative_config else None
+                _draft_limit = (
+                    self.speculative_config.effective_draft_limit(_batch_size)
+                    if self.speculative_config else _batch_size
                 )
-                _draft_limit = _batch_size
-                if _disable_bs and _batch_size > _disable_bs:
-                    _draft_limit = _disable_bs
                 _actual_lens: dict[str, int] = {}
                 for _i, _req_id in enumerate(self.input_batch.req_ids):
                     _s = (len(suffix_draft[_i])

@@ -51,6 +51,7 @@ class ArcticSpeculativeConfig(SpeculativeConfig):
 
     method: str | None = None
     disable_by_batch_size: int | None = None
+    hard_disable_by_batch_size: int | None = None
     enable_suffix_decoding: bool = False
     suffix_cache_max_depth: int = 64
     suffix_speculative_tokens: int = 0
@@ -58,6 +59,32 @@ class ArcticSpeculativeConfig(SpeculativeConfig):
     suffix_max_spec_factor: float = 1.0
     suffix_max_spec_offset: float = 0.0
     suffix_min_token_prob: float = 0.1
+
+    def effective_draft_limit(self, batch_size: int) -> int:
+        """Number of requests permitted to draft this decode step.
+
+        Both batch-size caps funnel through the single ``draft_limit`` the
+        worker and scheduler already use, so they compose cleanly:
+
+          * ``hard_disable_by_batch_size`` (HARD): once the running batch
+            reaches this, *no* request drafts (returns 0). SD is effectively
+            off, but the spec pipeline stays structurally alive (the worker
+            still returns a zero-filled draft and the scheduler allocates no
+            spec placeholders) -- this avoids the stale-data crash that fully
+            skipping the spec path on a single step would cause.
+          * ``disable_by_batch_size`` (SOFT): above this, only the first N
+            requests draft (caps total draft tokens to N * width).
+
+        Returning ``batch_size`` means everyone drafts (no cap active). The
+        HARD cap is checked first so it always wins when both apply.
+        """
+        if (self.hard_disable_by_batch_size is not None
+                and batch_size >= self.hard_disable_by_batch_size):
+            return 0
+        if (self.disable_by_batch_size is not None
+                and batch_size > self.disable_by_batch_size):
+            return self.disable_by_batch_size
+        return batch_size
 
 
 class ParallelConfigPatch(ArcticPatch[ParallelConfig]):
@@ -90,6 +117,22 @@ class SpeculativeConfigPatch(ArcticPatch[SpeculativeConfig]):
         if (use_suffix or is_arctic_method) and self.disable_by_batch_size is None:
             logger.info("Defaulting disable_by_batch_size to 64")
             self.disable_by_batch_size = 64
+
+        if self.hard_disable_by_batch_size is not None:
+            logger.info(
+                "Speculative decoding hard-disabled at running batch >= %d "
+                "(soft first-N cap disable_by_batch_size=%s)",
+                self.hard_disable_by_batch_size, self.disable_by_batch_size)
+            if (self.disable_by_batch_size is not None
+                    and self.hard_disable_by_batch_size
+                    <= self.disable_by_batch_size):
+                logger.warning(
+                    "hard_disable_by_batch_size=%d <= disable_by_batch_size=%d:"
+                    " the soft first-N cap never applies; SD goes straight from"
+                    " full to off at batch %d.",
+                    self.hard_disable_by_batch_size,
+                    self.disable_by_batch_size,
+                    self.hard_disable_by_batch_size)
 
         if use_hybrid:
             self.suffix_speculative_tokens = self.suffix_cache_max_depth

@@ -622,6 +622,53 @@ class UlyssesEngineCore(ArcticPatch[EngineCore]):
 
     iteration = 0
 
+    _orig_post_step = EngineCore.post_step
+
+    def _sd_hardoff_threshold(self):
+        """Running-batch size at/above which SD is hard-disabled, or None.
+
+        Matches the worker's ``effective_draft_limit() == 0`` condition: the
+        hard cap is the only thing that drives the draft limit to exactly 0.
+        """
+        spec = self.vllm_config.speculative_config
+        if spec is None:
+            return None
+        return getattr(spec, "hard_disable_by_batch_size", None)
+
+    def post_step(self, model_executed: bool) -> None:
+        """Skip the per-step draft-fetch RPC when SD is hard-off.
+
+        In the sync spec-decode path the base ``post_step`` always issues a
+        ``take_draft_token_ids()`` collective RPC (~3.4 ms/step). At hard-off
+        (running batch >= ``hard_disable_by_batch_size``) the workers produced
+        only zero-filled drafts and the scheduler already cleared
+        ``request.spec_token_ids`` when it consumed the prior step's drafts, so
+        fetching + applying them is a no-op. Skipping the RPC is therefore
+        output-identical and recovers the full hard-off TPOT tax. Outside the
+        hard-off regime behavior is exactly the base method.
+        """
+        # Only the sync spec-decode path runs take_draft_token_ids() here.
+        if (self.async_scheduling or not self.use_spec_decode
+                or not model_executed):
+            return self._orig_post_step(model_executed)
+
+        thr = self._sd_hardoff_threshold()
+        if thr is not None:
+            try:
+                running, _ = self.scheduler.get_request_counts()
+            except Exception:
+                # On any failure, fall back to exact base behavior.
+                running = None
+            # At running >= hard_disable_by_batch_size the worker's
+            # effective_draft_limit() == 0, so it produced only zero-filled
+            # drafts this step; the scheduler already cleared
+            # request.spec_token_ids when it consumed the prior step's
+            # drafts, so the take + update round-trip is pure waste.
+            if running is not None and running >= thr:
+                return
+
+        return self._orig_post_step(model_executed)
+
     def step_with_batch_queue(
         self,
     ) -> tuple[dict[int, EngineCoreOutputs] | None, bool]:
