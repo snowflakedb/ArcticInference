@@ -1953,6 +1953,10 @@ class GPUModelRunnerPatch(ArcticPatch[GPUModelRunner]):
                     with set_shift_parallel_mode(True), \
                          self._use_shift_cudagraph_tables(), \
                          self._shift_graph_capture_context():
+                        self._register_shift_cudagraph_keys(
+                            compilation_cases_shift,
+                            cudagraph_runtime_mode,
+                        )
                         self._orig_capture_cudagraphs(
                             batch_descriptors_shift,
                             shift_runtime_mode,
