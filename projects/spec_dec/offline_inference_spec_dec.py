@@ -18,45 +18,45 @@ from vllm import LLM, SamplingParams
 
 import os
 os.environ["ARCTIC_INFERENCE_ENABLED"] = "1"
-os.environ["CUDA_VISIBLE_DEVICES"] = "4,5"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
 
 vllm.plugins.load_general_plugins()
 
-llm = LLM(
-    model="meta-llama/Llama-3.1-70B-Instruct",
-    quantization="fp8",
-    tensor_parallel_size=2,
-    speculative_config={
-        "method": "arctic",
-        "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.1-70B-Instruct",
-        "num_speculative_tokens": 3,
-        "enable_suffix_decoding": False,
-        "disable_by_batch_size": 64,
-    },
-    enforce_eager=True,
-    async_scheduling=True,
-    seed=0,
-)
+if __name__ == "__main__":
+    llm = LLM(
+        model="RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic",
+        tensor_parallel_size=2,
+        speculative_config={
+            "method": "arctic",
+            "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.1-8B-Instruct",
+            "num_speculative_tokens": 3,
+            "enable_suffix_decoding": False,
+            "disable_by_batch_size": 64,
+        },
+        async_scheduling=True,
+        max_model_len=4096,
+        seed=0,
+    )
 
-print("=" * 80)
+    print("=" * 80)
 
-conversation = [
-    {
-        "role": "user",
-        "content": "Hello"
-    },
-    {
-        "role": "assistant",
-        "content": "Hello! How can I assist you today?"
-    },
-    {
-        "role": "user",
-        "content": "Write an essay about the importance of higher education.",
-    },
-]
+    conversation = [
+        {
+            "role": "user",
+            "content": "Hello"
+        },
+        {
+            "role": "assistant",
+            "content": "Hello! How can I assist you today?"
+        },
+        {
+            "role": "user",
+            "content": "Write an essay about the importance of higher education.",
+        },
+    ]
 
-sampling_params = SamplingParams(temperature=0.1, max_tokens=128)
+    sampling_params = SamplingParams(temperature=0.1, max_tokens=128)
 
-outputs = llm.chat(conversation, sampling_params=sampling_params)
+    outputs = llm.chat(conversation, sampling_params=sampling_params)
 
-print(outputs[0].outputs[0].text)
+    print(outputs[0].outputs[0].text)

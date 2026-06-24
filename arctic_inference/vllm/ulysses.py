@@ -13,36 +13,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import threading
-import weakref
-from contextlib import contextmanager
-from concurrent.futures import Future
-from collections import deque
-from collections.abc import Callable
-from typing import Optional, cast
 import time
+from collections.abc import Callable
+from concurrent.futures import Future
+from contextlib import contextmanager
+from typing import Optional, cast
 
 import torch
 import vllm.distributed.parallel_state as parallel_state
-import vllm.envs as envs
-from vllm.attention.layer import Attention
 from vllm.config import ModelConfig, ParallelConfig, CUDAGraphMode, VllmConfig
-from vllm.distributed.device_communicators.shm_broadcast import MessageQueue
+from vllm.config.compilation import CompilationConfig
 from vllm.distributed.parallel_state import (init_model_parallel_group,
                                              get_world_group,
                                              destroy_model_parallel,
                                              destroy_distributed_environment)
-from vllm.v1.executor.multiproc_executor import (
-    set_multiprocessing_worker_envs)
-from vllm.utils.network_utils import get_distributed_init_method, get_open_port, get_loopback_ip
-from vllm.utils.system_utils import get_mp_context
-from vllm.v1.executor.abstract import FailureCallback
-from vllm.v1.executor.multiproc_executor import (MultiprocExecutor, WorkerProc,
-                                                 UnreadyWorkerProcHandle,
-                                                 FutureWrapper)
+from vllm.model_executor.layers.attention import Attention
 from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
-from vllm.config.compilation import CompilationConfig
-from vllm.v1.engine.core import EngineCore, EngineCoreOutputs
+from vllm.v1.engine import EngineCoreOutputs
+from vllm.v1.engine.core import EngineCore
+from vllm.v1.executor.multiproc_executor import MultiprocExecutor, WorkerProc
 from vllm.v1.outputs import ModelRunnerOutput
 
 
@@ -248,7 +237,7 @@ class UlyssesParallelState(ArcticPatch[parallel_state]):
         shift_parallel_size = tensor_model_parallel_size * sequence_parallel_size
         assert parallel_state._SP_TP is None, "full-TP group is already initialized"
         group_ranks = (
-            all_ranks.transpose(4, 5)  # keep same head-order trick as your old transpose(3,4)
+            all_ranks.transpose(4, 5)  # head-order trick
             .reshape(-1, shift_parallel_size)
             .unbind(0)
         )
@@ -320,42 +309,69 @@ class UlyssesParallelState(ArcticPatch[parallel_state]):
         from other kernels possibly launched on background in the default stream.
         """
         from vllm.distributed.parallel_state import GraphCaptureContext
+        from vllm.distributed.device_communicators.cuda_communicator import (
+            CudaCommunicator,
+        )
         context = GraphCaptureContext(torch.cuda.Stream(device=device))
-        with parallel_state._TP.graph_capture(context), parallel_state._PP.graph_capture(
-                context), parallel_state._SP_TP.graph_capture(context):
-            yield context
+
+        def _get_ca(group):
+            if (group is not None
+                    and group.device_communicator is not None
+                    and isinstance(group.device_communicator, CudaCommunicator)):
+                return group.device_communicator.ca_comm
+            return None
+
+        tp_ca = _get_ca(parallel_state._TP)
+        sp_tp_ca = _get_ca(parallel_state._SP_TP)
+
+        saved_tp = tp_ca.disabled if tp_ca is not None else None
+        saved_sp_tp = sp_tp_ca.disabled if sp_tp_ca is not None else None
+        if tp_ca is not None:
+            tp_ca.disabled = True
+        if sp_tp_ca is not None:
+            sp_tp_ca.disabled = True
+
+        try:
+            with parallel_state._TP.graph_capture(context), \
+                 parallel_state._PP.graph_capture(context), \
+                 parallel_state._SP_TP.graph_capture(context):
+                yield context
+        finally:
+            if tp_ca is not None and saved_tp is not None:
+                tp_ca.disabled = saved_tp
+            if sp_tp_ca is not None and saved_sp_tp is not None:
+                sp_tp_ca.disabled = saved_sp_tp
 
 
 class UlyssesWorkerProc(ArcticPatch[WorkerProc]):
 
-    def destroy_model_parallel(self):
-        from vllm.distributed.parallel_state import _SP, _SP_TP
-        if _SP:
-            _SP.destroy()
-        _SP = None
-        if _SP_TP:
-            _SP_TP.destroy()
-        _SP_TP = None
+    @staticmethod
+    def _destroy_ulysses_parallel():
+        sp = getattr(parallel_state, '_SP', None)
+        if sp is not None:
+            sp.destroy()
+        parallel_state._SP = None
+        sp_tp = getattr(parallel_state, '_SP_TP', None)
+        if sp_tp is not None:
+            sp_tp.destroy()
+        parallel_state._SP_TP = None
 
     def shutdown(self):
+        if self.rpc_broadcast_mq is not None:
+            self.rpc_broadcast_mq.shutdown()
+        if self.worker_response_mq is not None:
+            self.worker_response_mq.shutdown()
+        self.worker.shutdown()
         self.rpc_broadcast_mq = None
         self.worker_response_mq = None
         destroy_model_parallel()
-        # destroy Ulysses communicators here
-        self.destroy_model_parallel()
+        UlyssesWorkerProc._destroy_ulysses_parallel()
         destroy_distributed_environment()
 
 
 class UlyssesMultiprocExecutor(ArcticPatch[MultiprocExecutor]):
 
-    def _init_executor(self) -> None:
-        # Call self.shutdown at exit to clean up
-        # and ensure workers will be terminated.
-        self._finalizer = weakref.finalize(self, self.shutdown)
-        self.is_failed = False
-        self.shutdown_event = threading.Event()
-        self.failure_callback: FailureCallback | None = None
-
+    def _get_parallel_sizes(self) -> tuple[int, int, int]:
         self.world_size = self.parallel_config.world_size
         assert self.world_size % self.parallel_config.nnodes_within_dp == 0, (
             f"global world_size ({self.parallel_config.world_size}) must be "
@@ -367,7 +383,7 @@ class UlyssesMultiprocExecutor(ArcticPatch[MultiprocExecutor]):
         pp_size = self.parallel_config.pipeline_parallel_size
         pcp_size = self.parallel_config.prefill_context_parallel_size
         sp_size = self.parallel_config.ulysses_sequence_parallel_size
-        
+
         assert self.world_size == tp_size * pp_size * pcp_size * sp_size, (
             f"world_size ({self.world_size}) must be equal to the "
             f"tensor_parallel_size ({tp_size}) x pipeline"
@@ -375,101 +391,7 @@ class UlyssesMultiprocExecutor(ArcticPatch[MultiprocExecutor]):
             f"_parallel_size ({pcp_size}) x ulysses_sequence_parallel"
             f"_size ({sp_size})."
         )
-
-        # Set multiprocessing envs
-        set_multiprocessing_worker_envs()
-
-        # use the loopback address get_loopback_ip() for communication.
-        distributed_init_method = get_distributed_init_method(
-            get_loopback_ip(), get_open_port()
-        )
-        self.rpc_broadcast_mq: MessageQueue | None = None
-        scheduler_output_handle: Handle | None = None
-        # Initialize worker and set up message queues for SchedulerOutputs
-        # and ModelRunnerOutputs
-        if self.parallel_config.node_rank_within_dp == 0:
-            # For leader node within each dp rank,
-            # each dp will have its own leader multiproc executor.
-            max_chunk_bytes = envs.VLLM_MQ_MAX_CHUNK_BYTES_MB * 1024 * 1024
-            self.rpc_broadcast_mq = MessageQueue(
-                self.world_size,
-                self.local_world_size,
-                max_chunk_bytes=max_chunk_bytes,
-                connect_ip=self.parallel_config.master_addr,
-            )
-            scheduler_output_handle = self.rpc_broadcast_mq.export_handle()
-        
-        # Create workers
-        # FIX: Removed duplicate initialization and local import that caused UnboundLocalError
-        context = get_mp_context()
-        shared_worker_lock = context.Lock()
-        unready_workers: list[UnreadyWorkerProcHandle] = []
-        
-        success = False
-        try:
-            global_start_rank = (
-                self.local_world_size * self.parallel_config.node_rank_within_dp
-            )
-            for local_rank in range(self.local_world_size):
-                global_rank = global_start_rank + local_rank
-                unready_workers.append(
-                    WorkerProc.make_worker_process(
-                        vllm_config=self.vllm_config,
-                        local_rank=local_rank,
-                        rank=global_rank,
-                        distributed_init_method=distributed_init_method,
-                        input_shm_handle=scheduler_output_handle,
-                        shared_worker_lock=shared_worker_lock,
-                    )
-                )
-
-            # Workers must be created before wait_for_ready to avoid
-            # deadlock, since worker.init_device() does a device sync.
-
-            # Wait for all local workers to be ready.
-            self.workers = WorkerProc.wait_for_ready(unready_workers)
-
-            # Start background thread to monitor worker health if not in headless mode.
-            if self.monitor_workers:
-                self.start_worker_monitor()
-
-            self.response_mqs = []
-            # Only leader node have remote response mqs
-            if self.parallel_config.node_rank_within_dp == 0:
-                for rank in range(self.world_size):
-                    if rank < self.local_world_size:
-                        local_message_queue = self.workers[rank].worker_response_mq
-                        assert local_message_queue is not None
-                        self.response_mqs.append(local_message_queue)
-                    else:
-                        remote_message_queue = self.workers[0].peer_worker_response_mqs[
-                            rank
-                        ]
-                        assert remote_message_queue is not None
-                        self.response_mqs.append(remote_message_queue)
-
-            # Ensure message queues are ready. Will deadlock if re-ordered
-            # Must be kept consistent with the WorkerProc.
-
-            # Wait for all input mqs to be ready.
-            if self.rpc_broadcast_mq is not None:
-                self.rpc_broadcast_mq.wait_until_ready()
-            # Wait for all remote response mqs to be ready.
-            for response_mq in self.response_mqs:
-                response_mq.wait_until_ready()
-            success = True
-        finally:
-            if not success:
-                # Clean up the worker procs if there was a failure.
-                # Close death_writers first to signal workers to exit
-                for uw in unready_workers:
-                    if uw.death_writer is not None:
-                        uw.death_writer.close()
-                self._ensure_worker_termination([uw.proc for uw in unready_workers])
-
-        self.futures_queue = deque[tuple[FutureWrapper, Callable]]()
-
-        self.output_rank = self._get_output_rank()
+        return tp_size * sp_size, pp_size, pcp_size
 
 
 class UlyssesAttention(ArcticPatch[Attention]):
@@ -684,16 +606,68 @@ class UlyssesVllmConfig(ArcticPatch[VllmConfig]):
 
         self._orig_set_cudagraph_sizes()
 
+        base_sizes = self.compilation_config.cudagraph_capture_sizes
+        base_max = self.compilation_config.max_cudagraph_capture_size
+        self._base_bs_to_padded_graph_size = self._build_bs_to_padded(
+            base_sizes, base_max) if base_sizes else []
+
     def pad_for_cudagraph(self, batch_size: int) -> int:
         from .model_runner import is_shift_parallel_mode
         if is_shift_parallel_mode() and self._shift_bs_to_padded_graph_size:
             return self._shift_bs_to_padded_graph_size[batch_size]
-        return self.compilation_config.bs_to_padded_graph_size[batch_size]
+        return self._base_bs_to_padded_graph_size[batch_size]
 
 
 class UlyssesEngineCore(ArcticPatch[EngineCore]):
 
     iteration = 0
+
+    _orig_post_step = EngineCore.post_step
+
+    def _sd_hardoff_threshold(self):
+        """Running-batch size at/above which SD is hard-disabled, or None.
+
+        Matches the worker's ``effective_draft_limit() == 0`` condition: the
+        hard cap is the only thing that drives the draft limit to exactly 0.
+        """
+        spec = self.vllm_config.speculative_config
+        if spec is None:
+            return None
+        return getattr(spec, "hard_disable_by_batch_size", None)
+
+    def post_step(self, model_executed: bool) -> None:
+        """Skip the per-step draft-fetch RPC when SD is hard-off.
+
+        In the sync spec-decode path the base ``post_step`` always issues a
+        ``take_draft_token_ids()`` collective RPC (~3.4 ms/step). At hard-off
+        (running batch >= ``hard_disable_by_batch_size``) the workers produced
+        only zero-filled drafts and the scheduler already cleared
+        ``request.spec_token_ids`` when it consumed the prior step's drafts, so
+        fetching + applying them is a no-op. Skipping the RPC is therefore
+        output-identical and recovers the full hard-off TPOT tax. Outside the
+        hard-off regime behavior is exactly the base method.
+        """
+        # Only the sync spec-decode path runs take_draft_token_ids() here.
+        if (self.async_scheduling or not self.use_spec_decode
+                or not model_executed):
+            return self._orig_post_step(model_executed)
+
+        thr = self._sd_hardoff_threshold()
+        if thr is not None:
+            try:
+                running, _ = self.scheduler.get_request_counts()
+            except Exception:
+                # On any failure, fall back to exact base behavior.
+                running = None
+            # At running >= hard_disable_by_batch_size the worker's
+            # effective_draft_limit() == 0, so it produced only zero-filled
+            # drafts this step; the scheduler already cleared
+            # request.spec_token_ids when it consumed the prior step's
+            # drafts, so the take + update round-trip is pure waste.
+            if running is not None and running >= thr:
+                return
+
+        return self._orig_post_step(model_executed)
 
     def step_with_batch_queue(
         self,
@@ -728,7 +702,7 @@ class UlyssesEngineCore(ArcticPatch[EngineCore]):
             exec_future = self.model_executor.execute_model(
                 scheduler_output, non_block=True
             )
-            if not self.is_ec_producer:
+            if self.is_ec_consumer:
                 model_executed = scheduler_output.total_num_scheduled_tokens > 0
 
             if self.is_pooling_model or not model_executed:

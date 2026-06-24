@@ -16,6 +16,7 @@
 import sys
 
 import vllm
+from vllm.platforms import current_platform
 
 import arctic_inference.envs as envs
 from arctic_inference.utils import get_compatible_vllm_version
@@ -33,9 +34,9 @@ def arctic_inference_plugin():
                 f"but found vllm=={vllm.__version__}!")
     
     if not envs.ARCTIC_INFERENCE_SKIP_PLATFORM_CHECK:
-        if not vllm.platforms.current_platform.is_cuda():
+        if not current_platform.is_cuda():
             raise RuntimeError(
-                f"Arctic Inference plugin requires the cuda platform!")
+                "Arctic Inference plugin requires the cuda platform!")
 
     print("\x1b[36;1mArctic Inference plugin is enabled!\x1b[0m",
           file=sys.stderr)

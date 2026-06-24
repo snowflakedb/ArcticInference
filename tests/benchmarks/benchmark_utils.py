@@ -1,12 +1,12 @@
+import os
 from dataclasses import dataclass
 from typing import Any, Callable, Dict
 
 import pandas as pd
 
-from vllm.config.compilation import CUDAGraphMode, CompilationConfig
-compilation_config = CompilationConfig(
-   cudagraph_mode=CUDAGraphMode.PIECEWISE
-)
+_BENCHMARKS_DIR = os.path.dirname(os.path.abspath(__file__))
+
+compilation_config = {"cudagraph_mode": "PIECEWISE"}
 
 
 @dataclass
@@ -59,11 +59,24 @@ VLLM_CONFIGS = {
         },
         "enable_prefix_caching": False,
     },
+    "llama_8b_ulysses_spec": {
+        "model": "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic",
+        "tensor_parallel_size": 2,
+        "ulysses_sequence_parallel_size": 2,
+        "speculative_config": {
+            "method": "arctic",
+            "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.1-8B-Instruct",
+            "num_speculative_tokens": 3,
+            "disable_by_batch_size": 64,
+        },
+        "enable_prefix_caching": False,
+    },
     "llama_8b_all": {
-        "model": "Snowflake/Llama-3.1-SwiftKV-8B-Instruct-FP8",
+        "model": "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic",
         "tensor_parallel_size": 2,
         "ulysses_sequence_parallel_size": 2,
         "enable_shift_parallel": True,
+        "shift_parallel_threshold": 512,
         "speculative_config": {
             "method": "arctic",
             "model": "Snowflake/Arctic-LSTM-Speculator-Llama-3.1-8B-Instruct",
@@ -160,7 +173,7 @@ JSON_MODE_TASKS = {
     "json_mode_score": BenchmarkTask(
         config={
             "task" : "json-mode-all",
-            "input": "json_mode/datasets/WikiQuestions.json",
+            "input": os.path.join(_BENCHMARKS_DIR, "json_mode/datasets/WikiQuestions.json"),
             "n_samples": 25,
         },
         metrics={
