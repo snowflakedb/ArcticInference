@@ -78,7 +78,6 @@ server = [
     "uvicorn",
     "pydantic>=2.0",
     "tqdm",
-    "kvcached==0.1.4",
 ]
 
 dynasor = [

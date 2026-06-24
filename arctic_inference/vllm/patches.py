@@ -368,10 +368,3 @@ def apply_arctic_patches():
     if envs.ARCTIC_FP32_LM_HEAD:
         set_fp32_lm_head_enabled(True)
     apply_fp32_lm_head_patches()
-
-    # kvcached prefix-cache patches (only when kvcached autopatch is active).
-    if os.environ.get("KVCACHED_AUTOPATCH", "").lower() in ("1", "true"):
-        from arctic_inference.vllm.kvcached.patches import (
-            apply_kvcached_prefix_cache_patches,
-        )
-        apply_kvcached_prefix_cache_patches()
