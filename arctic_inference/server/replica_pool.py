@@ -265,24 +265,6 @@ class ReplicaPool:
                 rid = self._bundle_indices[i]
                 env["VLLM_RAY_BUNDLE_INDICES"] = ",".join(
                     str(rid * self.tp_size + t) for t in range(self.tp_size))
-            # Pin a deterministic, per-replica base port. When many colocated
-            # TP engines initialize concurrently on the same node, vLLM's
-            # get_open_port() has a TOCTOU window: it binds a probe socket,
-            # reads the port, closes it, and returns the number, so several
-            # engines can receive the same port before any binds the TP
-            # rendezvous TCPStore (tcp://127.0.0.1:<port>) -> EADDRINUSE.
-            # Giving each replica a distinct VLLM_PORT base makes get_open_port
-            # start from a unique value per engine; vLLM still increments from
-            # the base on any residual conflict. The globally-unique replica
-            # index i guarantees uniqueness across replicas colocated on the
-            # same node. Disable via ARCTIC_DISABLE_VLLM_PORT_ASSIGN=1; tune the
-            # range via ARCTIC_VLLM_PORT_BASE / ARCTIC_VLLM_PORT_STRIDE.
-            if (self.tp_size > 1
-                    and os.environ.get("ARCTIC_DISABLE_VLLM_PORT_ASSIGN") != "1"):
-                stride = int(os.environ.get("ARCTIC_VLLM_PORT_STRIDE", "100"))
-                base = int(env.get("VLLM_PORT",
-                                   os.environ.get("ARCTIC_VLLM_PORT_BASE", "30000")))
-                env["VLLM_PORT"] = str(base + i * stride)
             init_tasks.append(w.initialize.remote(engine_kwargs, env or None))
         await asyncio.gather(*init_tasks)
 
