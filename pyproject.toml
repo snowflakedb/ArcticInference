@@ -19,7 +19,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "arctic_inference"
-version = "0.2.1.dev0"
+version = "0.3.0"
 description = "Snowflake LLM inference library"
 
 [project.scripts]
