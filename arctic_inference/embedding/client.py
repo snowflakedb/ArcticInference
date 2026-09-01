@@ -113,7 +113,7 @@ class InferenceClient:
         for i in range(n_prompts):
             embedding = np.frombuffer(embedding_response.embedding_bytes_fp32[i], dtype=np.float32).reshape(embedding_dim)
             embeddings.append(embedding)
-            print(f"embedding {i} shape: {embedding.shape}")
+            logger.debug(f"embedding {i} shape: {embedding.shape}")
 
         return embeddings
 
