@@ -242,7 +242,7 @@ unshares a private PID namespace, and runs `criu restore` inside it with
 `--tcp-close` (no `--shell-job` — the child holds no tty).  The CUDA context
 comes back via `cuda-checkpoint restore`.
 
-### The twelve complications
+### The thirteen complications
 
 | # | Complication | Shape of the fix |
 |---|---|---|
@@ -258,6 +258,7 @@ comes back via `cuda-checkpoint restore`.
 | 10 | Per-restore PID namespace, and the tty it forced out | Reaper + private `/proc`; child `setsid`, `--shell-job` dropped |
 | 11 | Unprivileged dump + restore | `SEMIP_UNPRIVILEGED=1`: `--unprivileged` on both sides, no-namespace restore, caps shed in the child |
 | 12 | `TIME_WAIT` on the recorded local port | `SO_LINGER(1,0)` on the workers' inet TCP sockets, so the dump's kill RSTs instead of FINs |
+| 13 | Teardown kill scoping on the no-namespace path (a `kill -9 -<pid>` meant as a group kill becomes `kill(-1)` in procps-ng, ending the container) | Snapshot task ids + start times at restore (`_tree_identity`); kill only verified positive pids, never a negative one. See [`TEARDOWN_SCOPING.md`](TEARDOWN_SCOPING.md) |
 
 `meta.json` alongside the image holds the `vllm_config` (including `_env`) and
 the CRIU metadata, which is what lets the orchestrator rediscover saved models

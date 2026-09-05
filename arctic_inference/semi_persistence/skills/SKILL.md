@@ -174,6 +174,14 @@ real GPUs and loads real weights, except `scripts/imgdiff.py` and
   names the occupants; `scripts/pidcheck.py <image>` answers it up front, and
   `--burn-to 200000` before a cold start puts a new image's ids out of
   contention for good. See Complication 8.
+- **Never shell out to `kill` with a negative pid.** procps-ng `kill(1)` parses
+  a multi-digit negative pid as an option cluster and derives its target from
+  the first digit alone, so `sudo kill -9 -1181` runs `kill(-1, SIGKILL)` --
+  as root, every process it is permitted to signal. On the no-namespace path
+  that killed the worker mid-teardown together with PID 1's only child, which
+  ends the container and burns a `backoffLimit` retry; it cost a pod and its 8
+  H200s. Teardown now enumerates the tree's task ids explicitly and checks each
+  victim's `/proc/<pid>/stat` start time. See Complication 13.
 - **`SEMIP_UNPRIVILEGED=1` needs a world-readable interpreter.** The child
   drops *all* capabilities, so a uid-0 process loses `CAP_DAC_OVERRIDE` and can
   only read what `other` can. An interpreter behind a private home (`chmod 750`)
@@ -203,7 +211,9 @@ real GPUs and loads real weights, except `scripts/imgdiff.py` and
 | [`pipeline_DESIGN.md`](pipeline_DESIGN.md) | Op model, interrupts, cross-model eviction, regression plan |
 | [`slots_DESIGN.md`](slots_DESIGN.md) | Buddy allocator algorithms, invariants, worked example |
 | [`client_DESIGN.md`](client_DESIGN.md) | Job/model two-layer split, calling shapes, session persistence |
-| [`CRIU_PLUMBING.md`](CRIU_PLUMBING.md) | The twelve CRIU complications and the FD keep-list |
+| [`CRIU_PLUMBING.md`](CRIU_PLUMBING.md) | The thirteen CRIU complications and the FD keep-list |
+| [`CROSS_NODE_RESTORE.md`](CROSS_NODE_RESTORE.md) | Runbook for dumping on node A and restoring on a low-capability node B |
+| [`TEARDOWN_SCOPING.md`](TEARDOWN_SCOPING.md) | Why the no-namespace teardown killed the pod, and the bounded kill that replaced it |
 | [`tp_DESIGN.md`](tp_DESIGN.md) | Tensor parallelism: the four TP primitives, NCCL teardown/rebuild, graph reuse |
 | [`semi-p_DESIGN.md`](semi-p_DESIGN.md) | The `model_dir` layout, what a re-dump touches, what binds an image |
 | [`async_generate_DETAILS.md`](async_generate_DETAILS.md) | Async generate, IPC protocol, drain points |

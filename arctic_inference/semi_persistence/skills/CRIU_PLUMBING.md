@@ -729,6 +729,65 @@ leave `TIME_WAIT` behind.
 
 ---
 
+## Complication 13: Scoping the Teardown Kill (no-namespace path)
+
+**Problem:** the namespace path tears a restored tree down by SIGKILLing
+the namespace's PID 1 and letting the kernel collapse everything inside
+it — bounded by construction. The lowcap path (Complication 11) has no
+namespace, so it has to name its victims. `criu restore -d` detaches the
+tree, so tasks reparent onto PID 1 and escape a `_get_descendant_pids`
+walk from the root. The original code recovered them with a process-group
+kill:
+
+```python
+subprocess.run(["sudo", "kill", "-9", f"-{root_pid}"], capture_output=True)
+```
+
+That never became a group kill. `/usr/bin/kill` is procps-ng, which parses
+arguments with `getopt_long` under `opterr=0`, so a multi-digit negative
+pid is consumed as an *option cluster* and never reaches the pid-operand
+loop. Its handler for that case derives the target from the first digit
+alone (`pid = (long)('0' - optopt)`), silently discarding the rest. So
+`sudo kill -9 -1181` ran `kill(-1, SIGKILL)`: as root, every process it is
+permitted to signal. It killed the worker mid-sweep and PID 1's only
+child, which exits the container with code 137 and burns a `backoffLimit`
+retry. One pod exhausted all six and was terminated, returning its 8
+H200s to the shared pool. (Long-standing procps bug; Ubuntu #1637026
+describes the same failure wiping Hadoop nodes.)
+
+Only the first digit matters, which is why this looked like a TP problem
+and is not one: `tp2test` restores at 1181 → `kill(-1, ...)`, fatal, while
+`qwen_27b`/`qwen_35b` restore at 3109/3111 → `kill(-3, ...)`, ESRCH on an
+empty process group. A TP=1 image restoring at a pid beginning with `1`
+would collapse the pod just as reliably.
+
+**Why not scope it in the kernel.** `cgroup.kill` exists on these nodes
+and is the ideal mechanism — write `1` and the kernel atomically SIGKILLs
+exactly that cgroup, immune to pid reuse. It is unusable here:
+`/sys/fs/cgroup` is mounted `ro` and cannot be remounted, because
+`CAP_SYS_ADMIN` is absent from the bounding set. That is the same
+constraint that forces the lowcap path to exist at all.
+
+**Fix: snapshot identity at restore, verify every victim at teardown.**
+`_tree_identity(root_pid)` records each task id with its start time (field
+22 of `/proc/<pid>/stat`) while the tree is known-live, and becomes the
+holder. `_kill_restored_tree` then kills only positive pids that are not
+`<= 1`, not in `_own_ancestry()`, still live, and whose start time still
+matches the snapshot — so a recycled pid is never hit. The live descendant
+walk that catches tasks forked since the snapshot runs only while the root
+itself still matches, since pids it discovers carry no recorded start time
+to check against. The victim list is logged *before* the kills, because
+the old code logged after and destroyed the evidence along with the
+worker.
+
+No re-dump: this reads live `/proc` after a restore has already succeeded,
+so image format, `pstree.img`, and `meta.json` are untouched.
+
+Full incident record, invariants, and test plan in
+[`TEARDOWN_SCOPING.md`](TEARDOWN_SCOPING.md).
+
+---
+
 ## Summary Table
 
 | Resource           | Problem at dump time               | Dump-side fix                      | Restore-side fix                     |
@@ -742,8 +801,9 @@ leave `TIME_WAIT` behind.
 | Plugin directory   | `--libdir` path missing             | `_worker_criu_save` creates `/usr/lib/criu/empty` before each dump | —                    |
 | stdin / tty        | pts captured as `--shell-job`; can't reattach in a PID ns | fd 0 → `/dev/null` + `setsid()` at child start | drop `--shell-job` |
 | PID collisions     | Recorded task ids (leaders *and* threads) already taken: dump zombie, concurrent restore, unrelated service, or the restore's own launcher | — | Restore each tree in its own PID namespace (reaper + private /proc); on the lowcap path a preflight that names the occupants + `scripts/pidcheck.py`, with dump-side id placement as the durable fix; retry loop as backstop |
-| Privileged-only CRIU | dump + restore need `CAP_SYS_ADMIN` (netns kerndat probe; restore PID namespace) | `--unprivileged` (`SEMIP_UNPRIVILEGED=1`) skips the netns probe; caps shed in the child before `import torch` | lowcap path: `criu restore -d --unprivileged` in the host PID ns (no `unshare`), tree-kill teardown |
+| Privileged-only CRIU | dump + restore need `CAP_SYS_ADMIN` (netns kerndat probe; restore PID namespace) | `--unprivileged` (`SEMIP_UNPRIVILEGED=1`) skips the netns probe; caps shed in the child before `import torch` | lowcap path: `criu restore -d --unprivileged` in the host PID ns (no `unshare`), with a snapshot-verified teardown kill (Complication 13) |
 | Ghost remap race   | `(deleted)` .so → ghost race        | Destructive dump + sem deletion    | `--link-remap`                       |
+| Teardown scoping   | No namespace to collapse on the lowcap path, and `-d` reparents tasks off the root; a `kill -9 -<pid>` meant as a group kill becomes `kill(-1)` in procps-ng | — | Snapshot task ids + start times at restore (`_tree_identity`); kill only verified positive pids, never a negative one |
 
 ---
 

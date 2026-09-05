@@ -669,6 +669,44 @@ def _pid_collision_report(image_dir):
               f"{max(tids)} before launching -- see scripts/pidcheck.py")
 
 
+def _proc_starttime(pid):
+    """Field 22 of ``/proc/<pid>/stat``: the task's start time in clock ticks.
+
+    Paired with a pid this is an identity that survives pid recycling -- a
+    recycled pid always reports a strictly later start time.  ``comm``
+    (field 2) can contain spaces and parens, so parse after the last ')':
+    index 0 is then field 3, which puts starttime at index 19.
+    """
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return int(f.read().rsplit(")", 1)[1].split()[19])
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def _tree_identity(root_pid):
+    """Snapshot a restored tree while every task is still known-live.
+
+    Teardown then never has to infer membership from ids that may since have
+    been reused.  That matters on this path specifically: the lowcap restore
+    places tasks in the shared number space, so its ids do get recycled.
+
+    ``sid`` is recorded but unused by the strict teardown; it is the input
+    the optional guarded session sweep would need.
+    """
+    ident = {"kind": "tree", "pid": root_pid,
+             "start": _proc_starttime(root_pid), "members": {}}
+    try:
+        ident["sid"] = os.getsid(root_pid)
+    except OSError:
+        ident["sid"] = None
+    for p in _get_descendant_pids(root_pid) + [root_pid]:
+        st = _proc_starttime(p)
+        if st is not None:
+            ident["members"][p] = st
+    return ident
+
+
 # CRIU restores every task at its *recorded* PID (via clone3(set_tid)).
 # Two images captured on the same node with their child trees alive at
 # the same time carry adjacent/interleaved PIDs, and a destructive dump
@@ -692,22 +730,63 @@ def _pid_collision_report(image_dir):
 # the namespace and the whole restored tree in one shot.
 
 
-def _kill_restored_tree(root_pid, log=None):
-    """SIGKILL a root-owned, host-PID-namespace CRIU-restored tree.
+def _kill_restored_tree(ident, log=None):
+    """SIGKILL exactly the tasks of a CRIU-restored tree, and nothing else.
 
+    Takes the ``_tree_identity`` snapshot taken at restore, not a bare pid.
     Used by the reduced-capability restore path, which has no PID namespace
     to collapse.  The restored tasks are root-owned (restored via ``sudo
-    criu``), so kills go through ``sudo``.  The dump detaches the child into
-    its own session/process group, so we also nuke the group to catch tasks
-    that reparented away from ``root_pid``.
+    criu``), so kills go through ``sudo``.
+
+    This must never signal a negative pid.  The previous implementation
+    ended with ``kill -9 -<root_pid>`` to catch tasks that had reparented
+    away from the root.  procps-ng ``kill(1)`` parses a multi-digit negative
+    pid as an option cluster and derives its target from the first digit
+    alone (``pid = '0' - optopt``), so ``kill -9 -1181`` ran ``kill(-1,
+    SIGKILL)``: as root that is every process it may signal.  It killed this
+    worker mid-sweep and PID 1's only child with it, ending the container.
+    Membership is enumerated explicitly instead, and every victim is matched
+    against the restore-time snapshot so a recycled pid is never hit.
     """
-    if not root_pid:
+    if not ident:
         return
-    for p in _get_descendant_pids(root_pid) + [root_pid]:
-        subprocess.run(["sudo", "kill", "-9", str(p)], capture_output=True)
-    subprocess.run(["sudo", "kill", "-9", f"-{root_pid}"], capture_output=True)
+    root_pid = ident.get("pid")
+    if not root_pid or root_pid <= 1:
+        if log is not None:
+            log.error("  refusing to kill restored tree: bogus root pid=%r",
+                      root_pid)
+        return
+
+    protected = _own_ancestry()
+    members = dict(ident.get("members") or {})
+    # Anything forked since the snapshot that is still parented under the
+    # root, but only while the root is provably still ours: a pid picked up
+    # by the live walk carries no snapshot start time to check against, so
+    # were the root recycled this would enumerate an impostor's children.
+    root_start = ident.get("start")
+    live_root = _proc_starttime(root_pid)
+    if live_root is not None and root_start in (None, live_root):
+        for p in _get_descendant_pids(root_pid) + [root_pid]:
+            members.setdefault(p, _proc_starttime(p))
+
+    victims = []
+    for pid, start in members.items():
+        if pid <= 1 or pid in protected:
+            continue
+        live = _proc_starttime(pid)
+        if live is None:
+            continue                      # already gone
+        if start is not None and live != start:
+            continue                      # pid was recycled: not our task
+        victims.append(pid)
+
+    # Log BEFORE killing.  The old code logged after, so when the sweep took
+    # out this worker the record of what it targeted was lost with it.
     if log is not None:
-        log.info("  restored tree killed (root host_pid=%s)", root_pid)
+        log.info("  killing restored tree root=%s victims=%s",
+                 root_pid, sorted(victims))
+    for pid in sorted(victims, reverse=True):     # leaves first
+        subprocess.run(["sudo", "kill", "-9", str(pid)], capture_output=True)
 
 
 def _kill_pidns_holder(holder, log=None):
@@ -718,15 +797,15 @@ def _kill_pidns_holder(holder, log=None):
     * ``(pid1_host_pid, popen)`` -- the namespace-based path.  SIGKILLing
       PID 1 of the namespace makes the kernel kill every task in it (the
       restored tree), so this doubles as the restored-tree cleanup.
-    * ``{"kind": "tree", "pid": root_host_pid}`` -- the reduced-capability
-      (host-PID-namespace) path.  There is no namespace to collapse, so the
-      restored tree is SIGKILLed directly.
+    * a ``_tree_identity`` dict -- the reduced-capability (host-PID-
+      namespace) path.  There is no namespace to collapse, so the recorded
+      tasks are SIGKILLed directly.
     """
     if not holder:
         return
     if isinstance(holder, dict):
         if holder.get("kind") == "tree":
-            _kill_restored_tree(holder.get("pid"), log=log)
+            _kill_restored_tree(holder, log=log)
         return
     host_pid, proc = holder
     try:
@@ -1047,8 +1126,9 @@ def _worker_criu_load_lowcap(image_dir, new_pipe_fd):
     * reads the restored root's host PID straight from ``--pidfile`` (with a
       pipe-scan fallback), since without a PID namespace the recorded PID is
       the host PID;
-    * returns ``holder = {"kind": "tree", "pid": host_pid}`` for
-      ``_kill_pidns_holder`` -> ``_kill_restored_tree`` at teardown.
+    * returns ``holder = _tree_identity(host_pid)`` -- the tree's task ids
+      with their start times, snapshotted while every task is known-live --
+      for ``_kill_pidns_holder`` -> ``_kill_restored_tree`` at teardown.
 
     Constraint: every recorded task id -- thread group leaders *and* their
     threads -- must be free on the host, which in practice means at most one
@@ -1199,7 +1279,7 @@ def _worker_criu_load_lowcap(image_dir, new_pipe_fd):
             raise RuntimeError(
                 "failed to discover CRIU-restored root host pid "
                 "(pidfile + pipe scan both failed)")
-        holder = {"kind": "tree", "pid": new_pid}
+        holder = _tree_identity(new_pid)
     except BaseException:
         _kill_pidns_holder(holder)
         raise
