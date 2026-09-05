@@ -320,7 +320,23 @@ TP-dependent — the same argv serves TP=1 and TP>1.
 Can't fork for 47619: File exists
 ```
 
-Three ways it gets taken:
+**It is task ids, not just PIDs.** A PID is only the id of a thread
+group's leader, and leader ids and thread ids are allocated from a single
+per-namespace counter.  CRIU restores *every* task, so the set that must
+be free is the whole recorded task list — 915 ids across 3 leaders for a
+TP2 image — and the kernel reports the two cases through different code
+paths, neither of which names the occupant:
+
+```
+Can't fork for 47619: File exists              # a thread group leader
+pie: 2103: Unable to create a thread: -17      # any other thread (EEXIST)
+```
+
+This is also why `ps` is useless for diagnosing it: threads appear only
+under `/proc/<pid>/task`, so a 200-thread service can own hundreds of the
+ids an image needs while showing a single unrelated PID.
+
+Four ways they get taken:
 
 1. **A zombie from the dump.** The destructive dump kills the child, but
    its still-live worker never reaps it, and a zombie holds its PID.
@@ -329,15 +345,36 @@ Three ways it gets taken:
 2. **Concurrent restores.** Two images captured on the same node with
    their child trees alive simultaneously carry adjacent/interleaved
    PIDs, so the second restore collides with the first.
-3. **An unrelated host process** happening to hold the recorded PID.
+3. **An unrelated host process** happening to hold a recorded id — with
+   its threads, most likely, and a long-lived service never yields them.
+4. **The restore's own launcher.** The counter is sequential, so a driver
+   started when it happens to sit below the image's range lands *inside*
+   it, together with its `sudo` wrappers and its interpreter's threads.
+   Nothing can move an already-running process, so this one is only
+   fixable by placing the image's ids elsewhere.
 
-**Partial fix (retry loop):** `worker_loop` retries `_worker_criu_load`
-up to 5 times with 0.5s backoff on `"File exists"`.  This only helps for
-case 3, and only when the holder is short-lived.  A zombie under a live
-parent never goes away, so cases 1 and 2 defeat it entirely.
+**Partial fix (retry loop):** `worker_loop` retries the load up to 5
+times with 0.5s backoff, keyed on `_is_pid_collision` so it matches the
+leader wording, the thread wording and the preflight's own marker alike.
+This only helps for case 3 with a short-lived holder.  A zombie under a
+live parent never goes away, so cases 1, 2 and 4 defeat it entirely.
+
+**Diagnosis (reduced-capability path):** `_worker_criu_load_lowcap`
+preflights `_pid_collision_report` before spawning criu — decode
+`pstree.img`, walk `/proc/*/task`, group the intersection by occupying
+process — and re-runs it if criu fails with either collision signature,
+since an id can be claimed in between.  Cost is ~65 ms, essentially all
+of it `crit decode`.  `scripts/pidcheck.py` is the same check standalone,
+plus `--burn`/`--burn-to`, which advance the counter by forking so
+*subsequently started* processes clear the range (it frees nothing;
+`ns_last_pid` would do it in one write but is read-only on these nodes).
 
 **Real fix:** restore each tree into its own PID namespace, where the
-recorded PIDs are always free.  See Complication 10.
+recorded ids are always free.  See Complication 10.  Where that needs
+capabilities the node won't grant (Complication 11), the equivalent is to
+put the ids somewhere nothing competes for: burn the counter to ~200000
+*before* the cold start, so the image records ids no container reaches in
+normal operation.
 
 ---
 
@@ -496,12 +533,17 @@ to write the read-only `ns_last_pid` sysctl. Validate a node with
 `sudo criu check --unprivileged` (a residual read-only `ns_last_pid`
 complaint from the checker is expected and does not block restore).
 
-**Trade-off (accepted):** without the private PID namespace the recorded
-PIDs must be free on the host -- at most **one live restore per node**.
-Fine for a one-job-per-pod layout. A collision surfaces as CRIU
-"File exists" in `restore.log`, which the existing retry loop recognizes.
-Note this makes `scripts/test_weights.py`, which restores two models
-concurrently, incompatible with this mode.
+**Trade-off (accepted):** without the private PID namespace every
+recorded *task* id must be free on the host -- threads included, one
+number space, ~900 ids for a TP2 image -- so at most **one live restore
+per node**, and any unrelated process whose threads span the image's range
+blocks it too. Fine for a one-job-per-pod layout. A collision surfaces as
+CRIU "File exists" (leader) or `pie: Unable to create a thread: -17`
+(thread); the path preflights for both and names the occupants, and the
+retry loop recognizes either wording. Note this makes
+`scripts/test_weights.py`, which restores two models concurrently,
+incompatible with this mode. See Complication 8 for the id arithmetic and
+for placing an image's ids out of contention at dump time.
 
 **Restorable image requires shed capabilities.** CRIU's `restore_creds()`
 calls `capset()` to reinstate each task's recorded caps; if the image
@@ -699,7 +741,7 @@ leave `TIME_WAIT` behind.
 | CUDA context       | GPU state not in CRIU image         | CRIU CUDA plugin at dump           | Driver API or cuda-checkpoint        |
 | Plugin directory   | `--libdir` path missing             | `_worker_criu_save` creates `/usr/lib/criu/empty` before each dump | —                    |
 | stdin / tty        | pts captured as `--shell-job`; can't reattach in a PID ns | fd 0 → `/dev/null` + `setsid()` at child start | drop `--shell-job` |
-| PID collisions     | Zombie from the destructive dump holds the recorded PID | — | Restore each tree in its own PID namespace (reaper + private /proc); retry loop as backstop |
+| PID collisions     | Recorded task ids (leaders *and* threads) already taken: dump zombie, concurrent restore, unrelated service, or the restore's own launcher | — | Restore each tree in its own PID namespace (reaper + private /proc); on the lowcap path a preflight that names the occupants + `scripts/pidcheck.py`, with dump-side id placement as the durable fix; retry loop as backstop |
 | Privileged-only CRIU | dump + restore need `CAP_SYS_ADMIN` (netns kerndat probe; restore PID namespace) | `--unprivileged` (`SEMIP_UNPRIVILEGED=1`) skips the netns probe; caps shed in the child before `import torch` | lowcap path: `criu restore -d --unprivileged` in the host PID ns (no `unshare`), tree-kill teardown |
 | Ghost remap race   | `(deleted)` .so → ghost race        | Destructive dump + sem deletion    | `--link-remap`                       |
 

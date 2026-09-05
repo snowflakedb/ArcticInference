@@ -512,6 +512,163 @@ def _find_pid_by_pipe(pipe_inode):
     return None
 
 
+# ---------------------------------------------------------------------------
+# Recorded task-id collisions
+# ---------------------------------------------------------------------------
+#
+# CRIU recreates every task at its recorded id with clone3(set_tid), and a PID
+# is just the id of a thread group's leader: ids for leaders and for threads
+# come out of ONE per-namespace number space.  So an unrelated process's
+# *thread* blocks a restore exactly as a same-PID process does, and the set
+# that must be free is the whole recorded task list -- for a TP2 image that is
+# ~900 ids across three leaders, not three PIDs.
+#
+# The kernel reports the two cases through different CRIU code paths, and
+# neither names the occupant:
+#   leader  -> "Can't fork for <pid>: File exists"
+#   thread  -> pie: "Unable to create a thread: -17"   (-17 == EEXIST)
+# so resolve the occupants here instead, both before a restore and after one
+# fails.  Only the reduced-capability path needs this; the namespace path
+# restores into a private PID namespace where every recorded id is free.
+
+_PID_COLLISION_MARKER = "recorded task-id collision"
+
+# Substrings that identify a collision, whichever layer reported it.
+_PID_COLLISION_SIGNATURES = (
+    "File exists",
+    "Unable to create a thread: -17",
+    _PID_COLLISION_MARKER,
+)
+
+
+def _is_pid_collision(exc_or_text):
+    """True when a restore failure is a recorded task-id collision."""
+    text = str(exc_or_text)
+    return any(sig in text for sig in _PID_COLLISION_SIGNATURES)
+
+
+def _criu_log_excerpt(log_path, tail_chars=1200):
+    """The lines that explain a criu failure, not just the last N bytes.
+
+    CRIU logs the cause and then carries on unwinding: a failed restore ends
+    with hundreds of ghost-remap unlinks whose long absolute paths are exactly
+    what a blind tail shows.  A real case had "Can't fork for 2104: File
+    exists" 19 lines from the end of 13859 and still outside a 2000-char tail.
+    So lift the Error/Warn lines out first, then append a short tail for
+    context.
+    """
+    try:
+        with open(log_path, errors="replace") as f:
+            lines = f.readlines()
+    except OSError:
+        return ""
+    errors = [ln.rstrip() for ln in lines if "Error" in ln or "Warn " in ln]
+    out = ""
+    if errors:
+        out += "--- restore.log errors ---\n" + "\n".join(errors[-12:]) + "\n"
+    return out + "--- restore.log tail ---\n" + "".join(lines)[-tail_chars:]
+
+
+def _image_recorded_tids(image_dir):
+    """Every task id the image will demand, from ``pstree.img``.
+
+    Returns ``(leaders, tids)``, or ``(None, None)`` when the image cannot be
+    decoded.  ``crit`` ships with CRIU, but a missing or newer-format
+    ``pstree.img`` must never be the reason a restore fails, so every caller
+    treats ``None`` as "unknown, carry on".
+    """
+    pstree = os.path.join(image_dir, "pstree.img")
+    if not os.path.exists(pstree):
+        return None, None
+    cmd = ["crit", "decode", "-i", pstree]
+    if os.geteuid() != 0:
+        cmd = ["sudo", "-n"] + cmd
+    try:
+        res = subprocess.run(cmd, capture_output=True, timeout=60)
+        if res.returncode != 0:
+            return None, None
+        doc = json.loads(res.stdout.decode("utf-8", "replace"))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None, None
+    leaders, tids = [], set()
+    for ent in doc.get("entries", []):
+        pid = ent.get("pid")
+        if pid is None:
+            continue
+        leaders.append(int(pid))
+        tids.add(int(pid))
+        tids.update(int(t) for t in (ent.get("threads") or []))
+    if not tids:
+        return None, None
+    return leaders, tids
+
+
+def _live_task_ids():
+    """Map every task id live in this PID namespace to its leader PID.
+
+    Threads are only listed under ``/proc/<pid>/task``, never in ``/proc``
+    itself, which is why a plain ``/proc`` scan (or ``ps``) misses most of
+    what actually blocks a restore.
+    """
+    live = {}
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            for tid in os.listdir(f"/proc/{entry}/task"):
+                live[int(tid)] = int(entry)
+        except OSError:
+            continue  # exited while we walked it
+    return live
+
+
+def _own_ancestry():
+    """This process and its ancestors, for labelling a self-collision."""
+    chain, pid = set(), os.getpid()
+    while pid and pid not in chain:
+        chain.add(pid)
+        try:
+            with open(f"/proc/{pid}/stat") as f:
+                pid = int(f.read().rsplit(")", 1)[1].split()[1])
+        except (OSError, IndexError, ValueError):
+            break
+    return chain
+
+
+def _pid_collision_report(image_dir):
+    """Describe recorded task ids that are occupied right now, or ``None``.
+
+    Grouped by occupying process, because a single 200-thread process accounts
+    for hundreds of ids and the operator can only act on the process.
+    """
+    _leaders, tids = _image_recorded_tids(image_dir)
+    if not tids:
+        return None
+    live = _live_task_ids()
+    taken_by = {}
+    for tid in sorted(tids.intersection(live)):
+        taken_by.setdefault(live[tid], []).append(tid)
+    if not taken_by:
+        return None
+    mine = _own_ancestry()
+    parts = []
+    for owner, taken in sorted(taken_by.items()):
+        try:
+            with open(f"/proc/{owner}/comm") as f:
+                comm = f.read().strip()
+        except OSError:
+            comm = "?"
+        if owner in mine:
+            comm += ", an ancestor of this restore"
+        span = (str(taken[0]) if len(taken) == 1
+                else f"{len(taken)} ids in {taken[0]}-{taken[-1]}")
+        parts.append(f"pid {owner} ({comm}): {span}")
+    return (f"{_PID_COLLISION_MARKER}: the image needs {len(tids)} task id(s) "
+            f"in {min(tids)}-{max(tids)}, occupied by " + "; ".join(parts)
+            + f". Free them, or advance this PID namespace's counter past "
+              f"{max(tids)} before launching -- see scripts/pidcheck.py")
+
+
 # CRIU restores every task at its *recorded* PID (via clone3(set_tid)).
 # Two images captured on the same node with their child trees alive at
 # the same time carry adjacent/interleaved PIDs, and a destructive dump
@@ -817,8 +974,7 @@ def _worker_criu_load(image_dir, new_pipe_fd):
             detail = f"rc={rc}"
             log_path = os.path.join(image_dir, "restore.log")
             if os.path.exists(log_path):
-                with open(log_path) as f:
-                    detail += "\n--- restore.log ---\n" + f.read()[-2000:]
+                detail += "\n" + _criu_log_excerpt(log_path)
             raise RuntimeError(f"criu restore failed ({detail})")
 
         # The restored root lives in the private namespace, so the
@@ -860,8 +1016,11 @@ def _worker_criu_load(image_dir, new_pipe_fd):
 #     recorded PID via clone3(set_tid), which in the *host* PID namespace is
 #     authorized by CAP_CHECKPOINT_RESTORE -- so it does NOT need to write
 #     the read-only ns_last_pid sysctl.  Dropping the namespace trades
-#     concurrent-restore safety (recorded PIDs must be free -> at most one
-#     live restore per node) for not needing CAP_SYS_ADMIN.
+#     concurrent-restore safety for not needing CAP_SYS_ADMIN: every recorded
+#     task id (leaders *and* threads -- one number space) must be free on the
+#     host, so at most one live restore per node, and any unrelated process
+#     whose threads happen to span the image's id range blocks it too.  The
+#     preflight in _worker_criu_load_lowcap names whatever is in the way.
 #
 # Net effect: this path targets a floor of roughly
 #   CAP_CHECKPOINT_RESTORE (+ CAP_SYS_PTRACE)
@@ -891,9 +1050,12 @@ def _worker_criu_load_lowcap(image_dir, new_pipe_fd):
     * returns ``holder = {"kind": "tree", "pid": host_pid}`` for
       ``_kill_pidns_holder`` -> ``_kill_restored_tree`` at teardown.
 
-    Constraint: at most one live restore per node (recorded PIDs must be
-    free).  A PID collision surfaces as CRIU "File exists" in restore.log,
-    which the caller's retry loop already recognizes.
+    Constraint: every recorded task id -- thread group leaders *and* their
+    threads -- must be free on the host, which in practice means at most one
+    live restore per node.  ``_pid_collision_report`` resolves the occupants
+    up front and again if CRIU fails, since neither of CRIU's two collision
+    messages ("File exists" for a leader, "Unable to create a thread: -17"
+    for a thread) says which id or which process is in the way.
     """
     import fcntl, socket as _socket, tempfile, array, threading
 
@@ -901,6 +1063,15 @@ def _worker_criu_load_lowcap(image_dir, new_pipe_fd):
     with open(meta_path) as f:
         meta = json.load(f)
     pipe_resource = meta["pipe_resource"]
+
+    # Fail before spawning criu: a collision is fatal to the restore anyway,
+    # and reporting it here names the occupying process instead of leaving an
+    # EEXIST buried in restore.log.  Carries the marker the caller's retry
+    # loop keys on, so a transient holder (a zombie awaiting reap) still gets
+    # the same handful of retries it used to.
+    clash = _pid_collision_report(image_dir)
+    if clash:
+        raise RuntimeError(f"criu restore aborted ({clash})")
 
     pidfile = os.path.join(image_dir, "restored.pid")
     for _stale in (pidfile, os.path.join(image_dir, "restore.log")):
@@ -1002,8 +1173,15 @@ def _worker_criu_load_lowcap(image_dir, new_pipe_fd):
             detail = f"rc={result.returncode}"
             log_path = os.path.join(image_dir, "restore.log")
             if os.path.exists(log_path):
-                with open(log_path) as f:
-                    detail += "\n--- restore.log ---\n" + f.read()[-2000:]
+                excerpt = _criu_log_excerpt(log_path)
+                detail += "\n" + excerpt
+                # An id can be claimed between the preflight and the restore
+                # (criu's own helpers spawn into the same number space), so
+                # re-resolve rather than assume the preflight covered it.
+                if _is_pid_collision(excerpt):
+                    clash = _pid_collision_report(image_dir)
+                    if clash:
+                        detail += f"\n--- {clash}"
             raise RuntimeError(f"criu restore failed ({detail})")
 
         # No PID namespace: the recorded PID *is* the host PID, so --pidfile
@@ -1511,8 +1689,15 @@ def worker_loop(instance_id, gpus, cmd_queue, result_queue, completed_counter,
                             _kill_process_tree(_orphan)
                         pipe_child.close()
                         pipe_parent.close()
-                        if "File exists" in str(exc) and _attempt < max_retries - 1:
-                            log.warning("  PID collision, retrying (%d/%d)",
+                        # Matches a leader collision ("File exists"), a thread
+                        # collision ("Unable to create a thread: -17") and the
+                        # preflight's own marker alike.  Retries only rescue a
+                        # short-lived holder (a zombie being reaped); a live
+                        # process squatting on the range survives all five, and
+                        # the final exception names it.
+                        if (_is_pid_collision(exc)
+                                and _attempt < max_retries - 1):
+                            log.warning("  task-id collision, retrying (%d/%d)",
                                         _attempt + 1, max_retries)
                             time.sleep(0.5)
                             continue

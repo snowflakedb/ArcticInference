@@ -125,7 +125,7 @@ semi_persistence/
   *.py           library code (orchestrator, instance, worker, client, dashboard, ...)
   tests/         pytest: CPU-only, hermetic, ~2.5s, no GPU
   scripts/       imperative repros: need real GPUs and real vLLM
-                 (except imgdiff.py, which only needs crit + root)
+                 (except imgdiff.py / pidcheck.py, which only need crit + root)
   reproduce/     example_full.py: the saved -> up sweep across TP1/2/4/8
   skills/        this skill (SKILL.md + reference.md) and every design doc
 ```
@@ -140,8 +140,8 @@ python dashboard.py               # needs a running orchestrator on :8157
 ```
 
 `tests/` is the only part runnable in CI. Everything in `scripts/` allocates
-real GPUs and loads real weights, except `scripts/imgdiff.py`, which inspects
-a CRIU image on disk and needs neither.
+real GPUs and loads real weights, except `scripts/imgdiff.py` and
+`scripts/pidcheck.py`, which inspect a CRIU image on disk and need neither.
 
 ## Gotchas that bite
 
@@ -166,6 +166,14 @@ a CRIU image on disk and needs neither.
   them. An image dumped without it cannot be restored there at all. The same
   flag costs concurrent restore (one live restore per node), which makes
   `scripts/test_weights.py` incompatible with it. See Complication 11.
+- **Without the PID namespace, an image's *task ids* have to be free — threads
+  included.** PIDs and thread ids share one counter, so a TP2 image needs ~900
+  free ids and any 200-thread service (or your own launcher, or the IDE server
+  that spawned your shell) can squat on the range; `ps` shows nothing, because
+  threads live only under `/proc/<pid>/task`. `criu_restore` preflights this and
+  names the occupants; `scripts/pidcheck.py <image>` answers it up front, and
+  `--burn-to 200000` before a cold start puts a new image's ids out of
+  contention for good. See Complication 8.
 - **`SEMIP_UNPRIVILEGED=1` needs a world-readable interpreter.** The child
   drops *all* capabilities, so a uid-0 process loses `CAP_DAC_OVERRIDE` and can
   only read what `other` can. An interpreter behind a private home (`chmod 750`)
