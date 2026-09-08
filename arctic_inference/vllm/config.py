@@ -197,6 +197,23 @@ class VllmConfigPatch(ArcticPatch[VllmConfig]):
             self._orig_post_init(*args, **kwargs)
         finally:
             setattr(target_module, "EagleModelTypes", original_types)
+        self._validate_ulysses_config()
+
+    def _validate_ulysses_config(self):
+        """Validate Ulysses sequence parallelism configuration."""
+        sp_size = getattr(self.parallel_config, 'ulysses_sequence_parallel_size', 1)
+        if sp_size > 1:
+            max_num_seqs = self.scheduler_config.max_num_seqs
+            if max_num_seqs % sp_size != 0:
+                raise ValueError(
+                    f"When using Ulysses sequence parallelism "
+                    f"(ulysses_sequence_parallel_size={sp_size}), "
+                    f"--max-num-seqs ({max_num_seqs}) must be divisible by "
+                    f"ulysses_sequence_parallel_size ({sp_size}). "
+                    f"Please set --max-num-seqs to a multiple of {sp_size}, "
+                    f"e.g., --max-num-seqs={max_num_seqs - (max_num_seqs % sp_size)} "
+                    f"or --max-num-seqs={max_num_seqs + (sp_size - max_num_seqs % sp_size)}."
+                )
 
 
 class MLPSpeculatorConfigPatch(ArcticPatch[MLPSpeculatorConfig]):
