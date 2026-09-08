@@ -96,7 +96,20 @@ For embeddings, Arctic Inference + vLLM delivers a whopping 1.4M toks/sec per GP
 $ pip install arctic-inference[vllm]
 ```
 
-Once installed, Arctic Inference automatically patches vLLM to use Arctic Inference with Shift Parallelism and other optimizations implemented in Arctic Inference, and users can continue to use their familiar vLLM APIs and CLI. It’s easy to get started!
+Once installed, Arctic Inference automatically patches vLLM to use Arctic Inference with Shift Parallelism and other optimizations implemented in Arctic Inference, and users can continue to use their familiar vLLM APIs and CLI. It's easy to get started!
+
+### Version Compatibility
+
+Arctic Inference requires specific vLLM versions. The table below shows the compatibility:
+
+| Arctic Inference | vLLM Version |
+|-----------------|--------------|
+| 0.1.1 (latest)  | 0.11.0       |
+| 0.1.0           | 0.10.1       |
+| 0.0.9           | 0.9.2        |
+| 0.0.8           | 0.9.0.1      |
+
+For detailed version information, see the [Version Compatibility Guide](docs/version_compatibility.md).
 
 ### Running Arctic Inference with vLLM
 
