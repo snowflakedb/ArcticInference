@@ -90,10 +90,20 @@ class Demuxer:
         self._thread.start()
 
     def stop(self, timeout: float = 5.0) -> None:
-        """Signal the consumer thread to exit and join it."""
+        """Signal the consumer thread to exit and join it.
+
+        Safe to call from the demuxer thread itself: a ``teardown`` result
+        is applied on this thread (``_apply_result`` -> ``Instance._reset``
+        -> ``_close_queues`` -> ``stop``), and joining the current thread
+        raises ``RuntimeError``.  In that case we only set the stop flag
+        and leave the join to the natural loop exit -- once ``_handle``
+        returns, ``_loop`` observes ``_stop`` and the thread ends on its
+        own.
+        """
         self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=timeout)
+        t = self._thread
+        if t is not None and t is not threading.current_thread():
+            t.join(timeout=timeout)
             self._thread = None
 
     # -- send-side bookkeeping -------------------------------------------------

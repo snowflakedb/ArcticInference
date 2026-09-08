@@ -61,10 +61,36 @@ instance_1.init(gpu=0)
 instance_2.init(gpu=1)
 ```
 
+### Optional `model_dir`
+
+`Instance(vllm_config, model_dir=None)` accepts a per-model directory
+holding `{compilation, image, weights}`.  With it, `criu_dump()` and
+`criu_restore()` need no path, the weight shards land in
+`<model_dir>/weights`, and the JIT/compile caches move under
+`<model_dir>/compilation` so the whole directory travels between nodes as
+one unit.  Without it the primitives take explicit paths and the caches
+keep their node-local defaults, which is what the orchestrator uses.
+See [semi-p_DESIGN.md](semi-p_DESIGN.md).
+
+### Tensor parallelism
+
+TP size comes from `vllm_config["tensor_parallel_size"]`.  `init` and
+`cuda_restore` then take a `gpus` list that is placement only and must
+have exactly that many entries:
+
+```python
+inst = Instance({"model": "...", "tensor_parallel_size": 2}, model_dir)
+inst.init(gpus=[2, 3])
+```
+
+Four additional primitives (`destroy_nccl`, `reinit_nccl`, `cleargraph`,
+`recapture_graphs`) bracket the checkpoint and restore; all are no-ops at
+TP=1.  See [tp_DESIGN.md](tp_DESIGN.md).
+
 ## Process Hierarchy
 
 Each Instance owns one **worker process**, created when `init(gpu)` or
-`load_image(filename)` is called.  Both the worker and the vLLM child are **spawned** via
+`criu_restore(filename)` is called.  Both the worker and the vLLM child are **spawned** via
 `mp.get_context("spawn")`.  Spawning is safe to call from any thread
 (e.g. from a `ThreadPoolExecutor` in the orchestrator), unlike fork
 which can deadlock on glibc mutexes held by other threads.
@@ -100,8 +126,12 @@ Main process
   |           |-- [checkpoint/restore via cuCheckpointProcess ctypes]
   |           |
   |           `-- vLLM child process  (spawned)
-  |                 |-- owns CPU buffer (allocated on attach, pinned via repin)
   |                 |-- EngineCore (in-process, holds GPU memory)
+  |                 |     `-- each vLLM worker owns a CPU staging buffer
+  |                 |         (allocated on attach, pinned via repin).  At
+  |                 |         TP=1 the worker is this same process; at TP>1
+  |                 |         there is one worker subprocess (and one buffer)
+  |                 |         per rank.
   |                 `-- resource_tracker  (no GPU, skipped during checkpoint)
   |
   |-- Instance 2  (handle, main-process side)
@@ -135,22 +165,23 @@ primitives must be:
 | `init(gpu)`             | Cold start a model with real weights on the given GPU.  Spawns the worker process and vLLM child.  Applies `vllm_config["_env"]` (if present) to `os.environ` before importing vLLM. | Worker + Child                 |
 | `wait()`                | Block the main process until all pending commands complete.  | Main process                               |
 | `sleep()`               | `llm.sleep(level=2)` -- frees GPU memory for both main and drafter weights.  Main and drafter `named_buffers()` ride the stock vLLM / arctic CPU snapshot path; main and drafter `named_parameters()` come back via the pinned-buffer `stage` / `restore_weights` pair, so the per-sleep CPU snapshot of drafter parameters is suppressed (see *Arctic patch interaction*). | Child |
-| `checkpoint_cuda()`          | Save CUDA state to CPU via `cuCheckpointProcess`*.  Instance becomes stateless (`gpu=None`). | Worker (ctypes) |
-| `save_image(filename)`        | CRIU-dump the child process tree to disk (destructive).  The child is killed after the image is written.  Writes `meta.json` with `vllm_config` (including `_env` if set) and CRIU metadata. | Worker (child thread) |
-| `load_image(filename)`        | Restore a process from a CRIU image on disk.  Validates that the image's `vllm_config` matches this instance.  Spawns a new worker and CRIU-restores the child.  Does *not* re-apply `_env` -- the child's `os.environ` is captured inside the CRIU image and restored verbatim. | Worker |
-| `restore_cuda(gpu)`          | Restore checkpointed CUDA state onto the specified GPU.  `gpu` is required. | Worker (ctypes) |
-| `attach()`              | Allocate unpinned CPU memory sized to the union of `main.named_parameters()` and (if present) `drafter.model.named_parameters()`.  Speculative-decoding drafters that expose a `.model` (Eagle / Medusa / DraftModel / ArcticProposer) contribute extra entries; non-model drafters (Ngram / Suffix) are skipped, in which case the layout collapses to main params only. | Child |
-| `attach_pinned()`       | Allocate CPU memory pinned for its entire lifetime (via torch `pin_memory=True`).  Skips the per-cycle `repin()`/`unpin()` pattern at the cost of ~34 ms/GiB extra inside `checkpoint_cuda`/`restore_cuda`.  Calling `repin()`/`unpin()` on a buffer created via `attach_pinned()` raises. | Child |
-| `detach()`              | Free CPU memory buffer.                                      | Child                                      |
-| `repin()`               | `cudaHostRegister` the buffer for DMA transfers.             | Child                                      |
-| `unpin()`               | `cudaHostUnregister` the buffer (data stays, CUDA registration removed). | Child                           |
-| `stage()`               | Snapshot main and drafter params (GPU -> pinned CPU) in vLLM's internal format. | Child                          |
-| `plan_restore_weights()` | Self-compute `max_buffer_bytes = min(pinned_cpu_bytes, allotment - pinned_cpu_bytes)` from instance state and walk `index` once to build a chunk plan (each chunk packs whole params under the budget).  Cache the plan in the child for the next `restore_weights()`. | Instance + Child |
-| `restore_weights()`      | Pure execution against the cached chunk plan: per chunk, copy a slice of the pinned buffer to a single reused GPU staging buffer, then scatter into `main.named_parameters()` and (if present) `drafter.model.named_parameters()` in place using the namespaced index.  Falls back to a single chunk if no plan was cached.  Frees the staging buffer before returning. | Child |
-| `wake_up_weights()`     | Re-allocate weight tensors on GPU (main + drafter).  The arctic patch's disk reload of the main model is suppressed via `_skip_main_reload_on_wake`; both main and drafter parameters are populated by the subsequent `restore_weights()` from the pinned buffer.  Drafter `named_buffers()` are restored here from the per-sleep CPU snapshot. | Child |
+| `cuda_checkpoint()`          | Save CUDA state to CPU via `cuCheckpointProcess`*.  Instance becomes stateless (`gpu=None`). | Worker (ctypes) |
+| `criu_dump(filename)`        | CRIU-dump the child process tree to disk (destructive).  The child is killed after the image is written.  Writes `meta.json` with `vllm_config` (including `_env` if set) and CRIU metadata. | Worker (child thread) |
+| `criu_restore(filename)`        | Restore a process from a CRIU image on disk.  Validates that the image's `vllm_config` matches this instance.  Spawns a new worker and CRIU-restores the child.  Does *not* re-apply `_env` -- the child's `os.environ` is captured inside the CRIU image and restored verbatim. | Worker |
+| `cuda_restore(gpu)`          | Restore checkpointed CUDA state onto the specified GPU.  `gpu` is required. | Worker (ctypes) |
+| `attach()`              | Allocate unpinned CPU memory *per worker*, sized to the union of that rank's `main.named_parameters()` and (if present) `drafter.model.named_parameters()`.  Speculative-decoding drafters that expose a `.model` (Eagle / Medusa / DraftModel / ArcticProposer) contribute extra entries; non-model drafters (Ngram / Suffix) are skipped, in which case the layout collapses to main params only.  Reports `max_pinned_bytes_per_worker`. | Worker |
+| `attach_pinned()`       | **Unsupported; raises.**  Use `attach()` -> `repin()` instead.  (It allocated a permanently-pinned buffer via torch `pin_memory=True` before staging moved onto the workers.) | Worker |
+| `detach()`              | Free the CPU buffer on every worker.                         | Worker                                     |
+| `repin()`               | `cudaHostRegister` each worker's buffer for DMA transfers.  Idempotent. | Worker                           |
+| `unpin()`               | `cudaHostUnregister` each worker's buffer (data stays, CUDA registration removed).  Idempotent. | Worker          |
+| `stage()`               | Snapshot main and drafter params (GPU -> that worker's CPU buffer) in vLLM's internal format. | Worker           |
+| `plan_restore_weights(max_buffer_bytes=None)` | Self-compute the budget from `max_pinned_bytes_per_worker` (the per-GPU shard, not the TP-aggregate) and walk each worker's `index` once to build a chunk plan (each chunk packs whole params under the budget).  Cache the plan on the worker for the next `restore_weights()`.  An explicit `max_buffer_bytes` overrides the computation. | Instance + Worker |
+| `restore_weights()`      | Pure execution against the cached chunk plan: per chunk, copy a slice of that worker's buffer to a single reused GPU staging buffer, then scatter into `main.named_parameters()` and (if present) `drafter.model.named_parameters()` in place using the namespaced index.  Falls back to a single chunk if no plan was cached.  Frees the staging buffer and calls `empty_cache()` before returning. | Worker |
+| `save_weights()` / `load_weights()` | Write / read each worker's buffer as shards plus a `weights_meta.json` manifest.  Flat `weights/` at TP=1, per-rank `weights/rank{R}/` at TP>1. | Worker |
+| `wake_up_weights()`     | Re-allocate weight tensors on GPU (main + drafter).  The arctic patch's disk reload of the main model is suppressed via `_skip_main_reload_on_wake`; both main and drafter parameters are populated by the subsequent `restore_weights()` from the worker's buffer.  Drafter `named_buffers()` are restored here from the per-sleep CPU snapshot. | Child |
 | `wake_up_kv_cache()`    | Re-allocate KV cache on GPU.                                 | Child                                      |
 | `generate(prompts, sp)` | Submit inference to the engine.  Assigns a unique `req_id`; result stored in `generate_results[req_id]` and `last_generate_result`. | Child (async engine loop) |
-| `pause()`               | Freeze the engine and snapshot in-flight requests.  Sets `_paused`, captures every active sub-request's `(prompt_token_ids, output_token_ids_so_far, sampling_params)` into a child-local list, then `engine.abort_request(eids)` so subsequent `unpin`/`sleep`/`checkpoint_cuda` are safe.  Pending `generate_done` messages are deferred until `resume`. | Child |
+| `pause()`               | Freeze the engine and snapshot in-flight requests.  Sets `_paused`, captures every active sub-request's `(prompt_token_ids, output_token_ids_so_far, sampling_params)` into a child-local list, then `engine.abort_request(eids)` so subsequent `unpin`/`sleep`/`cuda_checkpoint` are safe.  Pending `generate_done` messages are deferred until `resume`. | Child |
 | `resume()`              | Re-add saved requests via prefill and unfreeze the engine.  For each saved record, calls `engine.add_request(new_eid, TokensPrompt(prompt + output_so_far), SamplingParams(max_tokens=remaining, ...))`, repopulates `_active_reqs`, then clears `_paused`.  Original `req_id` continues seamlessly; eventual completion folds pre-pause `output_text` and token counts into the reported view. | Child |
 | `teardown()`            | Tear down the instance, worker, and child.  Resets to created state, ready for `init(gpu)` again. | Worker + Child |
 | `remove()`              | Deregister from the class-level registry (`Instance._all`).  Non-blocking and non-destructive; does not touch the worker process or pending commands.  Returns the `Instance` class so a chained `status()` resolves to the classmethod view. | Main process |
@@ -159,25 +190,51 @@ primitives must be:
 
 ## CPU Buffer and Pin Management
 
-`attach()` allocates a regular (unpinned) CPU buffer via
+### The buffer lives on the worker, not in the child process
+
+All of the staging state -- the buffer, the param index, and the chunk
+plan -- lives on each vLLM worker as `worker._semip_*`, and every step
+runs there through `collective_rpc` (`_semip_attach`, `_semip_stage`,
+`_semip_repin`, `_semip_unpin`, `_semip_restore_weights`,
+`_semip_detach`, and the two weight-file primitives).
+
+This is not incidental.  At TP>1 `collective_rpc` cloudpickles the
+callable into every worker subprocess, so a buffer allocated in the
+vllm_child process and captured by a closure would be copied by value
+per worker and its writes discarded -- silently, with no error.  Each
+rank also owns a *different shard* of the parameters, so one buffer in
+the child would be the wrong size regardless.  At TP=1 the single
+worker is this same process, so the identical code path just works.
+
+The child aggregates the per-worker results: `attach` and
+`plan_restore_weights` report `max_pinned_bytes_per_worker`, which is
+what `Instance.plan_restore_weights` sizes the chunk budget from (the
+TP-aggregate `pinned_cpu_bytes` would overstate the per-GPU figure).
+
+### What each step does
+
+`attach()` allocates a regular (unpinned) CPU buffer per worker via
 `torch.empty(total_size, dtype=torch.uint8)`.  The buffer is sized to
 the total bytes of `main.named_parameters()` plus, when speculative
 decoding is configured with a model-bearing drafter,
-`drafter.model.named_parameters()`.  The layout is computed once after
-init via `collective_rpc` (not `apply_model`, which would only expose
-the main model).  An `index` dict maps each *namespaced* parameter
-name -- `"main:p:<name>"` or `"drafter:p:<name>"` -- to its
-`(offset, nbytes, dtype, shape)` in the buffer.  Non-model drafters
-(Ngram / Suffix) contribute no entries; the index then collapses to
-main params only and behavior matches the pre-drafter pipeline byte
-for byte.
+`drafter.model.named_parameters()`.  An `index` dict maps each
+*namespaced* parameter name -- `"main:p:<name>"` or
+`"drafter:p:<name>"` -- to its `(offset, nbytes, dtype, shape)` in the
+buffer.  Non-model drafters (Ngram / Suffix) contribute no entries; the
+index then collapses to main params only and behavior matches the
+pre-drafter pipeline byte for byte.
 
 Pinning is a separate step: `repin()` calls `cudaHostRegister` (via
 ctypes on `libcudart.so`) to register the buffer for DMA transfers.
 `unpin()` calls `cudaHostUnregister` to remove the registration while
-keeping the memory allocated and data intact.
+keeping the memory allocated and data intact.  Both are idempotent --
+the attach buffer starts unpinned, and a double register or an
+unregister of an unregistered buffer would hard-error.
 
 `detach()` frees the CPU buffer entirely.
+
+`attach_pinned()` is **not supported** on this path and raises; use
+`attach()` followed by `repin()`.
 
 ### Why separate attach / repin / unpin
 
@@ -195,41 +252,41 @@ works on memory registered via `cudaHostRegister`.
 
 ### Standard sequences
 
-- **Registration**: `attach() -> repin() -> stage() -> unpin() -> sleep() -> checkpoint_cuda()`
-- **Save to disk**: `... -> checkpoint_cuda() -> save_image(filename)`
-- **Load from disk**: `load_image(filename) -> plan_restore_weights() -> restore_cuda(gpu) -> ...`
-- **Generate restore**: `restore_cuda(gpu) -> wake_up_weights() -> repin() -> restore_weights() -> wake_up_kv_cache() -> ...`
-- **Generate checkpoint**: `... -> unpin() -> sleep() -> checkpoint_cuda()`
-- **Pause checkpoint**: `pause() -> unpin() -> sleep() -> checkpoint_cuda()`
-- **Pause restore**: `restore_cuda(gpu) -> repin() -> wake_up_weights() -> restore_weights() -> wake_up_kv_cache() -> resume()`
+- **Registration**: `attach() -> repin() -> stage() -> unpin() -> sleep() -> cuda_checkpoint()`
+- **Save to disk**: `... -> cuda_checkpoint() -> criu_dump(filename)`
+- **Load from disk**: `criu_restore(filename) -> plan_restore_weights() -> cuda_restore(gpu) -> ...`
+- **Generate restore**: `cuda_restore(gpu) -> wake_up_weights() -> repin() -> restore_weights() -> wake_up_kv_cache() -> ...`
+- **Generate checkpoint**: `... -> unpin() -> sleep() -> cuda_checkpoint()`
+- **Pause checkpoint**: `pause() -> unpin() -> sleep() -> cuda_checkpoint()`
+- **Pause restore**: `cuda_restore(gpu) -> repin() -> wake_up_weights() -> restore_weights() -> wake_up_kv_cache() -> resume()`
 
-`plan_restore_weights()` is chained right after `load_image(filename)` because that
+`plan_restore_weights()` is chained right after `criu_restore(filename)` because that
 is when the instance has hydrated `total_gpu_bytes` and `pinned_cpu_bytes`
 from `meta.json`.  The plan caches in the worker, survives `up <-> sleep`
-cycles, and is rebuilt on each fresh `load_image(filename)`.  Cold start does not
+cycles, and is rebuilt on each fresh `criu_restore(filename)`.  Cold start does not
 need it (cold start never calls `restore_weights()`), and in-memory
-checkpoint+restore paths that skip `save_image`/`load_image` rely on the single-chunk
+checkpoint+restore paths that skip `criu_dump`/`criu_restore` rely on the single-chunk
 fallback inside `restore_weights()`.
 
 ## stage / plan_restore_weights / restore_weights Pipeline
 
 `stage()` (host capture) and `restore_weights()` (device populate) are an
-inverse pair around the pinned CPU buffer.  Between `load_image(filename)` and
+inverse pair around the pinned CPU buffer.  Between `criu_restore(filename)` and
 the first `restore_weights()`, the instance calls `plan_restore_weights()` to
 build and cache a chunk plan in the worker.  `restore_weights()` then
 executes the cached plan as pure I/O.
 
-### stage (GPU main + drafter params -> pinned CPU)
+### stage (GPU main + drafter params -> worker CPU buffer)
 
-`stage()` uses `collective_rpc` (so the callback can reach
-`worker.model_runner.drafter` -- `apply_model` only passes the main
-`nn.Module`) to build a unified
+`stage()` runs `_semip_stage` on every worker via `collective_rpc` (so
+it can reach `worker.model_runner.drafter` -- `apply_model` only passes
+the main `nn.Module`).  Each worker builds a unified
 `name -> tensor.data` source table covering
 `main.named_parameters()` keyed `"main:p:<name>"` plus, if
 `drafter.model` exists, `drafter.model.named_parameters()` keyed
-`"drafter:p:<name>"`.  It then walks `index` and copies each entry's
-`.data` (contiguous, viewed as uint8) into the pinned buffer at the
-recorded offset.  This captures weights in vLLM's post-processed
+`"drafter:p:<name>"`.  It then walks its own `index` and copies each
+entry's `.data` (contiguous, viewed as uint8) into its own buffer at
+the recorded offset.  This captures weights in vLLM's post-processed
 internal format (e.g. Marlin-packed for GPTQ, cutlass layout for FP8,
 plain tensors for BF16) for both models in a single sweep.
 
@@ -268,31 +325,33 @@ on the worker until `detach()` resets it.
 
 ### restore_weights (cached plan -> GPU staging -> model params)
 
-For each chunk in the cached plan:
+`_semip_restore_weights` runs entirely on each worker, so both the host
+buffer and the GPU staging buffer are local to the rank that owns those
+parameters.  It allocates one
+`gpu_buf = torch.empty(chunk_size, dtype=torch.uint8, device=worker.device)`
+before the loop, then for each chunk in the cached plan:
 
-1. **Pinned CPU -> GPU staging buffer.**  Allocates one
-   `buf_gpu = torch.empty(chunk_size, dtype=torch.uint8, device="cuda:0")`
-   before the loop.  Per chunk, `buf_gpu[:n].copy_(pinned_buf[lo:hi],
-   non_blocking=True)` followed by `torch.cuda.synchronize()`.
-2. **GPU staging buffer -> main + drafter params (in place).**
-   `collective_rpc` rebuilds the namespaced
-   `name -> tensor.data` target table on the worker (mirror image of
-   `stage`'s source table) and scatters this chunk's members; each src
-   view is
-   `buf_gpu[(off - lo):(off - lo) + nbytes].view(dtype).reshape(shape)`,
+1. **Worker CPU buffer -> GPU staging buffer.**
+   `gpu_buf[:n].copy_(buf[lo:hi], non_blocking=True)` followed by
+   `torch.cuda.synchronize()`.
+2. **GPU staging buffer -> main + drafter params (in place).**  The
+   worker rebuilds the namespaced `name -> tensor.data` target table
+   (mirror image of `stage`'s source table) and scatters this chunk's
+   members; each src view is
+   `gpu_buf[(off - lo):(off - lo) + nbytes].view(dtype).reshape(shape)`,
    copied into the corresponding `"main:p:<name>"` or
    `"drafter:p:<name>"` parameter via `target.copy_(src)`.  No
    `model.load_weights()` or `process_weights_after_loading()` is
    needed because the staged data is already in vLLM's internal format.
 
-After the loop, `buf_gpu` is freed via `buf_gpu.storage().resize_(0)`
+After the loop, `gpu_buf` is freed via `gpu_buf.storage().resize_(0)`
 followed by `torch.cuda.empty_cache()`.  This releases memory through
 PyTorch's normal caching allocator path, keeping allocator metadata
 consistent for CRIU checkpoint/restore (see *Known Issues* below).
 
 When `chunk_plan` is `None` (paths that never called
 `plan_restore_weights`, such as in-memory checkpoint+restore tests that
-skip `save_image`/`load_image`), the handler falls back to a single-chunk plan
+skip `criu_dump`/`criu_restore`), the handler falls back to a single-chunk plan
 covering the entire `index`, which is byte-identical to the
 pre-chunking behavior.
 
@@ -308,8 +367,8 @@ on every worker via `collective_rpc`:
 
 | Flag                            | Effect                                                                                                                                  |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `_skip_main_reload_on_wake`     | `WorkerPatch.wake_up` does not call `GPUModelRunnerPatch._orig_reload_weights(self.model_runner)` -- main params come from the pinned buffer instead. |
-| `_skip_drafter_param_snapshot`  | `WorkerPatch._save_module_state(drafter.model, skip_params=True)` skips `named_parameters()` -- drafter params come from the pinned buffer instead. |
+| `_skip_main_reload_on_wake`     | `WorkerPatch.wake_up` does not call `GPUModelRunnerPatch._orig_reload_weights(self.model_runner)` -- main params come from the worker's staging buffer instead. |
+| `_skip_drafter_param_snapshot`  | `WorkerPatch._save_module_state(drafter.model, skip_params=True)` skips `named_parameters()` -- drafter params come from the worker's staging buffer instead. |
 
 Drafter `named_buffers()` are still snapshotted unconditionally and
 restored inside `WorkerPatch.wake_up`; they are sub-MB and may carry
@@ -333,9 +392,9 @@ precise `param X exceeds chunk_size` message rather than via a
 separate threshold.
 
 `total_gpu_bytes` (NVML `.total` at `init`) and `pinned_cpu_bytes` are
-written into `meta.json` at `save_image` time in the order
+written into `meta.json` at `criu_dump` time in the order
 `{vllm_config, total_gpu_bytes, pinned_cpu_bytes}`.  Old images that
-predate `total_gpu_bytes` are still loadable: `Instance.load_image` falls
+predate `total_gpu_bytes` are still loadable: `Instance.criu_restore` falls
 back to the legacy `pinned_bytes` key for `pinned_cpu_bytes`, and a
 missing `total_gpu_bytes` causes `plan_restore_weights` to send
 `max_buffer_bytes=None`, which yields the single-chunk fallback in
@@ -366,9 +425,9 @@ are non-blocking, chainable, and idempotent.
 
 After `pause`, the engine has no in-flight requests and no KV
 blocks held on its behalf, so subsequent `unpin` / `sleep` /
-`checkpoint_cuda` are safe.  The captured state lives as a plain
+`cuda_checkpoint` are safe.  The captured state lives as a plain
 Python list, which CRIU dumps and restores for free across
-`checkpoint_cuda` / `restore_cuda`, so no extra plumbing is needed.
+`cuda_checkpoint` / `cuda_restore`, so no extra plumbing is needed.
 
 The captured fields per sub-request `eid` come from the child's
 own bookkeeping (populated incrementally in `_process_step_outputs`):
@@ -424,7 +483,7 @@ blocks (not implemented here).
 
 After `pause`, the child no longer produces `generate_done` messages,
 so the worker would deadlock on `_drain_pipe_generates` -- which
-synchronous commands like `sleep` / `checkpoint_cuda` call before
+synchronous commands like `sleep` / `cuda_checkpoint` call before
 forwarding.  The worker mirrors `_paused` in `_worker_paused` (set on
 a successful `pause` ack, cleared on `resume`) and turns the drain
 into a no-op while paused.  `_pending_generates` itself is unchanged
@@ -441,8 +500,8 @@ set on the default forwarding path.
 instance_1 = Instance(vllm_config_1)
 instance_2 = Instance(vllm_config_2)
 
-instance_1.init(gpu=0).attach().repin().stage().unpin().sleep().checkpoint_cuda()
-instance_2.init(gpu=1).attach().repin().stage().unpin().sleep().checkpoint_cuda()
+instance_1.init(gpu=0).attach().repin().stage().unpin().sleep().cuda_checkpoint()
+instance_2.init(gpu=1).attach().repin().stage().unpin().sleep().cuda_checkpoint()
 ```
 
 `init()` loads real weights via `load_format=auto`, so vLLM runs
@@ -450,39 +509,39 @@ instance_2.init(gpu=1).attach().repin().stage().unpin().sleep().checkpoint_cuda(
 `attach()` allocates an unpinned CPU buffer sized to the model's
 parameters.  `repin()` registers it with CUDA for DMA.  `stage()`
 snapshots the post-processed GPU parameters into the buffer.  `unpin()`
-removes the CUDA registration so that `checkpoint_cuda()` is fast (the CUDA
+removes the CUDA registration so that `cuda_checkpoint()` is fast (the CUDA
 driver does not need to re-map pinned pages on restore).  The buffer
-data survives `unpin()`, `sleep()`, and `checkpoint_cuda()` since it is CPU
+data survives `unpin()`, `sleep()`, and `cuda_checkpoint()` since it is CPU
 memory.
 
 ### Save to disk
 
-After checkpoint, `save_image()` writes a CRIU image to disk.  The dump is
+After checkpoint, `criu_dump()` writes a CRIU image to disk.  The dump is
 destructive — the child process is killed after the image is written.
 The worker exits and the instance returns to a clean state:
 
 ```python
 inst = Instance(vllm_config)
-inst.init(gpu=0).attach().repin().stage().unpin().sleep().checkpoint_cuda()
-inst.save_image("/data-fast/image-cache/my_model").wait()
+inst.init(gpu=0).attach().repin().stage().unpin().sleep().cuda_checkpoint()
+inst.criu_dump("/data-fast/image-cache/my_model").wait()
 # child is dead, worker exits
 ```
 
 ### Load from disk
 
-Every use after save goes through `load_image()`, which restores a fresh
+Every use after save goes through `criu_restore()`, which restores a fresh
 process from the on-disk image.  The instance's `vllm_config` must
 match the saved image's config (validated automatically):
 
 ```python
 inst = Instance(vllm_config)
-inst.load_image("/data-fast/image-cache/my_model").plan_restore_weights().wait()
+inst.criu_restore("/data-fast/image-cache/my_model").plan_restore_weights().wait()
 
-inst.restore_cuda(gpu=0).wake_up_weights().repin().restore_weights().wake_up_kv_cache()
+inst.cuda_restore(gpu=0).wake_up_weights().repin().restore_weights().wake_up_kv_cache()
 inst.generate(prompts, sampling_params).wait()
 ```
 
-`plan_restore_weights()` is chained right after `load_image()` because that is
+`plan_restore_weights()` is chained right after `criu_restore()` because that is
 when the instance has hydrated `total_gpu_bytes` and `pinned_cpu_bytes`
 from `meta.json`.
 
@@ -495,7 +554,7 @@ initializing instance 3 on the same GPU.
 instance_1.wait()
 
 instance_3 = Instance(vllm_config_3)
-instance_3.init(gpu=0).attach().repin().stage().unpin().sleep().checkpoint_cuda()
+instance_3.init(gpu=0).attach().repin().stage().unpin().sleep().cuda_checkpoint()
 
 instance_3.wait()
 instance_2.wait()
@@ -503,11 +562,11 @@ instance_2.wait()
 
 ### Restore and generate (hot path)
 
-After cold-start, weights are already staged in pinned CPU memory
+After cold-start, weights are already staged in each worker's CPU buffer
 (unpinned from CUDA).  Restore re-pins and moves them CPU→GPU:
 
 ```python
-instance_1.restore_cuda(gpu=0)
+instance_1.cuda_restore(gpu=0)
 instance_1.repin()
 instance_1.wake_up_weights()
 instance_1.restore_weights()
@@ -520,15 +579,15 @@ result = instance_1.last_generate_result
 To re-checkpoint after generate:
 
 ```python
-instance_1.unpin().sleep().checkpoint_cuda().wait()
+instance_1.unpin().sleep().cuda_checkpoint().wait()
 ```
 
 ### Swap active model on a GPU
 
 ```python
-instance_1.unpin().sleep().checkpoint_cuda().wait()
+instance_1.unpin().sleep().cuda_checkpoint().wait()
 
-instance_3.restore_cuda(gpu=0).repin()
+instance_3.cuda_restore(gpu=0).repin()
 instance_3.wake_up_weights()
 instance_3.restore_weights()
 instance_3.wake_up_kv_cache()
@@ -544,15 +603,15 @@ vllm_config_5 = {"model": "Qwen/Qwen3-1.7B", "gpu_memory_utilization": 0.4}
 instance_4 = Instance(vllm_config_4)
 instance_5 = Instance(vllm_config_5)
 
-instance_2.sleep().detach().checkpoint_cuda().wait()
+instance_2.sleep().detach().cuda_checkpoint().wait()
 
 instance_4.init(gpu=1)
 instance_4.wait()
 instance_5.init(gpu=1)
 instance_4.attach().repin().stage()
 instance_5.attach().repin().stage()
-instance_4.unpin().sleep().checkpoint_cuda()
-instance_5.unpin().sleep().checkpoint_cuda()
+instance_4.unpin().sleep().cuda_checkpoint()
+instance_5.unpin().sleep().cuda_checkpoint()
 instance_4.wait()
 instance_5.wait()
 ```
@@ -562,8 +621,8 @@ Reload both on the same GPU at the same time:
 ```python
 # In-memory checkpoint+restore (no save/load), so plan_restore_weights
 # is not chained: restore_weights falls back to a single-chunk plan.
-instance_4.restore_cuda(gpu=1).repin().wake_up_weights().restore_weights().wake_up_kv_cache()
-instance_5.restore_cuda(gpu=1).repin().wake_up_weights().restore_weights().wake_up_kv_cache()
+instance_4.cuda_restore(gpu=1).repin().wake_up_weights().restore_weights().wake_up_kv_cache()
+instance_5.cuda_restore(gpu=1).repin().wake_up_weights().restore_weights().wake_up_kv_cache()
 
 instance_4.wait()
 instance_5.wait()
@@ -574,17 +633,17 @@ responsibility to serialize (e.g. by calling `wait()` between inits).
 
 ### Cross-GPU migration
 
-Once checkpointed, an instance is stateless (`gpu=None`).  `restore_cuda(gpu)`
+Once checkpointed, an instance is stateless (`gpu=None`).  `cuda_restore(gpu)`
 specifies which GPU to restore onto -- it can be the same or a different
 GPU.
 
 ```python
 instance = Instance(vllm_config)
-instance.init(gpu=0).attach().repin().stage().unpin().sleep().checkpoint_cuda().wait()
+instance.init(gpu=0).attach().repin().stage().unpin().sleep().cuda_checkpoint().wait()
 # instance.gpu is now None
 
 # Restore on GPU 1
-instance.restore_cuda(gpu=1).repin()
+instance.cuda_restore(gpu=1).repin()
 instance.wake_up_weights().restore_weights().wake_up_kv_cache()
 instance.wait()
 # instance.gpu is now 1
@@ -601,12 +660,12 @@ counts folded as if the pause never happened.
 instance.generate(prompts, sampling_params)  # long-running
 
 # ... some time later, after partial decode ...
-instance.pause().unpin().sleep().checkpoint_cuda().wait()
+instance.pause().unpin().sleep().cuda_checkpoint().wait()
 # instance.gpu is now None; KV blocks freed; only token-id state lives in CPU.
 
 # ... model is swapped out, another instance runs on the GPU ...
 
-instance.restore_cuda(gpu=0).repin().wake_up_weights().restore_weights() \
+instance.cuda_restore(gpu=0).repin().wake_up_weights().restore_weights() \
         .wake_up_kv_cache().resume().wait()
 result = instance.last_generate_result   # original req_id, full output
 ```
@@ -633,7 +692,7 @@ inst.sleep() -----> cmd_queue
                      completed_counter += 1
                      result_queue.put()
 
-inst.checkpoint_cuda()--> cmd_queue
+inst.cuda_checkpoint()--> cmd_queue
                      _worker_checkpoint(pid)
                        enumerate descendants via psutil
                        checkpoint EngineCore (leaf first)
@@ -651,7 +710,7 @@ inst.wait() <-------- demuxer.wait_idle()  (condvar on _pending_count)
 Each Instance owns a single per-instance `Demuxer` thread (see
 [`demuxer.py`](../demuxer.py)) that is the **sole consumer** of
 `_result_queue`.  The demuxer is created lazily by `_ensure_queues`
-(at `init` / `load_image`) and torn down by `_close_queues` (at
+(at `init` / `criu_restore`) and torn down by `_close_queues` (at
 `teardown` / `_reset`).  For every result it:
 
 1. Calls `_apply_result` (with prompts pre-injected for generate
@@ -678,7 +737,7 @@ both racing for `_result_queue.get()`.
 `wait()` once, including from many threads at once:
 
 ```python
-instance.unpin().sleep().checkpoint_cuda().wait()
+instance.unpin().sleep().cuda_checkpoint().wait()
 ```
 
 If any cmd in this batch failed at the worker, the first error is
@@ -700,7 +759,7 @@ same set.
 
 ### Cross-GPU Restore
 
-`restore_cuda(gpu)` supports restoring onto a different GPU using the CUDA
+`cuda_restore(gpu)` supports restoring onto a different GPU using the CUDA
 driver's `CUcheckpointRestoreArgs` with `CUcheckpointGpuPair` UUID
 mapping (requires driver 580+).  The GPU pair mapping must be a valid
 permutation: old_gpu swaps with new_gpu, all others map to themselves.
@@ -786,7 +845,8 @@ sudo PIP_BREAK_SYSTEM_PACKAGES=1 make install-criu PREFIX=/usr
 sudo PIP_BREAK_SYSTEM_PACKAGES=1 make install-lib PREFIX=/usr
 sudo PIP_BREAK_SYSTEM_PACKAGES=1 make install-crit PREFIX=/usr
 
-# Empty plugin directory (required by --libdir during dump)
+# Empty plugin directory (used by --libdir during dump; the dump creates
+# it if missing, so this is optional)
 sudo mkdir -p /usr/lib/criu/empty
 ```
 

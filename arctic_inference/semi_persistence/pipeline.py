@@ -52,8 +52,8 @@ announce_state=None)``:
   ``entry["pinned_cpu_bytes"]``, ``entry["total_gpu_bytes"]``.
 * **Calls**: ``Orchestrator._set_state``, ``_locks_ordered``,
   ``_install_listeners`` (saved -> checkpoint),
-  ``_send_cmd_with_ack`` (every cmd: ``restore_cuda``, ``repin``,
-  ``unpin``, ``checkpoint_cuda``, ``wake_up_weights``,
+  ``_send_cmd_with_ack`` (every cmd: ``cuda_restore``, ``repin``,
+  ``unpin``, ``cuda_checkpoint``, ``wake_up_weights``,
   ``restore_weights``, ``wake_up_kv_cache``),
   ``_evict_for_phase2`` (Phase-2 HBM eviction; replaced by
   ``EvictForPeerOp`` cross-pipeline submit when ``_use_pipeline``),
@@ -71,7 +71,7 @@ announce_state=None)``:
   (set to None on sleep -> checkpoint), ``entry["instance"]`` (set to
   None on checkpoint -> saved).
 * **Calls**: ``Orchestrator._set_state``, ``_locks_ordered``,
-  ``_send_cmd_with_ack`` (``sleep``, ``unpin``, ``checkpoint_cuda``).
+  ``_send_cmd_with_ack`` (``sleep``, ``unpin``, ``cuda_checkpoint``).
 * **Touches**: ``Slots.deallocate(slot)``,
   ``entry["instance"].teardown().wait().remove()`` (checkpoint -> saved).
 
@@ -675,8 +675,8 @@ class RegisterOp(Op):
         ``entry["slot"]``).
       - ``Instance(vllm_config)`` cold-start sequence:
         ``init(gpu).attach().repin().stage().unpin().sleep()
-        .checkpoint_cuda().wait()``, then
-        ``save_image(image_dir).wait()``, then ``_send("exit")`` +
+        .cuda_checkpoint().wait()``, then
+        ``criu_dump(image_dir).wait()``, then ``_send("exit")`` +
         ``_reset()``.
 
     Preserves fixes for: none (cold-start has no Known Issues entry --
@@ -738,8 +738,8 @@ class RegisterOp(Op):
         entry["state_since"] = _time.perf_counter()
 
         with orch._locks_ordered(mid):
-            inst.init(gpu).attach().repin().stage().unpin().sleep().checkpoint_cuda().wait()
-            inst.save_image(image_dir).wait()
+            inst.init(gpu).attach().repin().stage().unpin().sleep().cuda_checkpoint().wait()
+            inst.criu_dump(image_dir).wait()
             log.info("%s: image saved to %s", mid, image_dir)
 
             inst._send("exit")
@@ -953,7 +953,7 @@ class EvictForPeerOp(Op):
         the old branch returned early on ``entry["paused"]`` but the
         acquirer's Phase-2 loop did ``remaining -= share`` anyway, so
         the acquirer believed the HBM was freed and OOM'd inside
-        ``restore_cuda`` (CUresult=2).  Now we walk the paused peer
+        ``cuda_restore`` (CUresult=2).  Now we walk the paused peer
         down to ``sleep`` like any other incumbent.  This is safe by
         construction: the vllm_child ``sleep`` handler explicitly
         documents the invariant "while ``_paused`` is True,
@@ -981,7 +981,7 @@ class EvictForPeerOp(Op):
         been walked from ``up`` to ``checkpoint`` by an unrelated op
         (a client ``move(checkpoint)``, a parallel eviction from a
         different acquirer, etc.).  Sending ``sleep`` to a worker
-        whose vllm_child has been ``checkpoint_cuda``'d (CUDA context
+        whose vllm_child has been ``cuda_checkpoint``'d (CUDA context
         CRIU-frozen) drives vLLM's ``sleep`` handler into
         ``torch.cuda.synchronize(0)`` -> ``cuCtxSynchronize`` ->
         **segfault**, killing the vllm_child and wedging the entire

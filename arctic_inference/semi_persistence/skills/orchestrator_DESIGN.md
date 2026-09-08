@@ -501,12 +501,12 @@ of the same model with different `_env` correctly resolve to two
 distinct backing models.
 
 `_env` is persisted into `meta.json` alongside the rest of
-`vllm_config` (via `save_image`'s `meta_extra`), so it survives orch
+`vllm_config` (via `criu_dump`'s `meta_extra`), so it survives orch
 reboots: on the next `Orchestrator.init`, the saved model is
 rediscovered with `_env` intact and dedup remains honest.
 
 CRIU restore captures the child's `os.environ` directly into the
-image, so `load_image` paths inherit the dump-time env without
+image, so `criu_restore` paths inherit the dump-time env without
 re-applying `_env` from `meta.json`.  `_env` is therefore consulted
 only on cold-start paths (`register` itself).
 
@@ -721,7 +721,7 @@ same code path -- both flavours converge on
 Allowed at every ladder state at which pause itself is allowed
 (`up`, `sleep`, `checkpoint` -- see "Walking down past `up` while
 paused"); the policy is order-independent w.r.t. any
-interleaving of `pause`, `sleep`, `checkpoint_cuda`, and
+interleaving of `pause`, `sleep`, `cuda_checkpoint`, and
 `generate` on the pipe, because none of those interleavings can
 expose the engine to a scheduler mutation while paused.  See
 "Generate-while-paused stash" in
@@ -912,7 +912,7 @@ system is live without restarting the orchestrator or any vLLM child.
 Synchronous, fast (pure bookkeeping).  Validates that `gpu` is visible
 to NVML (`nvmlDeviceGetCount`); if not, raises `ValueError` rather than
 admitting a non-existent device — the slot allocator would eventually
-hand it out and `restore_cuda(gpu=N)` would crash inside
+hand it out and `cuda_restore(gpu=N)` would crash inside
 `_build_restore_args` on the out-of-range UUID lookup, deadlocking the
 dependent `repin` already pipelined into the vLLM child.
 
@@ -1586,7 +1586,7 @@ breakdown and the `_move_sync` poll-loop pattern.
 `generate(mid, ...)` on the same model could hang the vLLM
 child.  Symptom: the worker queue accumulated
 `wake_up_kv_cache -> sleep -> generate -> unpin ->
-checkpoint_cuda` back-to-back; the engine tried to schedule
+cuda_checkpoint` back-to-back; the engine tried to schedule
 the request against cumem memory that `sleep` had just
 freed, and stuck.
 

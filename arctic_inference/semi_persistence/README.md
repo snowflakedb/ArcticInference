@@ -37,8 +37,8 @@ on AWS p5en.48xlarge (192 vCPU, 2 TiB host memory, 8x H200) with vLLM v0.18.0.*
 
 - Linux with NVIDIA GPUs, and a driver providing `cuda-checkpoint`.
 - vLLM and ArcticInference installed (see the [repository README](../../README.md)).
-- CRIU 4.2 with the CUDA plugin, plus the empty plugin directory
-  `/usr/lib/criu/empty` — without it, dumps abort at plugin init.
+- CRIU 4.2 with the CUDA plugin. The empty plugin directory it needs,
+  `/usr/lib/criu/empty`, is created by the dump if missing.
 - Passwordless `sudo`: checkpoint and restore shell out to `cuda-checkpoint`
   and `criu`, which need root.
 
@@ -117,16 +117,19 @@ from arctic_inference.semi_persistence import Instance
 
 inst = Instance({"model": "Qwen/Qwen3-8B-FP8", "enforce_eager": True})
 
-inst.init(gpu=0).attach().stage().sleep().checkpoint_cuda()
-inst.save_image("/data-fast/image-cache/qwen3-8b").wait()
+inst.init(gpu=0).attach().stage().sleep().cuda_checkpoint()
+inst.criu_dump("/data-fast/image-cache/qwen3-8b").wait()
 
-inst.restore_cuda(gpu=3).wake_up_weights().restore_weights().wake_up_kv_cache()
+inst.cuda_restore(gpu=3).wake_up_weights().restore_weights().wake_up_kv_cache()
 inst.generate(["Hello, world!"], {}).wait().print_status()
 ```
 
 `scripts/test_image.py` is the minimal save-then-restore walkthrough;
 `scripts/main_test.py` shows five instances being multiplexed across two GPUs by
-hand.
+hand. `scripts/test_weights.py` keeps the weights outside the image
+(`save_weights` / `load_weights`, so the dump runs against a detached, small
+process), and `scripts/test_tp2.py` does the same at tensor_parallel_size=2 with
+expert parallel, cold-starting on one GPU pair and restoring onto another.
 
 ## Repository layout
 
@@ -167,7 +170,7 @@ python -m pytest tests/ -q      # CPU-only, no GPU needed
   CUDA context and leaves no GPU residency behind; the on-disk form is a CRIU
   image of the entire child process tree.
 - A CRIU dump is destructive: the child is killed once the image is written, so
-  after `save_image` the model is `saved` with no live process.
+  after `criu_dump` the model is `saved` with no live process.
 - The orchestrator and its HTTP control plane are experimental research code
   with no authentication or per-user isolation. Do not expose the control port
   on an untrusted network.

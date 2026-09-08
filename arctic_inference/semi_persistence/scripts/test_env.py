@@ -8,7 +8,7 @@ Exercises the per-model env-var path end to end:
 2. Reserved keys in ``_env`` (``CUDA_VISIBLE_DEVICES``,
    ``VLLM_ENABLE_V1_MULTIPROCESSING``, ``USE_LIBUV``) do *not* override
    the values the child sets at the top of ``vllm_child_loop``.
-3. The on-disk ``meta.json`` from ``save_image`` preserves ``_env`` in
+3. The on-disk ``meta.json`` from ``criu_dump`` preserves ``_env`` in
    the persisted ``vllm_config`` so the orchestrator can rediscover it
    on reboot and client-side dedup stays honest.
 
@@ -99,8 +99,8 @@ def main() -> None:
     assert "SEMIP_PROBE_VAR" in env_a and env_a["SEMIP_PROBE_VAR"] != env_b["SEMIP_PROBE_VAR"]
 
     image_dir = os.path.join(IMAGE_ROOT, "model_a")
-    inst_a.attach().repin().stage().unpin().sleep().checkpoint_cuda()
-    inst_a.save_image(image_dir).wait()
+    inst_a.attach().repin().stage().unpin().sleep().cuda_checkpoint()
+    inst_a.criu_dump(image_dir).wait()
 
     with open(os.path.join(image_dir, "meta.json")) as f:
         meta = json.load(f)

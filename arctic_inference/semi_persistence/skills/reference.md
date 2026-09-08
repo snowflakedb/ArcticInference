@@ -14,42 +14,72 @@ stay optimal, and **chainable** — they all return `self`.
 
 ```python
 inst = Instance({"model": "Qwen/Qwen3-8B-FP8", "enforce_eager": True})
-inst.init(gpu=0).attach().repin().stage().unpin().sleep().checkpoint_cuda()
-inst.save_image("/data-fast/image-cache/foo").wait()
+inst.init(gpu=0).attach().repin().stage().unpin().sleep().cuda_checkpoint()
+inst.criu_dump("/data-fast/image-cache/foo").wait()
 ```
 
 ### Lifecycle
 
 | Primitive | Effect | Runs in |
 |---|---|---|
-| `init(gpu)` | Cold start with real weights; spawns worker + child; applies `_env` | Worker + child |
-| `load_image(path)` | CRIU-restore from disk; validates the image's `vllm_config` matches | Worker |
-| `save_image(path)` | CRIU-dump the child tree (**destructive**); writes `meta.json` | Worker |
+| `init(gpus=[...])` | Cold start with real weights; spawns worker + child; applies `_env`. A scalar `gpu=` still works at TP=1 | Worker + child |
+| `criu_restore(path=None)` | CRIU-restore from disk; validates the image's `vllm_config` and `model_dir` match. Defaults to `<model_dir>/image` | Worker |
+| `criu_dump(path=None)` | CRIU-dump the child tree (**destructive**); writes `meta.json`. Defaults to `<model_dir>/image` | Worker |
 | `teardown()` | Tear down instance, worker, child; resets to created state | Worker + child |
 | `remove()` | Deregister from `Instance._all`; non-blocking, non-destructive | Main |
 | `wait()` | Block until pending commands complete | Main |
+
+`Instance(vllm_config, model_dir=None)`. With a `model_dir`, the dump and
+restore paths default to `<model_dir>/image` and the compile cache moves
+under `<model_dir>/compilation`; see [semi-p_DESIGN.md](semi-p_DESIGN.md).
 
 ### GPU residency
 
 | Primitive | Effect |
 |---|---|
 | `sleep()` | `llm.sleep(level=2)` — frees GPU memory for main and drafter weights |
-| `checkpoint_cuda()` | Save CUDA state to CPU via `cuCheckpointProcess`; `gpu` becomes `None` |
-| `restore_cuda(gpu)` | Restore CUDA state onto a specific GPU (`gpu` is required) |
+| `cuda_checkpoint()` | Save CUDA state to CPU via `cuCheckpointProcess`; `gpu` becomes `None`. At TP>1 also inserts `cleargraph` + `destroy_nccl` first |
+| `cuda_restore(gpus=[...])` | Restore CUDA state onto specific GPU(s). Defaults to the placement recorded in the image; a scalar `gpu=` still works at TP=1 |
 | `wake_up_weights()` | Re-allocate weight tensors on GPU (main + drafter) |
 | `wake_up_kv_cache()` | Re-allocate the KV cache on GPU |
+
+### Tensor parallel (no-ops at TP=1)
+
+TP size comes from `vllm_config["tensor_parallel_size"]`; `gpus` is
+placement only and must have exactly that many entries. See
+[tp_DESIGN.md](tp_DESIGN.md).
+
+| Primitive | Effect |
+|---|---|
+| `destroy_nccl(graph_mode="reuse")` | Tear down NCCL and CustomAllreduce IPC before a checkpoint. Also marks the worker's inet TCP sockets `SO_LINGER(1,0)` so their ports skip `TIME_WAIT` when the dump kills the tree (Complication 12) |
+| `reinit_nccl()` | Rebuild NCCL on a fresh port. Must run after `cuda_restore` and before the model runs or a captured graph replays; `attach`/`load_weights` are CPU-only and unconstrained by it |
+| `cleargraph(graph_mode="reuse")` | Drop CUDA-graph exec handles; `reuse` preserves them |
+| `recapture_graphs(graph_mode="reuse")` | Rebind (`reuse`) or recapture (`full`) decode graphs, after `wake_up_kv_cache` |
 
 ### CPU buffer and weight transfer
 
 | Primitive | Effect |
 |---|---|
-| `attach()` | Allocate unpinned CPU memory sized to main + drafter `named_parameters()` |
-| `attach_pinned()` | Allocate permanently-pinned memory; skips repin/unpin at ~34 ms/GiB cost |
-| `detach()` | Free the CPU buffer |
-| `repin()` / `unpin()` | `cudaHostRegister` / `cudaHostUnregister` the buffer |
-| `stage()` | Snapshot main + drafter params GPU -> pinned CPU |
-| `plan_restore_weights()` | Build and cache a chunk plan under a computed byte budget |
+| `attach()` | Allocate unpinned CPU memory *per worker*, sized to that rank's main + drafter `named_parameters()` |
+| `attach_pinned()` | **Unsupported; raises.** Use `attach()` -> `repin()` |
+| `detach()` | Free each worker's CPU buffer |
+| `repin()` / `unpin()` | `cudaHostRegister` / `cudaHostUnregister` each worker's buffer. Idempotent |
+| `stage()` | Snapshot main + drafter params GPU -> that worker's CPU buffer |
+| `save_weights()` | Write each worker's buffer to `<model_dir>/weights` as shards + `weights_meta.json`. Call after `stage()`, before `detach()`, so the image stays small |
+| `load_weights()` | Read those shards back into the buffer. Requires a prior `attach()` on the restore side |
+| `plan_restore_weights(max_buffer_bytes=None)` | Build and cache a chunk plan under a computed byte budget; pass an explicit cap for older images |
 | `restore_weights()` | Execute the cached plan: buffer -> one reused GPU staging buffer -> scatter |
+
+`save_weights` / `load_weights` are optional: without them the staged
+weights stay inside the CRIU image, which is what the orchestrator does.
+At TP>1 the shards fan out to `weights/rank{R}/`.
+
+All of this state (buffer, param index, chunk plan) lives on the vLLM
+workers as `worker._semip_*` and runs there via `collective_rpc`, not in
+the child process. At TP>1 a buffer held in the child would be
+cloudpickled by value into each worker subprocess and its writes lost;
+each rank also owns a different shard. One code path serves both TP
+sizes. See [instance_DESIGN.md](instance_DESIGN.md).
 
 The drafter contributes extra parameter entries only when it exposes a `.model`
 (Eagle / Medusa / DraftModel / ArcticProposer). Ngram and Suffix drafters are
@@ -66,7 +96,7 @@ skipped, collapsing the layout to main params only.
 
 `pause` captures each active sub-request's `(prompt_token_ids,
 output_token_ids_so_far, sampling_params)` so that `unpin` / `sleep` /
-`checkpoint_cuda` are safe afterwards. `resume` replays them under a fresh
+`cuda_checkpoint` are safe afterwards. `resume` replays them under a fresh
 engine id while the caller's original `req_id` continues seamlessly; the final
 result folds pre-pause text and token counts back in.
 
@@ -205,12 +235,14 @@ run the destructive `criu dump`.
 
 ### Restore sequence
 
-Pass the pipe FD through a Unix socket via `SCM_RIGHTS` into a `sudo`'d helper,
-which `dup2`s it into place and `execvp`s `criu restore` with `--inherit-fd`
-for the pipe plus stdout/stderr, `--link-remap`, `--tcp-close`, and
-`--shell-job`. The CUDA context comes back via `cuda-checkpoint restore`.
+Pass the pipe FD through a Unix socket via `SCM_RIGHTS` into a helper (under
+`sudo` only when the worker is not already root), which `dup2`s it into place,
+unshares a private PID namespace, and runs `criu restore` inside it with
+`--inherit-fd` for the pipe plus stdout/stderr, `--link-remap` and
+`--tcp-close` (no `--shell-job` — the child holds no tty).  The CUDA context
+comes back via `cuda-checkpoint restore`.
 
-### The nine complications
+### The thirteen complications
 
 | # | Complication | Shape of the fix |
 |---|---|---|
@@ -220,13 +252,24 @@ for the pipe plus stdout/stderr, `--link-remap`, `--tcp-close`, and
 | 4 | stdout/stderr | `dup2 /dev/null`, restore with `--inherit-fd` |
 | 5 | Pipe FD through `sudo` | Pass via `SCM_RIGHTS`, helper `dup2`s then `execvp`s |
 | 6 | CUDA context | Driver API rather than the CLI |
-| 7 | CRIU plugin directory | `/usr/lib/criu/empty` must exist (`--libdir`) |
-| 8 | PID collisions at restore | Detect and retry |
+| 7 | CRIU plugin directory | `--libdir` needs `/usr/lib/criu/empty`; the dump creates it |
+| 8 | Task-id collisions at restore (threads count, not just PIDs) | Restore into a private PID namespace; on the no-namespace path a preflight that names the occupants (`scripts/pidcheck.py`) and dump-side id placement; retry loop as backstop |
 | 9 | Ghost remap race (CRIU 4.2) | `--link-remap` handling |
+| 10 | Per-restore PID namespace, and the tty it forced out | Reaper + private `/proc`; child `setsid`, `--shell-job` dropped |
+| 11 | Unprivileged dump + restore | `SEMIP_UNPRIVILEGED=1`: `--unprivileged` on both sides, no-namespace restore, caps shed in the child |
+| 12 | `TIME_WAIT` on the recorded local port | `SO_LINGER(1,0)` on the workers' inet TCP sockets, so the dump's kill RSTs instead of FINs |
+| 13 | Teardown kill scoping on the no-namespace path (a `kill -9 -<pid>` meant as a group kill becomes `kill(-1)` in procps-ng, ending the container) | Snapshot task ids + start times at restore (`_tree_identity`); kill only verified positive pids, never a negative one. See [`TEARDOWN_SCOPING.md`](TEARDOWN_SCOPING.md) |
 
 `meta.json` alongside the image holds the `vllm_config` (including `_env`) and
 the CRIU metadata, which is what lets the orchestrator rediscover saved models
-on reboot and lets `load_image` validate the image against the instance.
+on reboot and lets `criu_restore` validate the image against the instance.
+
+### Environment switches
+
+| Variable | Effect |
+|---|---|
+| `SEMIP_UNPRIVILEGED=1` | Run dump and restore on a pod granting only `CAP_CHECKPOINT_RESTORE + CAP_SYS_PTRACE`. Adds `--unprivileged` to both, takes the no-namespace restore path, and sheds the child's capabilities so the image is portable to a low-cap node. Costs concurrent restore (one live restore per node). See Complication 11 |
+| `_SEMIP_CHILD_DROP_CAPS=1` | Internal only, set by the worker across the child's spawn. Not a user flag |
 
 ---
 
@@ -291,7 +334,7 @@ source, which the security scanner flags as arbitrary code execution.
 - **`_env` reserved trio** (`CUDA_VISIBLE_DEVICES`,
   `VLLM_ENABLE_V1_MULTIPROCESSING`, `USE_LIBUV`) is hard-set at the top of the
   child loop and silently dropped from `_env`, but stays in the on-disk copy.
-- **`load_image` does not re-apply `_env`** — the environment is captured inside
+- **`criu_restore` does not re-apply `_env`** — the environment is captured inside
   the CRIU image and restored verbatim.
 - **NVML, not torch,** for GPU memory queries in the main process, to avoid
   initializing CUDA there.

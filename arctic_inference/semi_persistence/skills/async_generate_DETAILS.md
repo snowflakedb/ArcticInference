@@ -345,7 +345,7 @@ A paused model has at least one in-flight `generate` whose
 `generate_done` is parked in the child until `resume`.  That generate
 counts toward `inst._pending_count`.  Any pool-worker
 `inst.wait()` issued by `_step_up` / `_step_down` (e.g. for `sleep`,
-`checkpoint_cuda`, `restore_cuda`, `wake_up_kv_cache`, ...) would loop
+`cuda_checkpoint`, `cuda_restore`, `wake_up_kv_cache`, ...) would loop
 forever waiting for `_pending_count` to drain to 0 -- which won't
 happen until resume.
 
@@ -392,8 +392,8 @@ without self-deadlock.
 | Caller | Path | Mechanism | Notes |
 |--------|------|-----------|-------|
 | `_register_sync` | child boot / image restore | `inst.wait()` | Cold start; no listeners installed yet. The condvar wait is independent of listener state. |
-| `_step_up(saved -> checkpoint)` | `inst.load_image().plan_restore_weights().wait()` | `inst.wait()` | First time the model is reanimated; listeners are installed on the new Instance just before this chain so subsequent steps can use `_send_cmd_with_ack`. |
-| `_step_up`, `_step_down` (every cmd: `sleep`, `unpin`, `checkpoint_cuda`, `restore_cuda`, `repin`, `wake_up_weights`, `restore_weights`, `wake_up_kv_cache`) | move ladder, possibly under a paused model | `_send_cmd_with_ack` | Always synchronises only on its own cmd's ack, so it works whether or not generates are deferred. |
+| `_step_up(saved -> checkpoint)` | `inst.criu_restore().plan_restore_weights().wait()` | `inst.wait()` | First time the model is reanimated; listeners are installed on the new Instance just before this chain so subsequent steps can use `_send_cmd_with_ack`. |
+| `_step_up`, `_step_down` (every cmd: `sleep`, `unpin`, `cuda_checkpoint`, `cuda_restore`, `repin`, `wake_up_weights`, `restore_weights`, `wake_up_kv_cache`) | move ladder, possibly under a paused model | `_send_cmd_with_ack` | Always synchronises only on its own cmd's ack, so it works whether or not generates are deferred. |
 | `_step_down(checkpoint -> saved)` | `inst.teardown().wait().remove()` | `inst.wait()` | Demuxer applies the teardown ack (calls `_reset()`) before notifying the wait; the wait then returns and the inst is GC'd. |
 | `_pause_sync`, `_resume_sync` | pause/resume a generating model | `_send_cmd_with_ack` | Issued mid-generate by definition; deferred generate keeps `_pending_count` non-zero so only the FIFO ack path works. |
 | `_generate_sync` | submit a new generate | per-request `Event` (not `inst.wait()`) | The orchestrator's permanent generate listener resolves the matching `req_id`. |
@@ -730,7 +730,7 @@ wake_up_kv_cache       <- last Phase 1 cmd (engine ready)
 sleep                  <- move's first cmd (cumem freed)
 generate               <- Phase 2's enqueue (request added
                           to a sleeping engine)
-unpin / checkpoint_cuda  <- rest of move's ladder-down
+unpin / cuda_checkpoint  <- rest of move's ladder-down
 ```
 
 The engine hangs trying to schedule a request against freed
@@ -972,7 +972,7 @@ ladder state at which pause itself is allowed -- `up`, `sleep`,
 underlying vLLM engine, however, is only safe to call into
 while it is at `up`: `llm.sleep(level=2)` discards the cumem
 allocator's GPU blocks and tears the executor context down,
-and a subsequent `checkpoint_cuda` (via `cuda-checkpoint`)
+and a subsequent `cuda_checkpoint` (via `cuda-checkpoint`)
 freezes the entire CUDA context.  Either state makes the engine
 APIs hazardous -- `engine.add_request` enqueues into a
 scheduler that can no longer `step()`, and `engine.abort_request`
@@ -1014,7 +1014,7 @@ whose per-eid state never saw a step are restored.
 **Why this is order-independent.**  Because the route is keyed
 on `_paused` (set by `pause`, cleared by `resume`) and not on
 any engine-state predicate, any pipe interleaving of
-`pause`, `sleep`, `unpin`, `checkpoint_cuda`, `restore_cuda`,
+`pause`, `sleep`, `unpin`, `cuda_checkpoint`, `cuda_restore`,
 `repin`, `wake_up_weights`, `restore_weights`, and `generate`
 that the "Walking down past `up` while paused" rule permits is
 handled by the same line of code.  Earlier designs needed a

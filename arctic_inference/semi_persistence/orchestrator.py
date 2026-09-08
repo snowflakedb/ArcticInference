@@ -78,7 +78,7 @@ class _CmdAck(threading.Event):
 class WorkerCmdFailed(RuntimeError):
     """Raised by ``_send_cmd_with_ack`` when the child process reports
     a failure for a non-generate command (e.g. ``wake_up_kv_cache``
-    OOM, ``restore_cuda`` failure, ``repin`` failure).
+    OOM, ``cuda_restore`` failure, ``repin`` failure).
 
     Distinct from a generic ``RuntimeError`` so the pipeline can
     distinguish "engine state is now inconsistent, fail every
@@ -472,7 +472,7 @@ class Orchestrator(OrchestratorBase):
 
         Raises ``ValueError`` if *gpu* is not visible to NVML.  Allowing
         a non-existent index into the pool is unrecoverable: the slot
-        allocator will eventually hand it out, ``restore_cuda(gpu=N)``
+        allocator will eventually hand it out, ``cuda_restore(gpu=N)``
         will crash inside ``_build_restore_args`` (out-of-range UUID
         lookup), and the dependent ``repin`` already pipelined to the
         vLLM child will deadlock the instance.  Fail loudly here
@@ -801,15 +801,15 @@ class Orchestrator(OrchestratorBase):
                 # listeners before any cmd is sent so their callbacks
                 # are live for the very first ack.  The demuxer is
                 # created lazily in _ensure_queues (driven by
-                # load_image below); add_cmd_listener buffers
+                # criu_restore below); add_cmd_listener buffers
                 # registrations until then.
                 Orchestrator._install_listeners(model_id, inst)
                 # load() reads meta.json and hydrates total_gpu_bytes /
                 # pinned_cpu_bytes on the instance; plan_restore_weights
                 # uses those to build the chunk plan in the child once.
-                inst.load_image(entry["image_dir"]).plan_restore_weights().wait()
+                inst.criu_restore(entry["image_dir"]).plan_restore_weights().wait()
                 # Mirror onto the registry entry to keep registry-as-truth
-                # even though Instance.load_image already set self.* from meta.
+                # even though Instance.criu_restore already set self.* from meta.
                 inst.pinned_cpu_bytes = entry.get("pinned_cpu_bytes", 0)
                 inst.total_gpu_bytes = entry.get("total_gpu_bytes", 0)
                 entry["instance"] = inst
@@ -852,7 +852,7 @@ class Orchestrator(OrchestratorBase):
             # so it doesn't invert against the demuxer's generate
             # listener, which takes gen_lock first and then the
             # model lock.
-            Orchestrator._send_cmd_with_ack(model_id, "restore_cuda", gpu)
+            Orchestrator._send_cmd_with_ack(model_id, "cuda_restore", gpu)
             Orchestrator._send_cmd_with_ack(model_id, "repin")
             with Orchestrator._locks_ordered(model_id):
                 Orchestrator._set_state(model_id, "sleep")
@@ -893,12 +893,12 @@ class Orchestrator(OrchestratorBase):
                         # model_lock -> gen_lock inversion against
                         # the demuxer's generate listener.
                         Orchestrator._send_cmd_with_ack(model_id, "unpin")
-                        Orchestrator._send_cmd_with_ack(model_id, "checkpoint_cuda")
+                        Orchestrator._send_cmd_with_ack(model_id, "cuda_checkpoint")
                         with Orchestrator._locks_ordered(model_id):
                             entry["gpu"] = None
                             Orchestrator._set_state(model_id, "checkpoint")
                         Orchestrator._send_cmd_with_ack(
-                            model_id, "restore_cuda", slot.gpu_id)
+                            model_id, "cuda_restore", slot.gpu_id)
                         Orchestrator._send_cmd_with_ack(model_id, "repin")
                         with Orchestrator._locks_ordered(model_id):
                             entry["gpu"] = slot.gpu_id
@@ -1172,7 +1172,7 @@ class Orchestrator(OrchestratorBase):
 
         if from_state == "sleep" and to_state == "checkpoint":
             Orchestrator._send_cmd_with_ack(model_id, "unpin")
-            Orchestrator._send_cmd_with_ack(model_id, "checkpoint_cuda")
+            Orchestrator._send_cmd_with_ack(model_id, "cuda_checkpoint")
             with Orchestrator._locks_ordered(model_id):
                 if entry.get("slot") is not None:
                     Slots.deallocate(entry["slot"])
@@ -1303,7 +1303,7 @@ class Orchestrator(OrchestratorBase):
                 # the q_rec stays at ``state="waiting"`` / ``t_done=None``
                 # forever and the dashboard's ``wait_s`` counter ticks
                 # up indefinitely -- a Phase-1 failure (e.g.
-                # ``WorkerCmdFailed`` from ``restore_cuda`` OOM while
+                # ``WorkerCmdFailed`` from ``cuda_restore`` OOM while
                 # walking checkpoint->sleep) never reaches the Phase-2
                 # ``q_rec["state"] = "generating"`` assignment and is
                 # not in ``_inflight``, so ``_on_generate_done`` /

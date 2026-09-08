@@ -159,7 +159,7 @@ class InstanceBase(ABC):
 
     Usage:
         instance = Instance(vllm_config)
-        instance.init(gpu=0).attach().sleep().checkpoint_cuda().wait()
+        instance.init(gpu=0).attach().sleep().cuda_checkpoint().wait()
     """
 
     @abstractmethod
@@ -178,11 +178,11 @@ class InstanceBase(ABC):
         """Free GPU memory for weights and KV cache (vLLM sleep level=2)."""
 
     @abstractmethod
-    def checkpoint_cuda(self) -> InstanceBase:
+    def cuda_checkpoint(self) -> InstanceBase:
         """Save CUDA state to CPU. Instance becomes stateless (gpu=None)."""
 
     @abstractmethod
-    def save_image(self, filename: str) -> InstanceBase:
+    def criu_dump(self, filename: str | None = None) -> InstanceBase:
         """CRIU-dump the child process tree to disk (non-destructive).
 
         Uses --leave-running so the child stays alive after the dump.
@@ -190,7 +190,7 @@ class InstanceBase(ABC):
         """
 
     @abstractmethod
-    def load_image(self, filename: str | None = None) -> InstanceBase:
+    def criu_restore(self, filename: str | None = None) -> InstanceBase:
         """Restore a live process from a CRIU image on disk.
 
         Validates that the image's vllm_config matches this instance.
@@ -198,22 +198,23 @@ class InstanceBase(ABC):
         """
 
     @abstractmethod
-    def restore_cuda(self, gpu: int) -> InstanceBase:
+    def cuda_restore(self, gpu: int) -> InstanceBase:
         """Restore checkpointed CUDA state onto the specified GPU."""
 
     @abstractmethod
     def attach(self) -> InstanceBase:
-        """Allocate pinned CPU memory for staging weights."""
+        """Allocate CPU memory for staging weights, on each vLLM worker.
+
+        One buffer per worker, sized to that rank's parameters; pinning is
+        the separate repin() step.
+        """
 
     @abstractmethod
     def attach_pinned(self) -> InstanceBase:
-        """Allocate pinned host memory for staging (via torch pin_memory=True).
+        """Not supported; raises RuntimeError.  Use attach() -> repin().
 
-        Like attach() but the buffer is pinned for its entire lifetime
-        (until detach()). Skips the per-cycle repin()/unpin() pattern at
-        the cost of ~34 ms/GiB extra inside checkpoint_cuda/restore_cuda.
-        Calling repin()/unpin() on a buffer created via attach_pinned()
-        raises RuntimeError.
+        It allocated a permanently-pinned buffer (torch pin_memory=True)
+        before staging moved onto the workers.
         """
 
     @abstractmethod

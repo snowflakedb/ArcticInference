@@ -700,7 +700,7 @@ def test_evict_for_peer_walks_paused_incumbent_down() -> None:
     ``_step_up`` ran ``remaining -= share`` unconditionally regardless
     of whether the EvictForPeerOp actually freed anything, so the
     acquirer believed Phase 2 had freed enough HBM.  It then called
-    ``wake_up_kv_cache`` and OOM'd inside ``restore_cuda`` with
+    ``wake_up_kv_cache`` and OOM'd inside ``cuda_restore`` with
     ``CUresult=2``.  Every L1 generate that raced any paused L2/L3
     peer on the same GPU hung indefinitely (q_rec stayed at
     ``state="waiting"`` -- that surface is patched in ``orchestrator.py``
@@ -817,7 +817,7 @@ def test_evict_for_peer_noops_on_stale_below_up_incumbent() -> None:
     sitting behind a queued ``MoveOp``), an unrelated op (a client
     ``move(checkpoint)``, a parallel eviction, ...) may have walked
     the incumbent past ``up`` and CRIU-frozen its CUDA context
-    (``checkpoint_cuda``).  Sending ``sleep`` to that worker drives
+    (``cuda_checkpoint``).  Sending ``sleep`` to that worker drives
     vLLM's sleep path into ``torch.cuda.synchronize`` ->
     ``cuCtxSynchronize`` -> SEGFAULT, killing vllm_child and
     permanently wedging the pipeline (every later

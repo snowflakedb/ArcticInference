@@ -53,19 +53,19 @@ def main():
     # inst.stage()
     # inst.unpin()
     # inst.sleep()
-    # inst.checkpoint_cuda()
-    # inst.save_image(IMAGE)
+    # inst.cuda_checkpoint()
+    # inst.criu_dump(IMAGE)
     # inst.wait()
 
     def run_one(i, config, image):
         inst = Instance(config)
-        inst.load_image(image)
+        inst.criu_restore(image)
 
         level = 1 if config["gpu_memory_utilization"] > 0.5 else 2
         slot = Slots.allocate(level)
         Slots.status()
 
-        inst.restore_cuda(gpu=slot.gpu_id)
+        inst.cuda_restore(gpu=slot.gpu_id)
         inst.wake_up_weights()
         inst.repin()
         inst.restore_weights()
