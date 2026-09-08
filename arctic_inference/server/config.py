@@ -54,17 +54,31 @@ class ModelConfig(BaseModel):
         use_fca = kwargs.pop("use_fca", False)
         spec_model = kwargs.pop("spec_model", "")
 
+        # Tuning for FCA and SD (if enabled)
         if arctic_inference_effective_enabled(self.extra_env):
+            tp_size = self.tensor_parallel_size
             if use_fca:
                 kwargs.setdefault("compilation_config", {"cudagraph_mode": "PIECEWISE"})
-                kwargs.setdefault("forest_cascade_attn_configs", "{}")
+                if tp_size == 8:
+                    kwargs["forest_cascade_attn_configs"] = '{"min_batch_size": 160}'
+                if tp_size == 4:
+                    kwargs["forest_cascade_attn_configs"] = '{"min_batch_size": 48}'
+                if tp_size == 2:
+                    kwargs["forest_cascade_attn_configs"] = '{"min_batch_size": 24}'
+            else:
+                kwargs.pop("forest_cascade_attn_configs", None)
             if spec_model:
                 kwargs.setdefault(
                     "speculative_config",
                     {"method": "arctic", "model": spec_model, "num_speculative_tokens": 3},
                 )
-        else:
-            kwargs.pop("forest_cascade_attn_configs", None)
+                if use_fca:
+                    if tp_size == 8:
+                        kwargs["speculative_config"]["hard_disable_by_batch_size"] = 160
+                    if tp_size == 4:
+                        kwargs["speculative_config"]["hard_disable_by_batch_size"] = 96
+                    if tp_size == 2:
+                        kwargs["speculative_config"]["hard_disable_by_batch_size"] = 96
         return kwargs
 
     @classmethod
