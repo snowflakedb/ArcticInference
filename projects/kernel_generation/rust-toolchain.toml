@@ -1,0 +1,10 @@
+# Pinned because `[lints.clippy]` denies pedantic and nursery as GROUPS: those gain
+# and rename lints between releases, so an unpinned tree can fail clippy after a
+# `rustup update` with no source change. Already bitten three times
+# (question_mark, unchecked_time_subtraction, fullfp16->fp16).
+#
+# This is what the Linux verification host runs. Bump deliberately — run clippy and
+# the full suite on Linux first.
+[toolchain]
+channel = "1.97.1"
+components = ["clippy", "rustfmt"]

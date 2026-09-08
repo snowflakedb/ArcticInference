@@ -1,0 +1,4 @@
+interface:
+  display_name: "NVIDIA PTX"
+  short_description: "Local PTX ISA and inline asm docs"
+  default_prompt: "Use $nvidia-ptx to write, inspect, or explain PTX ISA and inline PTX assembly using local NVIDIA docs."

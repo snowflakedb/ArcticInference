@@ -1,0 +1,4 @@
+interface:
+  display_name: "NVIDIA CUDA"
+  short_description: "Local CUDA Programming Guide docs"
+  default_prompt: "Use $nvidia-cuda to write, debug, or optimize CUDA kernels using the local CUDA Programming Guide."

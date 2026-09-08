@@ -1,0 +1,35 @@
+[package]
+name = "texmark"
+version = "0.1.0"
+edition = "2024"
+repository = "https://github.com/snowflakedb/ArcticInference"
+readme = "README.md"
+description = "Convert LaTeX documents to XML, HTML, and portable Markdown"
+
+[[bin]]
+name = "texmark"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[dependencies]
+# base64 for data-URI image inlining. It is itself dependency-free and
+# wasm-compatible, so the library's graph stays a single small, trusted crate.
+base64 = "0.22"
+# Optional pure-Rust, WASM-capable PDF rasterizer for standalone Markdown.
+# Bundles preserve PDF figures without it.
+hayro = { version = "0.7", optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"], optional = true }
+flate2 = { version = "1", optional = true }
+tar = { version = "0.4", optional = true }
+serde_json = { version = "1", optional = true }
+stet = { version = "0.2.1", default-features = false, features = ["render"], optional = true }
+png = { version = "0.18", optional = true }
+
+[dev-dependencies]
+comrak = { version = "=0.54.0", default-features = false }
+
+[features]
+default = ["cli", "pdf"]
+cli = ["dep:clap", "dep:reqwest", "dep:flate2", "dep:tar", "dep:serde_json", "dep:stet", "dep:png"]
+pdf = ["dep:hayro"]

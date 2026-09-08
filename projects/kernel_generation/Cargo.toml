@@ -1,0 +1,54 @@
+[package]
+name = "kernelguy"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+
+[dependencies]
+tokio = { version = "1.52.3", features = ["full"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+serde_yaml = "0.9.34"
+schemars = "1.2.1"
+reqwest = { version = "0.13.4", features = ["json", "stream"] }
+dotenv = "0.15.0"
+futures = "0.3.32"
+bytes = "1.11.1"
+tempfile = "3.14.0"
+libc = "0.2.171"
+regex = "1.11.1"
+pdfium-render = "0.9.1"
+base64 = "0.22.1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+sha2 = "0.10.8"
+clap = { version = "4.6.1", features = ["derive"] }
+ignore = "0.4.28"
+globset = "0.4.18"
+# Typed tool errors (`tool::ToolError`), so "the model malformed its request" is
+# distinguishable from "the tool ran and failed" without string matching.
+thiserror = "2"
+
+[lints.clippy]
+# UM, ACTUALLY
+pedantic = { level = "deny", priority = -1 }
+# DEVELOPING LINTS
+nursery = { level = "deny", priority = -1 }
+# Nursery lint that wants a short summary paragraph on every doc comment. Nobody
+# generates rustdoc for this crate, and enforcing it added ~150 lines of restated
+# first sentences (and one regression where the inserted summary duplicated the
+# paragraph below it). Existing summaries stay; they read fine.
+too_long_first_doc_paragraph = "allow"
+# DENY PANICS
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+unreachable = "deny"
+unimplemented = "deny"
+unchecked_time_subtraction = "deny"
+todo = "deny"
+string_slice = "deny"
+panic_in_result_fn = "deny"
+panic = "deny"
+exit = "deny"
+as_conversions = "deny"

@@ -1,0 +1,36 @@
+/target
+
+.env
+
+/references/
+
+# Run artifacts: lineage git repos, archives, manifests, journals, exported best
+/runs/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# macOS / editor junk and local caches
+.DS_Store
+.cache/
+
+# Local AVO run logs (kg_*.log etc.)
+*.log
+logs/
+
+# Editor / backup files
+*.bak
+
+# Cursor IDE
+/.cursor/
+
+# Local integration tests (kept on yak, not on GitHub for now)
+/tests/
+
+# Local smoke examples
+/examples/
+
+# Claude Code local config / session state
+/.claude/
+/CLAUDE.md

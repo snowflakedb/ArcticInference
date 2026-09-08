@@ -1,0 +1,4 @@
+interface:
+  display_name: "NVIDIA Binary Utilities"
+  short_description: "Local CUDA binary utility docs"
+  default_prompt: "Use $nvidia-binary-utilities to answer questions about cuobjdump, nvdisasm, CUDA SASS instruction references, cu++filt, nvprune, or CUDA binary formats."

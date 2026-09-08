@@ -1,0 +1,11 @@
+# Clippy configuration for the lint policy declared in `[lints.clippy]` (Cargo.toml).
+#
+# The `*-in-tests` switches below are clippy's own supported mechanism for the
+# panic-family lints, not a blanket `#[allow]`. In a `#[test]` fn an unwrap IS
+# the assertion — a panic is how a test reports failure — so denying it there
+# buys nothing and would force every test into `-> Result<(), Box<dyn Error>>`
+# with strictly worse failure output. Production code stays fully covered.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true

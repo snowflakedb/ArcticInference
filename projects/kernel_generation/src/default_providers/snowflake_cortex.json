@@ -1,0 +1,24 @@
+{
+  "base_url": "https://snowhouse.snowflakecomputing.com/api/v2/cortex/v1",
+  "headers": { "X-SNOWFLAKE-APPLICATION": "kernelguy" },
+  "endpoints": [
+    {
+      "protocol": "anthropic-messages",
+      "auth": { "command": { "binary": "cortex-oauth-helper", "args": ["token"] } },
+      "models": [
+        { "id": "claude-sonnet-5", "context_size": 1000000 },
+        { "id": "claude-opus-5", "context_size": 1000000 },
+        { "id": "claude-opus-4-8", "context_size": 1000000 },
+        { "id": "claude-haiku-4-5", "context_size": 1000000 }
+      ]
+    },
+    {
+      "protocol": "openai-responses",
+      "auth": { "command": { "binary": "cortex-oauth-helper", "args": ["token"] } },
+      "models": [
+        { "id": "openai-gpt-5.5", "context_size": 400000 },
+        { "id": "openai-gpt-5.6-sol", "context_size": 400000 }
+      ]
+    }
+  ]
+}

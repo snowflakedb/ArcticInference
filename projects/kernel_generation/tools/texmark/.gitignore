@@ -1,0 +1,31 @@
+target/
+__pycache__/
+*.pyc
+
+# macOS junk
+.DS_Store
+
+# Generated markdown output; only README.md files are tracked.
+*.md
+!README.md
+!skills/**/SKILL.md
+
+# Reference papers (test corpus) are large third-party sources kept locally only.
+/references
+
+# Local paper imports and comparison artifacts.
+/imported/
+
+# Reproducible benchmark downloads and generated Markdown stay local. The
+# versioned source manifest, checksum lock, and metric baseline are tracked.
+/benchmarks/cache/
+/benchmarks/results/
+
+# Local test-corpus scratch (list of arXiv ids to try); not part of the project.
+TEST_PAPERS.txt
+
+# Claude Code local state.
+/.claude
+
+# Agent guidance, kept locally only (never tracked).
+AGENTS.md

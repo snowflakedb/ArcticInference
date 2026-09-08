@@ -1,0 +1,62 @@
+# Python dependencies for kernelguy's trusted evaluator and problem/solution contract.
+#
+# This repo is a Rust crate; nothing here is an installable package. The file exists so
+# that `uv sync` builds the `.venv/` that `src/main.rs` looks for, instead of the
+# dependency list living in prose that drifts.
+#
+#   uv sync                  # evaluator + problems (what a run needs)
+#   uv sync --extra vendor   # also vendor_solutions/, which need flashinfer and FA4
+#
+# torch comes from PyTorch's CUDA 13.0 index, not PyPI: the `+cu130` local version is
+# not published to PyPI, and the CPU-only PyPI wheel cannot run any of this.
+
+[project]
+name = "kernelguy"
+version = "0.0.0"
+description = "Python side of kernelguy: trusted evaluator, problem definitions, solution contract"
+requires-python = ">=3.12"
+
+dependencies = [
+    "torch>=2.13",
+    # Timing. `scripts/evaluate.py` reads kernel/memcpy/memset timestamps straight from
+    # the CUPTI Activity API; without it the evaluator cannot score anything at all.
+    #
+    # Held to 13.0.x on purpose: torch 2.13.0+cu130 pins `nvidia-cuda-cupti==13.0.85.*`,
+    # and cupti-python 13.2+ requires `>=13.2`, so a newer one silently upgrades torch's
+    # pinned runtime out from under it. `uv pip install cupti-python` does exactly that
+    # and appears to work.
+    "cupti-python>=13.0,<13.1",
+    # Agents build CUDA extensions through torch.utils.cpp_extension, which shells to it.
+    "ninja>=1.13",
+    # scripts/viz_roofline.py, scripts/viz_run.py
+    "matplotlib>=3.11",
+]
+
+[project.optional-dependencies]
+# Only `vendor_solutions/` needs these -- the reference implementations we benchmark
+# against. Heavier than everything above combined, and FA4 is a prerelease, so they are
+# deliberately not part of the default sync.
+#
+# `nvidia-cutlass-dsl` is deliberately NOT pinned here: flash-attn-4 reaches it through
+# quack-kernels, which pins it exactly (4.6.2 for 4.0.0b27). Naming a version here just
+# fights that. `uv pip install nvidia-cutlass-dsl` will happily install a version FA4
+# forbids.
+vendor = [
+    "flashinfer-python>=0.6",
+    "flash-attn-4>=4.0.0b27",
+]
+
+[tool.uv]
+package = false
+# Linux-only since 02d01f9 ("drop macOS support"), and torch publishes `+cu130` wheels
+# for no other platform, so resolving universally cannot succeed. Restricting the
+# environment is what lets `uv lock` produce a committable lockfile from any host.
+environments = ["sys_platform == 'linux'"]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu130" }]

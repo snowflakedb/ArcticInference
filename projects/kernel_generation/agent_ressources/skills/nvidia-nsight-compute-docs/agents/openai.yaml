@@ -1,0 +1,4 @@
+interface:
+  display_name: "NVIDIA Nsight Compute Docs"
+  short_description: "Local Nsight Compute profiling docs"
+  default_prompt: "Use $nvidia-nsight-compute-docs to choose ncu commands and interpret CUDA kernel profiling metrics."
