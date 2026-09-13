@@ -224,7 +224,7 @@ def process_task(
             request_id,
             example["prompt"],
             example["response"],
-            max_depth,
+            max_spec_tokens,
             max_spec_factor=max_spec_factor,
             min_token_prob=min_token_prob,
             use_tree_spec=use_tree_spec,
