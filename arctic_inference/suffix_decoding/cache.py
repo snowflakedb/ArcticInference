@@ -252,8 +252,8 @@ class SuffixDecodingCache:
             req_id (Hashable): The unique identifier for the request.
             context (np.ndarray | Sequence[int]): A sequence of token IDs to
                 match and speculate subsequent tokens from.
-            max_spec_tokens (int): Maximum number of tokens to speculate. If 0,
-                uses the cache's max_depth.
+            max_spec_tokens (int): Maximum number of tokens to speculate. If
+                None, uses the cache's max_tree_depth.
             max_spec_factor (float): Factor that limits speculation based on
                 matched context length. The number of speculated tokens is
                 limited by `max_spec_factor * match_length + max_spec_offset`.
@@ -282,7 +282,7 @@ class SuffixDecodingCache:
             spec_func = SuffixTree.speculate
 
         if max_spec_tokens is None:
-            max_spec_tokens = self.max_depth
+            max_spec_tokens = self._max_tree_depth
 
         if len(context) > self._max_tree_depth:
             context = context[-self._max_tree_depth :]
