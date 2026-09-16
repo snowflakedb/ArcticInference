@@ -171,7 +171,7 @@ class InferenceWorker:
 
         engine_kwargs.setdefault(
             "worker_extension_cls",
-            "arctic_inference.server.weight_sync.WeightSyncExtension",
+            "arctic_inference.server.weight_sync.TextOnlyWeightSyncExtension",
         )
 
         engine_args = _EngineArgs(**engine_kwargs)

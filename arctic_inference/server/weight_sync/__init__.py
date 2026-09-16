@@ -23,6 +23,9 @@ from arctic_inference.server.weight_sync.utils import (
 )
 from arctic_inference.server.weight_sync.engine import NCCLEngine
 from arctic_inference.server.weight_sync.sender import WeightSender, send_spec_weights
+from arctic_inference.server.weight_sync.adapters import convert_weights
+from arctic_inference.server.weight_sync.adapters import plan_sync
+from arctic_inference.server.weight_sync.receiver import TextOnlyWeightSyncExtension
 from arctic_inference.server.weight_sync.receiver import WeightSyncExtension
 from arctic_inference.server.weight_sync.schedule import TransferSchedule, TransferGroup
 from arctic_inference.server.weight_sync.ipc_engine import (
@@ -34,7 +37,10 @@ from arctic_inference.server.weight_sync.ipc_engine import (
 __all__ = [
     "NCCLEngine",
     "WeightSender",
+    "TextOnlyWeightSyncExtension",
     "WeightSyncExtension",
+    "convert_weights",
+    "plan_sync",
     "TransferSchedule",
     "TransferGroup",
     "WeightInfo",

@@ -45,6 +45,7 @@ packages = [
     "arctic_inference.embedding",
     "arctic_inference.server",
     "arctic_inference.server.weight_sync",
+    "arctic_inference.server.weight_sync.adapters",
     "arctic_inference.csrc",
 ]
 
