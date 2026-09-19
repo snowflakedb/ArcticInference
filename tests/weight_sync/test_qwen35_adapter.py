@@ -9,8 +9,12 @@ import pytest
 import torch
 
 from arctic_inference.server.weight_sync.adapters import convert_weights
+from arctic_inference.server.weight_sync.adapters import dest_shape_for_op
+from arctic_inference.server.weight_sync.adapters import dest_sync_descriptors
 from arctic_inference.server.weight_sync.adapters import expected_hf_names_for_text_sync
 from arctic_inference.server.weight_sync.adapters import pack_qwen35_gdn_layer
+from arctic_inference.server.weight_sync.adapters import plan_sync
+from arctic_inference.server.weight_sync.adapters import SyncOp
 from arctic_inference.server.weight_sync.receiver import TextOnlyWeightSyncExtension
 
 
@@ -88,6 +92,92 @@ def test_text_only_extension_allows_missing_visual():
         ext._validate_weight_sync_names(object(), ["language_model.model.embed_tokens.weight"], context="test")
     finally:
         ws_utils.compute_expected_hf_param_names = orig
+
+
+def test_plan_sync_packs_qkv_bias_to_fused_dest():
+    names = [
+        "model.embed_tokens.weight",
+        "model.layers.0.linear_attn.in_proj_qkv.weight",
+        "model.layers.0.linear_attn.in_proj_z.weight",
+        "model.layers.0.linear_attn.in_proj_b.weight",
+        "model.layers.0.linear_attn.in_proj_a.weight",
+        "model.layers.0.self_attn.q_proj.bias",
+        "model.layers.0.self_attn.k_proj.bias",
+        "model.layers.0.self_attn.v_proj.bias",
+    ]
+    ops = plan_sync(names)
+    dests = [op.dest for op in ops]
+    assert "language_model.model.layers.0.self_attn.qkv_proj.bias" in dests
+    assert "language_model.model.layers.0.self_attn.q_proj.bias" not in dests
+    bias_op = next(op for op in ops if op.dest.endswith("qkv_proj.bias"))
+    assert bias_op.kind == "cat0"
+    assert len(bias_op.sources) == 3
+
+
+def test_plan_sync_keeps_untied_lm_head():
+    names = [
+        "model.embed_tokens.weight",
+        "model.layers.0.linear_attn.in_proj_qkv.weight",
+        "model.layers.0.linear_attn.in_proj_z.weight",
+        "model.layers.0.linear_attn.in_proj_b.weight",
+        "model.layers.0.linear_attn.in_proj_a.weight",
+        "lm_head.weight",
+    ]
+    dests = [op.dest for op in plan_sync(names, tie_word_embeddings=False)]
+    assert "language_model.lm_head.weight" in dests
+    dests_unknown = [op.dest for op in plan_sync(names)]
+    assert "language_model.lm_head.weight" in dests_unknown
+
+
+def test_plan_sync_drops_tied_lm_head():
+    names = [
+        "model.embed_tokens.weight",
+        "model.layers.0.linear_attn.in_proj_qkv.weight",
+        "model.layers.0.linear_attn.in_proj_z.weight",
+        "model.layers.0.linear_attn.in_proj_b.weight",
+        "model.layers.0.linear_attn.in_proj_a.weight",
+        "lm_head.weight",
+    ]
+    dests = [op.dest for op in plan_sync(names, tie_word_embeddings=True)]
+    assert "language_model.lm_head.weight" not in dests
+
+
+def test_dest_shape_for_cat0_and_unsqueeze1():
+    cat = dest_shape_for_op(SyncOp("d", ("a", "b"), "cat0"), [(6144, 2048), (2048, 2048)])
+    assert cat == (8192, 2048)
+    unsqueezed = dest_shape_for_op(SyncOp("d", ("c",), "unsqueeze1"), [(2048, 4)])
+    assert unsqueezed == (2048, 1, 4)
+
+
+def test_dest_sync_descriptors_include_packed_qkv_bias():
+    names = [
+        "model.embed_tokens.weight",
+        "model.layers.0.linear_attn.in_proj_qkv.weight",
+        "model.layers.0.linear_attn.in_proj_z.weight",
+        "model.layers.0.linear_attn.in_proj_b.weight",
+        "model.layers.0.linear_attn.in_proj_a.weight",
+        "model.layers.0.self_attn.q_proj.bias",
+        "model.layers.0.self_attn.k_proj.bias",
+        "model.layers.0.self_attn.v_proj.bias",
+        "model.visual.patch_embed.weight",
+    ]
+    shapes = {
+        "model.embed_tokens.weight": (100, 2048),
+        "model.layers.0.linear_attn.in_proj_qkv.weight": (6144, 2048),
+        "model.layers.0.linear_attn.in_proj_z.weight": (2048, 2048),
+        "model.layers.0.linear_attn.in_proj_b.weight": (16, 2048),
+        "model.layers.0.linear_attn.in_proj_a.weight": (16, 2048),
+        "model.layers.0.self_attn.q_proj.bias": (2048,),
+        "model.layers.0.self_attn.k_proj.bias": (256,),
+        "model.layers.0.self_attn.v_proj.bias": (2048,),
+        "model.visual.patch_embed.weight": (8,),
+    }
+    dtypes = {name: "bfloat16" for name in names}
+    descriptors = dest_sync_descriptors(names, shapes, dtypes)
+    by_name = {item["name"]: item for item in descriptors}
+    assert "visual.patch_embed.weight" not in by_name
+    assert by_name["language_model.model.layers.0.self_attn.qkv_proj.bias"]["shape"] == [4352]
+    assert by_name["language_model.model.layers.0.linear_attn.in_proj_qkvz.weight"]["shape"] == [8192, 2048]
 
 
 def test_text_only_extension_still_rejects_unexpected_lm_name():

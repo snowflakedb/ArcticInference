@@ -94,6 +94,19 @@ class DummyWorker:
     async def reset_prefix_cache(self) -> dict[str, Any]:
         return {"status": "prefix_cache_reset"}
 
+    async def bind_weight_sync_contract(
+        self,
+        descriptors: list[dict[str, Any]],
+        policy: str = "default",
+        model_key: str = "base",
+    ) -> dict[str, Any]:
+        return {
+            "status": "bound",
+            "model_key": model_key,
+            "policy": policy,
+            "count": len(descriptors),
+        }
+
     async def sync_weights(
         self, master_addr: str, master_port: int, rank_offset: int,
         world_size: int, bucket_size: int = 256 * 1024 * 1024,

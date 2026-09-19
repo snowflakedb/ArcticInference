@@ -22,6 +22,7 @@ transiently.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import time
@@ -30,6 +31,15 @@ from typing import Iterable, Optional
 import torch
 
 logger = logging.getLogger(__name__)
+
+
+def _contract_names_hash(names: list[str]) -> str:
+    return hashlib.sha256("\n".join(names).encode("utf-8")).hexdigest()
+
+
+def _is_adapter_param(name: str) -> bool:
+    lowered = name.lower()
+    return "lora_" in lowered or "punica" in lowered
 
 
 class WeightSyncExtension:
@@ -111,6 +121,260 @@ class WeightSyncExtension:
     # Param-name validation (catches sender/receiver model mismatch)
     # ------------------------------------------------------------------
 
+    def _weight_sync_contract(self, model_key: str = "base"):
+        contracts = getattr(self, "_ws_contracts", None)
+        if not contracts:
+            return None
+        return contracts.get(model_key)
+
+    def bind_weight_sync_contract(
+        self,
+        descriptors: list,
+        policy: str = "default",
+        model_key: str = "base",
+    ) -> dict:
+        """Lock trainer dest names at init. Later syncs fill this schedule.
+
+        Contract = trainer dest list after policy. Then assert
+        ``contract ⊆ sampler_writable`` and extras ⊆ policy-exempt
+        (visual/mtp when ``text_only``, LoRA/punica, tied ``lm_head``).
+        Not an intersection: unmatched trainer dests fail here.
+        """
+        if self._is_quantized():
+            logger.info("Weight-sync contract skipped: quantized receiver")
+            return {"status": "skipped", "reason": "quantized"}
+
+        from arctic_inference.server.weight_sync.adapters.qwen35 import (
+            is_optional_frozen_vllm_param,
+        )
+        from arctic_inference.server.weight_sync.utils import _name_is_non_synced
+
+        model = self.model_runner.model
+        contract_names = [
+            str(item["name"])
+            for item in descriptors
+            if not _name_is_non_synced(str(item["name"]))
+        ]
+        writable = self._writable_dest_names(model)
+
+        missing = [name for name in contract_names if name not in writable]
+        extras = set(writable) - set(contract_names)
+        if policy == "text_only":
+            extras = {name for name in extras if not is_optional_frozen_vllm_param(name)}
+        extras = {name for name in extras if not _is_adapter_param(name)}
+        if any(name.endswith("embed_tokens.weight") for name in contract_names):
+            extras = {name for name in extras if not name.endswith("lm_head.weight")}
+
+        if missing or extras:
+            msg = self._contract_mismatch_message(
+                contract_names, missing, extras, context=f"bind:{model_key}",
+            )
+            if os.environ.get("ARCTIC_WEIGHT_SYNC_STRICT_NAMES", "1") == "0":
+                logger.warning("%s\n(non-strict mode: binding anyway)", msg)
+            else:
+                raise RuntimeError(msg)
+
+        names_hash = _contract_names_hash(contract_names)
+        existing = self._weight_sync_contract(model_key)
+        if existing is not None and existing.get("names_hash") == names_hash:
+            return {
+                "status": "bound",
+                "model_key": model_key,
+                "policy": existing.get("policy", policy),
+                "count": existing["count"],
+                "names_hash": names_hash,
+                "reused": True,
+            }
+
+        self._check_contract_shapes(model, descriptors)
+
+        if not hasattr(self, "_ws_contracts") or self._ws_contracts is None:
+            self._ws_contracts = {}
+        self._ws_contracts[model_key] = {
+            "names": contract_names,
+            "name_set": set(contract_names),
+            "names_hash": names_hash,
+            "count": len(contract_names),
+            "policy": policy,
+            "first_ok": False,
+            "descriptors": descriptors,
+        }
+        print(
+            f"[weight-sync contract bound] model={model_key} policy={policy} "
+            f"dest={len(contract_names)} hash={names_hash[:12]}",
+            flush=True,
+        )
+        return {
+            "status": "bound",
+            "model_key": model_key,
+            "policy": policy,
+            "count": len(contract_names),
+            "names_hash": names_hash,
+        }
+
+    def _is_quantized(self) -> bool:
+        cfg = getattr(self, "model_config", None)
+        return bool(getattr(cfg, "quantization", None))
+
+    def _writable_dest_names(self, model) -> set[str]:
+        """Names the loader that will actually run can write.
+
+        TP=1 uses ``_DirectParamWriter`` views (minus fused aliases that
+        also have unpacked shard keys). TP>1 uses ``load_weights`` names.
+        Views are not cached — offload replaces ``param.data``.
+        """
+        from vllm.distributed.parallel_state import (
+            get_tensor_model_parallel_world_size,
+        )
+        from arctic_inference.server.weight_sync.utils import (
+            _DirectParamWriter,
+            compute_expected_hf_param_names,
+        )
+
+        tp = get_tensor_model_parallel_world_size()
+        if tp != 1:
+            return compute_expected_hf_param_names(model)
+
+        writer = _DirectParamWriter(model, self.device)
+        keys = set(writer.all_keys())
+        param_names = {name for name, _ in model.named_parameters()}
+        for name in param_names:
+            if name.endswith(".qkv_proj.weight"):
+                prefix = name[: -len("qkv_proj.weight")]
+                shards = (
+                    f"{prefix}q_proj.weight",
+                    f"{prefix}k_proj.weight",
+                    f"{prefix}v_proj.weight",
+                )
+                if all(shard in keys for shard in shards):
+                    keys.discard(name)
+            elif name.endswith(".gate_up_proj.weight"):
+                prefix = name[: -len("gate_up_proj.weight")]
+                shards = (f"{prefix}gate_proj.weight", f"{prefix}up_proj.weight")
+                if all(shard in keys for shard in shards):
+                    keys.discard(name)
+        return keys
+
+    def _check_contract_shapes(self, model, descriptors: list) -> None:
+        from vllm.distributed.parallel_state import (
+            get_tensor_model_parallel_world_size,
+        )
+        from arctic_inference.server.weight_sync.utils import _DirectParamWriter
+
+        if get_tensor_model_parallel_world_size() != 1:
+            return
+        writer = _DirectParamWriter(model, self.device)
+        mismatches: list[str] = []
+        for item in descriptors:
+            name = item["name"]
+            dest_shape = tuple(int(x) for x in item["shape"])
+            view = writer.get_view(name)
+            if view is None:
+                continue
+            dest_numel = 1
+            for dim in dest_shape:
+                dest_numel *= dim
+            if view.numel() != dest_numel:
+                continue
+            if tuple(view.shape) != dest_shape:
+                mismatches.append(
+                    f"{name}: dest={dest_shape} view={tuple(view.shape)}"
+                )
+        if mismatches:
+            msg = "Weight-sync contract shape mismatch:\n  " + "\n  ".join(
+                mismatches[:10]
+            )
+            if os.environ.get("ARCTIC_WEIGHT_SYNC_STRICT_NAMES", "1") == "0":
+                logger.warning("%s", msg)
+                return
+            raise RuntimeError(msg)
+
+    @staticmethod
+    def _contract_mismatch_message(
+        contract_names: list[str],
+        missing: list[str],
+        extras: set[str],
+        *,
+        context: str = "",
+    ) -> str:
+        ctx = f" [{context}]" if context else ""
+        parts = [f"Weight-sync contract mismatch{ctx}:"]
+        if missing:
+            sample = sorted(missing)[:10]
+            tail = "" if len(missing) <= 10 else f" ... (+{len(missing) - 10} more)"
+            parts.append(
+                f"  Trainer dest {len(missing)} name(s) are not sampler-writable: "
+                f"{', '.join(sample)}{tail}"
+            )
+        if extras:
+            sample = sorted(extras)[:10]
+            tail = "" if len(extras) <= 10 else f" ... (+{len(extras) - 10} more)"
+            parts.append(
+                f"  Sampler has {len(extras)} extra writable dest(s): "
+                f"{', '.join(sample)}{tail}"
+            )
+        parts.append(f"  (contract_count={len(contract_names)})")
+        return "\n".join(parts)
+
+    def _validate_against_contract(
+        self,
+        sender_names: Iterable[str],
+        contract: dict,
+        *,
+        context: str = "",
+    ) -> None:
+        from arctic_inference.server.weight_sync.utils import _name_is_non_synced
+
+        names = [n for n in sender_names if not _name_is_non_synced(n)]
+        if not contract.get("first_ok"):
+            if names != contract["names"]:
+                sender_set = set(names)
+                expected_set = contract["name_set"]
+                unexpected = sorted(sender_set - expected_set)
+                missing = sorted(expected_set - sender_set)
+                ctx = f" [{context}]" if context else ""
+                parts = [f"Weight-sync first payload != init contract{ctx}:"]
+                if unexpected:
+                    sample = unexpected[:10]
+                    tail = "" if len(unexpected) <= 10 else f" ... (+{len(unexpected) - 10} more)"
+                    parts.append(
+                        f"  Sender shipped {len(unexpected)} extra: "
+                        f"{', '.join(sample)}{tail}"
+                    )
+                if missing:
+                    sample = missing[:10]
+                    tail = "" if len(missing) <= 10 else f" ... (+{len(missing) - 10} more)"
+                    parts.append(
+                        f"  Contract dest {len(missing)} missing from payload: "
+                        f"{', '.join(sample)}{tail}"
+                    )
+                msg = "\n".join(parts)
+                if os.environ.get("ARCTIC_WEIGHT_SYNC_STRICT_NAMES", "1") == "0":
+                    logger.warning("%s\n(non-strict mode: continuing)", msg)
+                    contract["first_ok"] = True
+                    return
+                raise RuntimeError(msg)
+            contract["first_ok"] = True
+            print(
+                f"[weight-sync contract] first payload ok context={context or '?'} "
+                f"sender={len(names)}",
+                flush=True,
+            )
+            return
+
+        got_hash = _contract_names_hash(names)
+        if len(names) != contract["count"] or got_hash != contract["names_hash"]:
+            msg = (
+                f"Weight-sync payload drifted from init contract "
+                f"[{context or '?'}]: got {len(names)} names "
+                f"hash={got_hash[:12]} expected {contract['count']} "
+                f"hash={contract['names_hash'][:12]}"
+            )
+            if os.environ.get("ARCTIC_WEIGHT_SYNC_STRICT_NAMES", "1") == "0":
+                logger.warning("%s\n(non-strict mode: continuing)", msg)
+                return
+            raise RuntimeError(msg)
+
     def _validate_weight_sync_names(
         self,
         model,
@@ -121,16 +385,21 @@ class WeightSyncExtension:
         """Raise if the sender's param names do not match the model's expected
         HF-style param name set.
 
-        Catches the common failure mode where the training side ships a
-        different architecture than the inference side (e.g. Qwen3 vs.
-        Qwen2.5), or where weights are silently dropped because of a name
-        mismatch.  Names that are legitimately unsynced (rotary inv_freq
-        buffers, FP8/GPTQ quantization metadata) are filtered on both
-        sides before comparison.
+        When an init-time contract is bound, the first payload is compared
+        in order to that list; later payloads only check count + name hash.
+        Without a contract, this falls back to the historical expected-name
+        set-diff.
 
         Set ``ARCTIC_WEIGHT_SYNC_STRICT_NAMES=0`` to demote the mismatch
         from an error to a warning (default: strict).
         """
+        contract = self._weight_sync_contract("base")
+        if contract is not None:
+            self._validate_against_contract(
+                sender_names, contract, context=context,
+            )
+            return
+
         from arctic_inference.server.weight_sync.utils import (
             _name_is_non_synced,
             compute_expected_hf_param_names,

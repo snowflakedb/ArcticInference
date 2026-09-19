@@ -84,6 +84,7 @@ class ReplicaPool:
         self._updating_workers: set[int] = set()
         self._cached_weights_info: list[dict] | None = None
         self._cached_spec_weights_info: list[dict] | None = None
+        self._weight_sync_contract: dict[str, Any] | None = None
         self._sleeping = False
 
     @property
@@ -420,6 +421,7 @@ class ReplicaPool:
                 worker = self._worker_cls.options(**opts).remote()
                 try:
                     await worker.initialize.remote(engine_kwargs, extra_env)
+                    await self._rebind_weight_sync_contract(worker)
                 except asyncio.CancelledError:
                     try:
                         ray.kill(worker)
@@ -605,6 +607,43 @@ class ReplicaPool:
     # ------------------------------------------------------------------
     # Weight sync
     # ------------------------------------------------------------------
+
+    async def bind_weight_sync_contract(
+        self,
+        descriptors: list[dict[str, Any]],
+        policy: str = "default",
+        model_key: str = "base",
+        model_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Bind the trainer dest contract on every replica, and remember it
+        so a restarted worker can re-bind without a new HTTP call.
+        """
+        self._check_model_id(model_id)
+        if not self._workers:
+            raise RuntimeError("ReplicaPool not initialized")
+        self._weight_sync_contract = {
+            "descriptors": descriptors,
+            "policy": policy,
+            "model_key": model_key,
+        }
+        results = await asyncio.gather(*[
+            worker.bind_weight_sync_contract.remote(descriptors, policy, model_key)
+            for worker in self._workers
+        ])
+        return results[0] if results else {}
+
+    def clear_weight_sync_contract(self) -> None:
+        self._weight_sync_contract = None
+
+    async def _rebind_weight_sync_contract(self, worker) -> None:
+        contract = self._weight_sync_contract
+        if contract is None:
+            return
+        await worker.bind_weight_sync_contract.remote(
+            contract["descriptors"],
+            contract["policy"],
+            contract["model_key"],
+        )
 
     async def compute_weight_norm(self, model_id: str | None = None) -> dict[str, Any]:
         """Global L2 norm of the live model weights on replica 0.
@@ -972,6 +1011,7 @@ class ReplicaPool:
         engine_kwargs = self._config.to_engine_kwargs()
         extra_env = self._config.extra_env or None
         await new_worker.initialize.remote(engine_kwargs, extra_env)
+        await self._rebind_weight_sync_contract(new_worker)
 
         self._workers[idx] = new_worker
 

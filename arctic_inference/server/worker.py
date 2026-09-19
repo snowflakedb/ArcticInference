@@ -171,7 +171,7 @@ class InferenceWorker:
 
         engine_kwargs.setdefault(
             "worker_extension_cls",
-            "arctic_inference.server.weight_sync.TextOnlyWeightSyncExtension",
+            "arctic_inference.server.weight_sync.WeightSyncExtension",
         )
 
         engine_args = _EngineArgs(**engine_kwargs)
@@ -509,6 +509,19 @@ class InferenceWorker:
     async def close_weight_sync(self) -> dict[str, Any]:
         """Destroy persistent NCCLEngine on all TP workers."""
         results = await self.llm.collective_rpc("close_weight_sync")
+        return results[0] if results else {}
+
+    async def bind_weight_sync_contract(
+        self,
+        descriptors: list[dict[str, Any]],
+        policy: str = "default",
+        model_key: str = "base",
+    ) -> dict[str, Any]:
+        """Lock trainer dest names on every TP worker before the first payload."""
+        results = await self.llm.collective_rpc(
+            "bind_weight_sync_contract",
+            args=(descriptors, policy, model_key),
+        )
         return results[0] if results else {}
 
     async def compute_weight_norm(self) -> dict[str, Any]:
