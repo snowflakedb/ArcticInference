@@ -266,6 +266,7 @@ class NCCLEngine:
 
         loaded = 0
         orphan = 0
+        names: list[str] = []
 
         while True:
             self._recv_buf(self._meta_bufs[0], nccl_s)
@@ -277,6 +278,7 @@ class NCCLEngine:
 
             for entry in metadata["tensors"]:
                 name = entry["name"]
+                names.append(name)
                 nbytes = entry["nbytes"]
                 sender_shape = torch.Size(entry["shape"])
                 sender_dtype = getattr(
@@ -342,7 +344,7 @@ class NCCLEngine:
         logger.info("receive_weights_direct: %d loaded, %d orphan, %.2fs",
                      loaded, orphan, elapsed)
         return {"status": "done", "params_loaded": loaded,
-                "orphan": orphan, "elapsed": elapsed}
+                "orphan": orphan, "elapsed": elapsed, "names": names}
 
     # ------------------------------------------------------------------
     # Low-level helpers

@@ -22,6 +22,7 @@ transiently.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import time
@@ -30,6 +31,19 @@ from typing import Iterable, Optional
 import torch
 
 logger = logging.getLogger(__name__)
+
+
+def _contract_names_hash(names: list[str]) -> str:
+    return hashlib.sha256("\n".join(names).encode("utf-8")).hexdigest()
+
+
+def _is_adapter_param(name: str) -> bool:
+    lowered = name.lower()
+    return "lora_" in lowered or "punica" in lowered
+
+
+def _normalize_dtype_name(value) -> str:
+    return str(value).replace("torch.", "")
 
 
 class WeightSyncExtension:
@@ -111,6 +125,338 @@ class WeightSyncExtension:
     # Param-name validation (catches sender/receiver model mismatch)
     # ------------------------------------------------------------------
 
+    def _weight_sync_contract(self, model_key: str = "base"):
+        contracts = getattr(self, "_ws_contracts", None)
+        if not contracts:
+            return None
+        return contracts.get(model_key)
+
+    def bind_weight_sync_contract(
+        self,
+        descriptors: list,
+        policy: str = "default",
+        model_key: str = "base",
+        tie_word_embeddings: bool | None = None,
+    ) -> dict:
+        """Lock trainer dest names at init. Later syncs fill this schedule.
+
+        Contract = trainer dest list after policy. Then assert
+        ``contract ⊆ sampler_writable`` and extras ⊆ policy-exempt
+        (visual/mtp when ``text_only``, LoRA/punica, tied ``lm_head``).
+        Not an intersection: unmatched trainer dests fail here.
+
+        Quantized receivers skip the shape check and do not store a name
+        contract (views do not match BF16 dests). The *policy* is still
+        remembered so the first payload keeps the text-only filter.
+
+        A name or shape mismatch never stores a contract, including
+        ``ARCTIC_WEIGHT_SYNC_STRICT_NAMES=0``.
+        """
+        if self._is_quantized():
+            self._store_weight_sync_policy(model_key, policy)
+            logger.info(
+                "Weight-sync contract skipped: quantized receiver (policy=%s)",
+                policy,
+            )
+            return {
+                "status": "skipped",
+                "reason": "quantized",
+                "policy": policy,
+            }
+
+        from arctic_inference.server.weight_sync.adapters.qwen35 import (
+            is_optional_frozen_vllm_param,
+        )
+        from arctic_inference.server.weight_sync.utils import _name_is_non_synced
+
+        model = self.model_runner.model
+        contract_names = [
+            str(item["name"])
+            for item in descriptors
+            if not _name_is_non_synced(str(item["name"]))
+        ]
+        writable = self._writable_dest_names(model)
+
+        missing = [name for name in contract_names if name not in writable]
+        extras = set(writable) - set(contract_names)
+        if policy == "text_only":
+            extras = {name for name in extras if not is_optional_frozen_vllm_param(name)}
+        extras = {name for name in extras if not _is_adapter_param(name)}
+        if tie_word_embeddings:
+            extras = {name for name in extras if not name.endswith("lm_head.weight")}
+
+        if missing or extras:
+            msg = self._contract_mismatch_message(
+                contract_names, missing, extras, context=f"bind:{model_key}",
+            )
+            if os.environ.get("ARCTIC_WEIGHT_SYNC_STRICT_NAMES", "1") == "0":
+                logger.warning("%s\n(non-strict mode: not binding)", msg)
+                return {
+                    "status": "mismatch",
+                    "bound": False,
+                    "model_key": model_key,
+                    "policy": policy,
+                    "count": len(contract_names),
+                }
+            raise RuntimeError(msg)
+
+        names_hash = _contract_names_hash(contract_names)
+        existing = self._weight_sync_contract(model_key)
+        if existing is not None and existing.get("names_hash") == names_hash:
+            return {
+                "status": "bound",
+                "model_key": model_key,
+                "policy": existing.get("policy", policy),
+                "count": existing["count"],
+                "names_hash": names_hash,
+                "reused": True,
+            }
+
+        if not self._check_contract_shapes(model, descriptors):
+            return {
+                "status": "mismatch",
+                "bound": False,
+                "model_key": model_key,
+                "policy": policy,
+                "count": len(contract_names),
+            }
+
+        if not hasattr(self, "_ws_contracts") or self._ws_contracts is None:
+            self._ws_contracts = {}
+        self._ws_contracts[model_key] = {
+            "names": contract_names,
+            "name_set": set(contract_names),
+            "names_hash": names_hash,
+            "count": len(contract_names),
+            "policy": policy,
+            "first_ok": False,
+            "descriptors": descriptors,
+            "tie_word_embeddings": tie_word_embeddings,
+        }
+        print(
+            f"[weight-sync contract bound] model={model_key} policy={policy} "
+            f"dest={len(contract_names)} hash={names_hash[:12]}",
+            flush=True,
+        )
+        return {
+            "status": "bound",
+            "model_key": model_key,
+            "policy": policy,
+            "count": len(contract_names),
+            "names_hash": names_hash,
+        }
+
+    def clear_weight_sync_contract(self, model_key: str | None = None) -> dict:
+        """Drop a bound contract (and any remembered skip policy)."""
+        if model_key is None:
+            self._ws_contracts = {}
+            self._ws_policies = {}
+        else:
+            contracts = getattr(self, "_ws_contracts", None)
+            if contracts:
+                contracts.pop(model_key, None)
+            policies = getattr(self, "_ws_policies", None)
+            if policies:
+                policies.pop(model_key, None)
+        return {"status": "cleared"}
+
+    def _store_weight_sync_policy(self, model_key: str, policy: str) -> None:
+        if not hasattr(self, "_ws_policies") or self._ws_policies is None:
+            self._ws_policies = {}
+        self._ws_policies[model_key] = policy
+
+    def _weight_sync_policy(self, model_key: str = "base") -> str:
+        contract = self._weight_sync_contract(model_key)
+        if contract is not None:
+            return contract.get("policy", "default")
+        policies = getattr(self, "_ws_policies", None) or {}
+        return policies.get(model_key, "default")
+
+    def _is_quantized(self) -> bool:
+        cfg = getattr(self, "model_config", None)
+        return bool(getattr(cfg, "quantization", None))
+
+    def _writable_dest_names(self, model) -> set[str]:
+        """Names the loader that will actually run can write.
+
+        TP=1 uses ``_DirectParamWriter`` views (minus fused aliases that
+        also have unpacked shard keys). TP>1 uses ``load_weights`` names.
+        Views are not cached — offload replaces ``param.data``.
+        """
+        from vllm.distributed.parallel_state import (
+            get_tensor_model_parallel_world_size,
+        )
+        from arctic_inference.server.weight_sync.utils import (
+            _DirectParamWriter,
+            compute_expected_hf_param_names,
+        )
+
+        tp = get_tensor_model_parallel_world_size()
+        if tp != 1:
+            return compute_expected_hf_param_names(model)
+
+        writer = _DirectParamWriter(model, self.device)
+        keys = set(writer.all_keys())
+        param_names = {name for name, _ in model.named_parameters()}
+        for name in param_names:
+            if name.endswith(".qkv_proj.weight"):
+                prefix = name[: -len("qkv_proj.weight")]
+                shards = (
+                    f"{prefix}q_proj.weight",
+                    f"{prefix}k_proj.weight",
+                    f"{prefix}v_proj.weight",
+                )
+                if all(shard in keys for shard in shards):
+                    keys.discard(name)
+            elif name.endswith(".gate_up_proj.weight"):
+                prefix = name[: -len("gate_up_proj.weight")]
+                shards = (f"{prefix}gate_proj.weight", f"{prefix}up_proj.weight")
+                if all(shard in keys for shard in shards):
+                    keys.discard(name)
+        return keys
+
+    def _check_contract_shapes(self, model, descriptors: list) -> bool:
+        """Return True when dest shapes/dtypes match writable views.
+
+        A 1-element view is treated as an offload placeholder and skipped.
+        Missing views, real numel mismatches, reshape-only mismatches, and
+        dtype mismatches are reported. Non-strict mode logs and returns
+        False so the caller does not store the contract.
+        """
+        from vllm.distributed.parallel_state import (
+            get_tensor_model_parallel_world_size,
+        )
+        from arctic_inference.server.weight_sync.utils import _DirectParamWriter
+
+        if get_tensor_model_parallel_world_size() != 1:
+            return True
+        writer = _DirectParamWriter(model, self.device)
+        mismatches: list[str] = []
+        for item in descriptors:
+            name = item["name"]
+            dest_shape = tuple(int(x) for x in item["shape"])
+            view = writer.get_view(name)
+            if view is None:
+                mismatches.append(f"{name}: no sampler view")
+                continue
+            dest_numel = 1
+            for dim in dest_shape:
+                dest_numel *= dim
+            if view.numel() != dest_numel:
+                if view.numel() == 1:
+                    continue
+                mismatches.append(
+                    f"{name}: dest_numel={dest_numel} view_numel={view.numel()} "
+                    f"dest={dest_shape} view={tuple(view.shape)}"
+                )
+                continue
+            if tuple(view.shape) != dest_shape:
+                mismatches.append(
+                    f"{name}: dest={dest_shape} view={tuple(view.shape)}"
+                )
+            dest_dtype = item.get("dtype")
+            if dest_dtype and _normalize_dtype_name(dest_dtype) != _normalize_dtype_name(
+                view.dtype
+            ):
+                mismatches.append(
+                    f"{name}: dest_dtype={dest_dtype} view={view.dtype}"
+                )
+        if mismatches:
+            msg = "Weight-sync contract shape mismatch:\n  " + "\n  ".join(
+                mismatches[:10]
+            )
+            if os.environ.get("ARCTIC_WEIGHT_SYNC_STRICT_NAMES", "1") == "0":
+                logger.warning("%s", msg)
+                return False
+            raise RuntimeError(msg)
+        return True
+
+    @staticmethod
+    def _contract_mismatch_message(
+        contract_names: list[str],
+        missing: list[str],
+        extras: set[str],
+        *,
+        context: str = "",
+    ) -> str:
+        ctx = f" [{context}]" if context else ""
+        parts = [f"Weight-sync contract mismatch{ctx}:"]
+        if missing:
+            sample = sorted(missing)[:10]
+            tail = "" if len(missing) <= 10 else f" ... (+{len(missing) - 10} more)"
+            parts.append(
+                f"  Trainer dest {len(missing)} name(s) are not sampler-writable: "
+                f"{', '.join(sample)}{tail}"
+            )
+        if extras:
+            sample = sorted(extras)[:10]
+            tail = "" if len(extras) <= 10 else f" ... (+{len(extras) - 10} more)"
+            parts.append(
+                f"  Sampler has {len(extras)} extra writable dest(s): "
+                f"{', '.join(sample)}{tail}"
+            )
+        parts.append(f"  (contract_count={len(contract_names)})")
+        return "\n".join(parts)
+
+    def _validate_against_contract(
+        self,
+        sender_names: Iterable[str],
+        contract: dict,
+        *,
+        context: str = "",
+    ) -> None:
+        from arctic_inference.server.weight_sync.utils import _name_is_non_synced
+
+        names = [n for n in sender_names if not _name_is_non_synced(n)]
+        if not contract.get("first_ok"):
+            if names != contract["names"]:
+                sender_set = set(names)
+                expected_set = contract["name_set"]
+                unexpected = sorted(sender_set - expected_set)
+                missing = sorted(expected_set - sender_set)
+                ctx = f" [{context}]" if context else ""
+                parts = [f"Weight-sync first payload != init contract{ctx}:"]
+                if unexpected:
+                    sample = unexpected[:10]
+                    tail = "" if len(unexpected) <= 10 else f" ... (+{len(unexpected) - 10} more)"
+                    parts.append(
+                        f"  Sender shipped {len(unexpected)} extra: "
+                        f"{', '.join(sample)}{tail}"
+                    )
+                if missing:
+                    sample = missing[:10]
+                    tail = "" if len(missing) <= 10 else f" ... (+{len(missing) - 10} more)"
+                    parts.append(
+                        f"  Contract dest {len(missing)} missing from payload: "
+                        f"{', '.join(sample)}{tail}"
+                    )
+                msg = "\n".join(parts)
+                if os.environ.get("ARCTIC_WEIGHT_SYNC_STRICT_NAMES", "1") == "0":
+                    logger.warning("%s\n(non-strict mode: continuing)", msg)
+                    contract["first_ok"] = True
+                    return
+                raise RuntimeError(msg)
+            contract["first_ok"] = True
+            print(
+                f"[weight-sync contract] first payload ok context={context or '?'} "
+                f"sender={len(names)}",
+                flush=True,
+            )
+            return
+
+        got_hash = _contract_names_hash(names)
+        if len(names) != contract["count"] or got_hash != contract["names_hash"]:
+            msg = (
+                f"Weight-sync payload drifted from init contract "
+                f"[{context or '?'}]: got {len(names)} names "
+                f"hash={got_hash[:12]} expected {contract['count']} "
+                f"hash={contract['names_hash'][:12]}"
+            )
+            if os.environ.get("ARCTIC_WEIGHT_SYNC_STRICT_NAMES", "1") == "0":
+                logger.warning("%s\n(non-strict mode: continuing)", msg)
+                return
+            raise RuntimeError(msg)
+
     def _validate_weight_sync_names(
         self,
         model,
@@ -121,16 +467,21 @@ class WeightSyncExtension:
         """Raise if the sender's param names do not match the model's expected
         HF-style param name set.
 
-        Catches the common failure mode where the training side ships a
-        different architecture than the inference side (e.g. Qwen3 vs.
-        Qwen2.5), or where weights are silently dropped because of a name
-        mismatch.  Names that are legitimately unsynced (rotary inv_freq
-        buffers, FP8/GPTQ quantization metadata) are filtered on both
-        sides before comparison.
+        When an init-time contract is bound, the first payload is compared
+        in order to that list; later payloads only check count + name hash.
+        Without a contract, this falls back to the historical expected-name
+        set-diff.
 
         Set ``ARCTIC_WEIGHT_SYNC_STRICT_NAMES=0`` to demote the mismatch
         from an error to a warning (default: strict).
         """
+        contract = self._weight_sync_contract("base")
+        if contract is not None:
+            self._validate_against_contract(
+                sender_names, contract, context=context,
+            )
+            return
+
         from arctic_inference.server.weight_sync.utils import (
             _name_is_non_synced,
             compute_expected_hf_param_names,
@@ -146,6 +497,13 @@ class WeightSyncExtension:
                 "param names for the receiver model (%s).", exc,
             )
             return
+
+        if self._weight_sync_policy() == "text_only":
+            from arctic_inference.server.weight_sync.adapters.qwen35 import (
+                expected_hf_names_for_text_sync,
+            )
+
+            expected_set = expected_hf_names_for_text_sync(expected_set, sender_set)
 
         unexpected = sender_set - expected_set
         missing = expected_set - sender_set
@@ -237,10 +595,8 @@ class WeightSyncExtension:
             path = "fp8"
             loaded = self._load_fp8(model, engine, received_names)
         elif tp == 1 and direct_mode:
-            # Zero-copy path writes into pre-computed parameter views keyed by
-            # the model's own param names, so it is inherently name-validated.
             path = "direct_zero_copy"
-            loaded = self._load_direct_zero_copy(model, engine)
+            loaded = self._load_direct_zero_copy(model, engine, received_names)
         elif tp == 1:
             path = "direct"
             loaded = self._load_direct(model, engine, received_names)
@@ -248,7 +604,7 @@ class WeightSyncExtension:
             path = "batched"
             loaded = self._load_batched(model, engine, received_names)
 
-        if received_names:
+        if received_names or self._weight_sync_contract() is not None:
             self._validate_weight_sync_names(
                 model, received_names, context=f"nccl:{path}",
             )
@@ -277,12 +633,15 @@ class WeightSyncExtension:
             )
         return loaded
 
-    def _load_direct_zero_copy(self, model, engine) -> int:
+    def _load_direct_zero_copy(
+        self, model, engine, received_names: Optional[list] = None,
+    ) -> int:
         """True zero-copy: receive each weight directly into its parameter view.
 
         Uses ``engine.receive_weights_direct()`` so that NCCL writes bytes
         straight into the model's parameter storage — no intermediate buffers
-        or copies.  Requires BF16, TP=1.
+        or copies.  Requires BF16, TP=1. Collected sender names still go
+        through the init-time contract / name check.
         """
         from arctic_inference.server.weight_sync.utils import _DirectParamWriter
 
@@ -294,6 +653,8 @@ class WeightSyncExtension:
                 param_views[name] = v.contiguous()
 
         result = engine.receive_weights_direct(param_views)
+        if received_names is not None:
+            received_names.extend(result.get("names") or [])
         return result.get("params_loaded", 0)
 
     def _load_direct(self, model, engine, received_names: Optional[list] = None) -> int:

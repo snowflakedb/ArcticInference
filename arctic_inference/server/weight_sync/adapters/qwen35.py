@@ -127,8 +127,32 @@ def _gdn_layer_prefix(qkv_name: str) -> str:
     return qkv_name[: -len(_QKV_SUFFIX)]
 
 
-def plan_qwen35_vllm_sync(names: Sequence[str]) -> list[SyncOp] | None:
-    """Build copy/pack ops from HF names. ``None`` means leave the list unchanged."""
+def dest_shape_for_op(op: SyncOp, src_shapes: Sequence[Sequence[int]]) -> tuple[int, ...]:
+    """Logical dest shape after applying *op* to *src_shapes* (full tensors, not ZeRO shards)."""
+    if not src_shapes:
+        raise ValueError(f"SyncOp {op.dest} has no sources")
+    if op.kind == "cat0":
+        head = sum(int(shape[0]) for shape in src_shapes)
+        tail = tuple(int(x) for x in src_shapes[0][1:])
+        return (head, *tail)
+    if op.kind == "unsqueeze1":
+        shape = tuple(int(x) for x in src_shapes[0])
+        if len(shape) == 2:
+            return (shape[0], 1, shape[1])
+        return shape
+    return tuple(int(x) for x in src_shapes[0])
+
+
+def plan_qwen35_vllm_sync(
+    names: Sequence[str],
+    *,
+    tie_word_embeddings: bool | None = None,
+) -> list[SyncOp] | None:
+    """Build copy/pack ops from HF names. ``None`` means leave the list unchanged.
+
+    ``lm_head.weight`` is dropped only when ``tie_word_embeddings`` is True.
+    Unknown / False keeps the head so an untied sampler does not go stale.
+    """
     if not has_unpacked_qwen35_gdn(names):
         return None
 
@@ -155,11 +179,23 @@ def plan_qwen35_vllm_sync(names: Sequence[str]) -> list[SyncOp] | None:
                 ops.append(SyncOp(dest, (b_key, a_key), "cat0"))
             consumed.update((b_key, a_key))
 
-    has_embed = any(name.endswith("embed_tokens.weight") for name in names)
+    for name in names:
+        if not name.endswith(".self_attn.q_proj.bias"):
+            continue
+        prefix = name[: -len("q_proj.bias")]
+        q_key = f"{prefix}q_proj.bias"
+        k_key = f"{prefix}k_proj.bias"
+        v_key = f"{prefix}v_proj.bias"
+        if q_key in name_set and k_key in name_set and v_key in name_set:
+            dest = to_vllm_param_name(f"{prefix}qkv_proj.bias")
+            if dest is not None:
+                ops.append(SyncOp(dest, (q_key, k_key, v_key), "cat0"))
+            consumed.update((q_key, k_key, v_key))
+
     for name in names:
         if name in consumed or is_optional_frozen_vllm_param(name):
             continue
-        if has_embed and name.endswith("lm_head.weight"):
+        if tie_word_embeddings and name.endswith("lm_head.weight"):
             continue
         dest = to_vllm_param_name(name)
         if dest is None:
@@ -180,15 +216,60 @@ def apply_qwen35_sync_op(op: SyncOp, tensors: Sequence[torch.Tensor]) -> torch.T
 
 def to_vllm_sync_weights(
     weights: Sequence[tuple[str, torch.Tensor]],
+    *,
+    tie_word_embeddings: bool | None = None,
 ) -> list[tuple[str, torch.Tensor]]:
     """Convert HF named weights to the vLLM storage layout, or return ``weights`` unchanged."""
     names = [name for name, _ in weights]
-    ops = plan_qwen35_vllm_sync(names)
+    ops = plan_qwen35_vllm_sync(names, tie_word_embeddings=tie_word_embeddings)
     if ops is None:
-        return list(weights)
+        return [
+            (name, tensor)
+            for name, tensor in weights
+            if not is_optional_frozen_vllm_param(name)
+        ]
     by_name = dict(weights)
     out: list[tuple[str, torch.Tensor]] = []
     for op in ops:
         tensors = [by_name[src] for src in op.sources]
         out.append((op.dest, apply_qwen35_sync_op(op, tensors)))
     return out
+
+
+def dest_sync_descriptors(
+    names: Sequence[str],
+    shapes: dict[str, Sequence[int]],
+    dtypes: dict[str, str],
+    *,
+    tie_word_embeddings: bool | None = None,
+) -> list[dict]:
+    """Trainer dest descriptors (name, logical shape, dtype) after ``plan_sync``."""
+    ops = plan_qwen35_vllm_sync(names, tie_word_embeddings=tie_word_embeddings)
+    if ops is None:
+        descriptors: list[dict] = []
+        for name in names:
+            if is_optional_frozen_vllm_param(name):
+                continue
+            if name not in shapes:
+                raise KeyError(f"weight-sync dest {name!r} missing from shapes")
+            if name not in dtypes:
+                raise KeyError(f"weight-sync dest {name!r} missing from dtypes")
+            descriptors.append(
+                {
+                    "name": name,
+                    "shape": [int(x) for x in shapes[name]],
+                    "dtype": dtypes[name],
+                }
+            )
+        return descriptors
+    descriptors = []
+    for op in ops:
+        src_shapes = [tuple(int(x) for x in shapes[src]) for src in op.sources]
+        descriptors.append(
+            {
+                "name": op.dest,
+                "shape": list(dest_shape_for_op(op, src_shapes)),
+                "dtype": dtypes[op.sources[0]],
+            }
+        )
+    return descriptors

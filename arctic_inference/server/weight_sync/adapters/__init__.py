@@ -27,15 +27,21 @@ import torch
 
 from arctic_inference.server.weight_sync.adapters.qwen35 import SyncOp
 from arctic_inference.server.weight_sync.adapters.qwen35 import apply_qwen35_sync_op
+from arctic_inference.server.weight_sync.adapters.qwen35 import dest_shape_for_op
+from arctic_inference.server.weight_sync.adapters.qwen35 import dest_sync_descriptors
 from arctic_inference.server.weight_sync.adapters.qwen35 import expected_hf_names_for_text_sync
 from arctic_inference.server.weight_sync.adapters.qwen35 import pack_qwen35_gdn_layer
 from arctic_inference.server.weight_sync.adapters.qwen35 import plan_qwen35_vllm_sync
 from arctic_inference.server.weight_sync.adapters.qwen35 import to_vllm_sync_weights
 
 
-def plan_sync(names: Sequence[str]) -> list[SyncOp] | None:
+def plan_sync(
+    names: Sequence[str],
+    *,
+    tie_word_embeddings: bool | None = None,
+) -> list[SyncOp] | None:
     """Return conversion ops, or ``None`` when names should pass through."""
-    return plan_qwen35_vllm_sync(names)
+    return plan_qwen35_vllm_sync(names, tie_word_embeddings=tie_word_embeddings)
 
 
 def apply_sync_op(op: SyncOp, tensors: Sequence[torch.Tensor]) -> torch.Tensor:
@@ -44,15 +50,19 @@ def apply_sync_op(op: SyncOp, tensors: Sequence[torch.Tensor]) -> torch.Tensor:
 
 def convert_weights(
     weights: Sequence[tuple[str, torch.Tensor]],
+    *,
+    tie_word_embeddings: bool | None = None,
 ) -> list[tuple[str, torch.Tensor]]:
     """Convert trainer named weights to the vLLM storage layout when needed."""
-    return to_vllm_sync_weights(weights)
+    return to_vllm_sync_weights(weights, tie_word_embeddings=tie_word_embeddings)
 
 
 __all__ = [
     "SyncOp",
     "apply_sync_op",
     "convert_weights",
+    "dest_shape_for_op",
+    "dest_sync_descriptors",
     "expected_hf_names_for_text_sync",
     "pack_qwen35_gdn_layer",
     "plan_sync",

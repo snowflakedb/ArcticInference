@@ -262,8 +262,10 @@ DP/FSDP fan out up to `min(training_gpus, R*TP)` senders; ZeRO-3 uses
 `WeightSyncExtension` hosted in each `Worker`
 (`worker_extension_cls="arctic_inference.server.weight_sync.WeightSyncExtension"`).
 HTTP: `GET /weights_info` (manifest), `POST /sync_weights` (open group, receive,
-optional hot-swap), `POST /close_weight_sync`. Tests:
-`tests/weight_sync/{test_direct_param_writer.py, test_parallel_weight_sync.py, benchmark_weight_sync.py}`.
+optional hot-swap), `POST /close_weight_sync`. Ray/OPD binds an init-time
+trainer dest contract (`bind_weight_sync_contract`) before the first payload;
+later syncs check count + name hash. Tests:
+`tests/weight_sync/{test_direct_param_writer.py, test_parallel_weight_sync.py, test_weight_sync_contract.py, benchmark_weight_sync.py}`.
 
 ## 7. Serving infrastructure
 
