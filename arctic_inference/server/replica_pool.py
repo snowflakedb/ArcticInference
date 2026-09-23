@@ -614,26 +614,46 @@ class ReplicaPool:
         policy: str = "default",
         model_key: str = "base",
         model_id: str | None = None,
+        tie_word_embeddings: bool | None = None,
     ) -> dict[str, Any]:
         """Bind the trainer dest contract on every replica, and remember it
         so a restarted worker can re-bind without a new HTTP call.
+
+        The pool cache is written only after every worker accepts the bind
+        (``bound`` or quantized ``skipped``). A mismatch is not replayed.
         """
         self._check_model_id(model_id)
         if not self._workers:
             raise RuntimeError("ReplicaPool not initialized")
-        self._weight_sync_contract = {
-            "descriptors": descriptors,
-            "policy": policy,
-            "model_key": model_key,
-        }
         results = await asyncio.gather(*[
-            worker.bind_weight_sync_contract.remote(descriptors, policy, model_key)
+            worker.bind_weight_sync_contract.remote(
+                descriptors, policy, model_key, tie_word_embeddings,
+            )
             for worker in self._workers
         ])
+        accepted = all(
+            isinstance(result, dict) and result.get("status") in {"bound", "skipped"}
+            for result in results
+        )
+        if accepted:
+            self._weight_sync_contract = {
+                "descriptors": descriptors,
+                "policy": policy,
+                "model_key": model_key,
+                "tie_word_embeddings": tie_word_embeddings,
+            }
         return results[0] if results else {}
 
     def clear_weight_sync_contract(self) -> None:
         self._weight_sync_contract = None
+        for worker in self._workers:
+            try:
+                worker.clear_weight_sync_contract.remote()
+            except Exception:
+                logger.warning(
+                    "Failed to clear worker weight-sync contract",
+                    exc_info=True,
+                )
 
     async def _rebind_weight_sync_contract(self, worker) -> None:
         contract = self._weight_sync_contract
@@ -643,6 +663,7 @@ class ReplicaPool:
             contract["descriptors"],
             contract["policy"],
             contract["model_key"],
+            contract.get("tie_word_embeddings"),
         )
 
     async def compute_weight_norm(self, model_id: str | None = None) -> dict[str, Any]:
@@ -993,7 +1014,10 @@ class ReplicaPool:
                     healthy = False
                 if not healthy:
                     logger.warning(f"Worker {i} unhealthy, attempting restart")
-                    await self._restart_worker(i)
+                    try:
+                        await self._restart_worker(i)
+                    except Exception:
+                        logger.exception("Worker %s restart failed", i)
 
     async def _restart_worker(self, idx: int) -> None:
         old = self._workers[idx]
@@ -1010,8 +1034,16 @@ class ReplicaPool:
 
         engine_kwargs = self._config.to_engine_kwargs()
         extra_env = self._config.extra_env or None
-        await new_worker.initialize.remote(engine_kwargs, extra_env)
-        await self._rebind_weight_sync_contract(new_worker)
+        try:
+            await new_worker.initialize.remote(engine_kwargs, extra_env)
+            await self._rebind_weight_sync_contract(new_worker)
+        except Exception:
+            logger.exception("Failed to restart worker %s", idx)
+            try:
+                ray.kill(new_worker)
+            except Exception:
+                pass
+            raise
 
         self._workers[idx] = new_worker
 

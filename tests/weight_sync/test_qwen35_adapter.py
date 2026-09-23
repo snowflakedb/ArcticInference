@@ -61,6 +61,34 @@ def test_qwen3_passthrough_without_unpacked_gdn():
     assert [name for name, _ in converted] == [name for name, _ in weights]
 
 
+def test_passthrough_drops_visual_from_payload_and_descriptors():
+    weights = [
+        ("model.embed_tokens.weight", torch.ones(4, 8)),
+        ("visual.patch_embed.weight", torch.ones(8)),
+        ("mtp.layers.0.weight", torch.ones(4)),
+    ]
+    converted = convert_weights(weights)
+    assert [name for name, _ in converted] == ["model.embed_tokens.weight"]
+    descriptors = dest_sync_descriptors(
+        [name for name, _ in weights],
+        {"model.embed_tokens.weight": (4, 8), "visual.patch_embed.weight": (8,)},
+        {
+            "model.embed_tokens.weight": "bfloat16",
+            "visual.patch_embed.weight": "bfloat16",
+        },
+    )
+    assert [item["name"] for item in descriptors] == ["model.embed_tokens.weight"]
+
+
+def test_dest_sync_descriptors_passthrough_requires_shapes():
+    with pytest.raises(KeyError, match="missing from shapes"):
+        dest_sync_descriptors(
+            ["model.embed_tokens.weight"],
+            {},
+            {"model.embed_tokens.weight": "bfloat16"},
+        )
+
+
 def test_pack_qwen35_gdn_layer_matches_vllm_cat_order():
     prefix = "model.layers.1"
     qkv = torch.arange(12).reshape(6, 2).float()

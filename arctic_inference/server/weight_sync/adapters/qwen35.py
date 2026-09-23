@@ -223,7 +223,11 @@ def to_vllm_sync_weights(
     names = [name for name, _ in weights]
     ops = plan_qwen35_vllm_sync(names, tie_word_embeddings=tie_word_embeddings)
     if ops is None:
-        return list(weights)
+        return [
+            (name, tensor)
+            for name, tensor in weights
+            if not is_optional_frozen_vllm_param(name)
+        ]
     by_name = dict(weights)
     out: list[tuple[str, torch.Tensor]] = []
     for op in ops:
@@ -242,16 +246,23 @@ def dest_sync_descriptors(
     """Trainer dest descriptors (name, logical shape, dtype) after ``plan_sync``."""
     ops = plan_qwen35_vllm_sync(names, tie_word_embeddings=tie_word_embeddings)
     if ops is None:
-        return [
-            {
-                "name": name,
-                "shape": [int(x) for x in shapes[name]],
-                "dtype": dtypes[name],
-            }
-            for name in names
-            if name in shapes and not is_optional_frozen_vllm_param(name)
-        ]
-    descriptors: list[dict] = []
+        descriptors: list[dict] = []
+        for name in names:
+            if is_optional_frozen_vllm_param(name):
+                continue
+            if name not in shapes:
+                raise KeyError(f"weight-sync dest {name!r} missing from shapes")
+            if name not in dtypes:
+                raise KeyError(f"weight-sync dest {name!r} missing from dtypes")
+            descriptors.append(
+                {
+                    "name": name,
+                    "shape": [int(x) for x in shapes[name]],
+                    "dtype": dtypes[name],
+                }
+            )
+        return descriptors
+    descriptors = []
     for op in ops:
         src_shapes = [tuple(int(x) for x in shapes[src]) for src in op.sources]
         descriptors.append(
